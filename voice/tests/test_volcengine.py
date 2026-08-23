@@ -64,6 +64,24 @@ def test_default_payload_and_api_key_headers():
     }
     assert payload["request"]["enable_nonstream"] is True
     assert payload["request"]["enable_ddc"] is True
+    assert "context" not in payload["request"]
+
+
+def test_personal_vocabulary_uses_official_request_context_json(caplog):
+    client = VolcengineASRClient(
+        VoiceConfig("test-key", ("PrivateName", "专业词")).provider_settings()
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        payload = client._build_payload()
+
+    context = payload["request"]["context"]
+    assert isinstance(context, str)
+    assert json.loads(context) == {
+        "hotwords": [{"word": "PrivateName"}, {"word": "专业词"}]
+    }
+    assert "PrivateName" not in caplog.text
+    assert "专业词" not in caplog.text
 
 
 def test_request_and_audio_binary_envelopes():

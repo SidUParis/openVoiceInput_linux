@@ -18,7 +18,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from .config import DEFAULT_ENDPOINT, DEFAULT_RESOURCE_ID
+from .config import (
+    DEFAULT_ENDPOINT,
+    DEFAULT_RESOURCE_ID,
+    normalize_vocabulary_terms,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -377,6 +381,7 @@ class VolcengineASRClient:
         self._max_pending_audio_bytes = int(
             SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * pending_seconds
         )
+        self._hotwords = normalize_vocabulary_terms(settings.get("hotwords", ()))
         self._request_options = {
             "model_name": "bigmodel",
             "enable_itn": bool(settings.get("enable_itn", True)),
@@ -429,6 +434,15 @@ class VolcengineASRClient:
         }
 
     def _build_payload(self) -> dict[str, Any]:
+        request = dict(self._request_options)
+        if self._hotwords:
+            # Volcengine's request-level API expects context itself to be a
+            # compact JSON string, not a nested JSON object.
+            request["context"] = json.dumps(
+                {"hotwords": [{"word": term} for term in self._hotwords]},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         return {
             "user": {"uid": self._uid, "platform": "Linux"},
             "audio": {
@@ -438,7 +452,7 @@ class VolcengineASRClient:
                 "bits": SAMPLE_BITS,
                 "channel": CHANNELS,
             },
-            "request": dict(self._request_options),
+            "request": request,
         }
 
     def connect(self) -> None:

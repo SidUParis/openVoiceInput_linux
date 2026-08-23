@@ -1,0 +1,31 @@
+[Unit]
+Description=Open Voice Input Linux standalone voice daemon
+Documentation=https://github.com/SidUParis/openVoiceInput_linux
+After=graphical-session.target murmur-ime-engine.service
+Wants=murmur-ime-engine.service
+PartOf=graphical-session.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=@VOICE_EXEC@ run --config @VOICE_CONFIG@ --vocabulary @VOICE_VOCABULARY@
+Restart=on-failure
+RestartPreventExitStatus=2
+RestartSec=2
+TimeoutStopSec=10
+UMask=0077
+RuntimeDirectory=murmur-ime
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONNOUSERSITE=1
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=graphical-session.target

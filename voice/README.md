@@ -24,7 +24,7 @@ From this directory, install into a virtual environment that can see the
 system PyGObject package:
 
     python3 -m venv --system-site-packages .venv
-    .venv/bin/pip install -e '.[test]'
+    PYTHONNOUSERSITE=1 .venv/bin/pip install -e '.[test]'
 
 ## Private key-only configuration
 
@@ -39,7 +39,7 @@ but cannot retract microphone audio already sent during the active dictation.
 
 Run the masked, confirmation-based prompt:
 
-    .venv/bin/murmur-voice-daemon configure
+    PYTHONNOUSERSITE=1 .venv/bin/murmur-voice-daemon configure
 
 It atomically writes $XDG_CONFIG_HOME/murmur-ime/voice.json (or
 ~/.config/murmur-ime/voice.json) with directory mode 0700 and file mode 0600.
@@ -47,11 +47,49 @@ There is intentionally no API-key command-line argument, so the key does not
 enter shell history. config.example.json contains only a non-working
 placeholder.
 
+## Optional explicit personal vocabulary
+
+The API-key file remains key-only. Personal terms live separately in
+$XDG_CONFIG_HOME/murmur-ime/vocabulary.json (or
+~/.config/murmur-ime/vocabulary.json), with the same private directory mode
+0700 and file mode 0600. If this file is absent or contains an empty list, the
+daemon sends no vocabulary context and behaves exactly as before.
+
+Enter a replacement vocabulary interactively, one visible term per TTY line;
+an empty line saves:
+
+    .venv/bin/murmur-voice-daemon vocabulary
+
+Alternatively, prepare a private UTF-8 file with one term per line and import
+it without putting any term in the command arguments:
+
+    chmod 600 /path/to/terms.txt
+    .venv/bin/murmur-voice-daemon vocabulary --import-file /path/to/terms.txt
+
+Both forms replace the complete list. An immediate empty line or an empty
+import file clears it. The daemon accepts at most 200 terms of at most 64
+Unicode characters each, trims surrounding whitespace, and performs stable
+case-insensitive deduplication while retaining the first spelling. NUL, CR,
+LF inside a term, unsafe permissions, symlinks, foreign ownership, invalid
+UTF-8, and unexpected JSON fields are rejected.
+
+The daemon loads the file once when `run` starts. Restart a foreground process,
+or restart an installed user service after changing the list:
+
+    systemctl --user restart murmur-ime-voice.service
+
+Each ASR request then sends only those explicit terms to Volcengine using the
+provider's documented `request.context` hotwords JSON string; empty lists omit
+`context`. Terms never come from command arguments, clipboard, selected text,
+typing history, documents, transcripts, or the Rime database, and they are
+never written to logs. Provider-side handling follows the user's Volcengine
+account policy.
+
 ## Run and control
 
 Start the daemon in the foreground:
 
-    .venv/bin/murmur-voice-daemon run
+    PYTHONNOUSERSITE=1 .venv/bin/murmur-voice-daemon run
 
 From another process or a desktop shortcut:
 
@@ -99,5 +137,6 @@ real microphone, network endpoint, or IBus engine.
   selected, ordinary keys pass through, but stock ibus-rime does not compose
   Chinese. Combining Rime Ice and voice in one librime-capable engine remains
   a later engine milestone.
-- No systemd or D-Bus activation and no package installation is performed in
-  this phase.
+- The optional user installer manages a foreground-style systemd user service,
+  but desktop D-Bus activation and a distribution-native package remain later
+  milestones.

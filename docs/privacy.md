@@ -13,10 +13,10 @@ streamed to the Volcengine BigModel ASR service configured by the user.
   already uploaded before cancellation.
 - Provider-side storage, retention, regional processing, and account policy
   are governed by the user's Volcengine agreement and configuration.
-- The current standalone daemon sends audio and reviewed ASR options. An
-  optional future personal vocabulary will send only terms the user explicitly
-  adds; it must not read the clipboard, typing history, document, or Rime user
-  database automatically.
+- The current standalone daemon sends audio and reviewed ASR options. Its
+  optional personal vocabulary sends only terms the user explicitly adds; it
+  never reads the clipboard, typing history, document, transcript history, or
+  Rime user database automatically.
 
 ## Local secrets and text
 
@@ -26,6 +26,8 @@ streamed to the Volcengine BigModel ASR service configured by the user.
   `$XDG_CONFIG_HOME/murmur-ime/voice.json` with directory mode `0700` and file
   mode `0600`. It is rejected if it is a symlink, foreign-owned, public, too
   large, or contains fields other than `api_key`.
+- The optional vocabulary is stored separately as `vocabulary.json` under the
+  same private directory, with the same ownership and permission checks.
 - API keys, transcripts, vocabulary, and remote payloads are not written to
   logs. Status and errors use fixed codes.
 - Live text travels over the user's session D-Bus to the focused IBus engine.

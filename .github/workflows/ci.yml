@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -34,15 +34,22 @@ jobs:
         run: |
           PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=engine \
             .venv/bin/python -m unittest discover -s engine/tests -v
+      - name: Installer and user-unit tests
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 \
+            .venv/bin/python -m unittest discover -s scripts/tests -v
       - name: Shell syntax
         run: |
-          bash -n scripts/install-user.sh scripts/uninstall-user.sh
+          bash -n \
+            packaging/murmur-voice-daemon \
+            scripts/install-user.sh \
+            scripts/uninstall-user.sh
 
   voice:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install voice test dependencies
         run: |
           sudo apt-get update
@@ -86,4 +93,5 @@ jobs:
               names = archive.namelist()
           assert any(name.endswith("/licenses/LICENSE") for name in names)
           assert any(name.endswith("/licenses/NOTICE.md") for name in names)
+          assert not any("__pycache__" in name or name.endswith(".pyc") for name in names)
           PY

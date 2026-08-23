@@ -23,8 +23,9 @@ email or otherwise invent content.
 > self-contained Volcengine voice daemon are implemented. During one recording
 > they temporarily switch `rime → murmur-voice`, stream partial/final text over
 > D-Bus, and restore the previous Rime engine on final, cancel, or failure. The
-> permanent combined Rime + voice engine and one-command distribution package
-> are the next milestones.
+> optional per-user systemd installation now covers both processes. The
+> permanent combined Rime + voice engine and a distribution-native package are
+> the next milestones.
 
 ## Why a new IBus engine?
 
@@ -80,8 +81,8 @@ these historical internal identifiers:
 - IBus engine `murmur-voice` and component `org.murmur.IME.Engine`;
 - D-Bus bridge `org.murmur.IME.Preedit1` at
   `/org/murmur/IME/Preedit1`;
-- executable and systemd unit `murmur-ime-engine` and
-  `murmur-ime-engine.service`;
+- executables `murmur-ime-engine` and `murmur-voice-daemon`, plus user units
+  `murmur-ime-engine.service` and `murmur-ime-voice.service`;
 - Python package `murmur_ime_engine`, text domain `murmur-ime`, and user data
   directory `$XDG_DATA_HOME/murmur-ime`.
 
@@ -134,15 +135,31 @@ To try the standalone daemon from source after installing the engine:
 ```bash
 cd voice
 python3 -m venv --system-site-packages .venv
-.venv/bin/pip install -e '.[test]'
-.venv/bin/murmur-voice-daemon configure
-.venv/bin/murmur-voice-daemon run
+PYTHONNOUSERSITE=1 .venv/bin/pip install -e '.[test]'
+PYTHONNOUSERSITE=1 .venv/bin/murmur-voice-daemon configure
+PYTHONNOUSERSITE=1 .venv/bin/murmur-voice-daemon run
 ```
 
 The configuration prompt is masked and never accepts a key as a command-line
 argument. Full daemon commands, permissions, limits, and dependencies are in
-[voice/README.md](voice/README.md). This is still a developer preview: there
-is not yet a one-command distro package or a built-in global shortcut.
+[voice/README.md](voice/README.md).
+
+For a persistent per-user development install of both the engine and daemon,
+use an offline wheelhouse or explicitly opt into network dependency resolution:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip wheel --wheel-dir wheelhouse ./voice  # explicit build/download
+./scripts/install-user.sh --wheelhouse ./wheelhouse
+# or, for connected source development only:
+./scripts/install-user.sh --allow-network
+```
+
+Configuration, systemd behavior, upgrades, desktop shortcuts, troubleshooting,
+and safe uninstall are documented in
+[docs/user-service.md](docs/user-service.md). This is still a developer
+preview: there is not yet a distribution-native package or built-in global
+shortcut.
 
 Run the current offline test suites with:
 
@@ -151,9 +168,10 @@ PYTHONPATH=engine python3 -m unittest discover -s engine/tests -v
 PYTHONPATH=voice python3 -m pytest -q -p no:cacheprovider voice/tests
 ```
 
-The current tree contains 13 engine tests and 37 voice-daemon tests. They use
-protocol fixtures and fake audio/D-Bus boundaries; they do not call a real
-microphone, IBus context, or cloud account.
+The current tree contains separate engine, installer/service, and voice-daemon
+test suites. They use protocol fixtures and fake audio/D-Bus/systemd/IBus
+boundaries; they do not call a real microphone, editable IBus context, package
+index, or cloud account.
 
 ## Target MVP behavior
 
@@ -186,10 +204,10 @@ data.
 
 The correction strategy is documented in
 [docs/recognition-accuracy.md](docs/recognition-accuracy.md): provider-side
-two-pass recognition first, then explicit request hotwords or a managed hotword
-table for names and specialist terms. The standalone daemon does not yet expose
-the vocabulary editor; it must never learn silently from clipboard or typing
-history.
+two-pass recognition first, then the implemented explicit private vocabulary
+for names and specialist terms. A provider-managed hotword table remains a
+later advanced option. The daemon never learns silently from clipboard, typing
+history, transcripts, documents, or the Rime database.
 
 ## Development targets
 

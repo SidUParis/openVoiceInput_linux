@@ -47,8 +47,10 @@ The engine never opens a microphone, reads secrets, or performs network I/O.
 
 The implemented developer-preview daemon runs in the foreground, owns one
 dictation utterance at a time, accepts bounded commands on a private Unix
-socket, and calls the engine's session D-Bus service. A future distribution
-package may add systemd/D-Bus activation; it is not implemented yet.
+socket, and calls the engine's session D-Bus service. The optional source-tree
+installer supervises it with a hardened systemd user unit and a dedicated
+virtual environment. Distribution-native packaging and D-Bus activation are
+not implemented yet.
 
 Responsibilities:
 

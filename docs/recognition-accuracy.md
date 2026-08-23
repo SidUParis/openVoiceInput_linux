@@ -21,22 +21,30 @@ replaceable; the final text is committed once.
 
 ### 2. Explicit personal vocabulary
 
-Users should be able to add names, project terms, acronyms, place names, and
-specialised vocabulary in a local settings page. The application sends a
-small, ranked subset as request-level hotwords. It does not upload the whole
-Rime dictionary, clipboard, document, or typing history.
+The standalone daemon implements an optional, explicit personal vocabulary for
+names, project terms, acronyms, place names, and specialised vocabulary. It is
+stored separately from the key-only provider configuration as a permission-0600
+JSON file below a permission-0700 directory. Users replace it either through a
+TTY, one term per line, or from a user-owned permission-0600 UTF-8 file. Terms
+never appear in command arguments or logs.
 
-The first implementation should support:
+The local boundary is deliberately conservative:
 
-- one canonical term per line;
-- optional weight from 1 to 10;
-- validation, duplicate removal, import, export, and deletion;
-- a conservative request budget with pinned terms first;
-- a visible switch that controls whether personal vocabulary is sent.
+- at most 200 terms and at most 64 Unicode characters per trimmed term;
+- NUL, CR, LF, non-strings, unsafe files, and unexpected JSON fields rejected;
+- stable `casefold` deduplication that keeps the first entered spelling;
+- an absent or empty file disables the feature without changing default ASR;
+- the file is loaded once at daemon startup, so changes require a restart.
 
-Volcengine documents both request-level hotwords and managed hotword tables.
-Its managed tables support up to 5,000 terms, a per-term weight from 1 to 10,
-and one table per request. See the official
+For a non-empty list, every ASR request adds `request.context` as the compact
+JSON string documented by Volcengine, containing `hotwords` objects with one
+`word` each. Empty lists omit `context` completely. No weight, automatic
+ranking, managed table, or settings-page integration is included in this
+first local implementation.
+
+Volcengine separately documents request-level hotwords and managed hotword
+tables. Its managed tables support up to 5,000 terms, a per-term weight from 1
+to 10, and one table per request. See the official
 [hotword documentation](https://www.volcengine.com/docs/6561/155739) and
 [streaming SDK example](https://www.volcengine.com/docs/6561/1395846).
 

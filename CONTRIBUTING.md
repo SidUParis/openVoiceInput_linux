@@ -22,10 +22,13 @@ On Ubuntu, install `python3-gi` and `gir1.2-ibus-1.0`, then run:
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=engine \
   python3 -m unittest discover -s engine/tests -v
+PYTHONDONTWRITEBYTECODE=1 \
+  python3 -m unittest discover -s scripts/tests -v
 ruff check engine scripts
 ruff format --check engine scripts
 python3 -m compileall -q engine scripts
-bash -n scripts/install-user.sh scripts/uninstall-user.sh
+bash -n packaging/murmur-voice-daemon \
+  scripts/install-user.sh scripts/uninstall-user.sh
 git diff --check
 ```
 

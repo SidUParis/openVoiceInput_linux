@@ -13,7 +13,7 @@ compatibility ABI for existing installations and the verified sidecar bridge.
 
 - [x] Create the private GitHub repository and initial architecture.
 - [x] Select GPL-3.0-only for the project's new original code.
-- [ ] Record file-level attribution before importing any upstream code.
+- [x] Record file-level attribution before importing any upstream code.
 - [ ] Decide whether to preserve `ibus-rime` history or import a minimal fork.
 
 ## Phase 0.5 — Inline-preedit transition prototype
@@ -25,10 +25,10 @@ compatibility ABI for existing installations and the verified sidecar bridge.
 - [x] Bind sessions to focus, caller, utterance, and increasing revisions.
 - [x] Reject password, PIN, private, fake, and non-preedit input contexts.
 - [x] Add deterministic GTK demo and a 13-test engine suite.
-- [x] Verify the local Doubao Murmur sidecar bridge with temporary
+- [x] Verify the self-contained voice bridge with temporary
   `rime → murmur-voice → rime` switching for each recording.
-- [x] Add optional per-user install/uninstall helpers and a systemd unit
-  template that re-registers after IBus restarts.
+- [x] Add optional per-user install/uninstall helpers and systemd user units
+  for both the engine and standalone daemon.
 
 ## Phase 1 — Production Rime-capable IBus engine
 
@@ -45,13 +45,17 @@ The Python prototype does not satisfy this phase: IBus permits only one engine
 per input context, so stock Rime cannot compose Chinese while `murmur-voice` is
 selected.
 
-## Phase 2 — Integrated voice daemon
+## Phase 2 — Standalone transition voice daemon
 
-- [ ] Extract the tested Volcengine v3 client behind a provider interface.
-- [ ] Capture 16 kHz mono PCM without blocking the engine.
-- [ ] Implement `bigmodel_async` live hypotheses and two-pass final results.
-- [ ] Enable DDC, punctuation, ITN, and sentence segmentation by default.
-- [ ] Expose a versioned D-Bus API and utterance-based cancellation.
+- [x] Migrate the tested Volcengine v3 client into a self-contained package.
+- [x] Capture 16 kHz mono PCM without blocking the engine.
+- [x] Implement `bigmodel_async` live hypotheses and two-pass final results.
+- [x] Enable DDC, punctuation, ITN, and sentence segmentation by default.
+- [x] Add bounded local control, recording limits, stale-session rejection,
+  and a reversible systemd user-service installation.
+- [ ] Generalise the provider boundary and expose a production daemon D-Bus
+  API; the transition implementation uses the Preedit1 bridge and local Unix
+  control socket.
 
 ## Phase 3 — Inline voice input in the combined engine
 

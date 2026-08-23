@@ -5,7 +5,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart="@ENGINE_EXEC@"
+ExecStart=@ENGINE_EXEC@
 Restart=always
 RestartSec=1
 

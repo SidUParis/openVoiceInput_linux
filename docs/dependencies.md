@@ -19,6 +19,16 @@ The voice wheel is GPL-3.0-only and contains its `LICENSE` plus the complete
 Doubao Murmur MIT notice in `NOTICE.md`. Adapted source boundaries are listed
 in the repository-level [NOTICE](../NOTICE.md).
 
+The optional source-tree user installer consumes an offline wheelhouse with
+`pip --no-index` by default. It refuses to resolve packages from a network
+index unless the operator supplies the explicit `--allow-network` developer
+flag. Distribution packages must provide pinned dependencies themselves and
+must not use that development escape hatch.
+
+The managed launcher and systemd unit set `PYTHONNOUSERSITE=1`: the virtual
+environment can see Ubuntu's GI bindings without importing unrelated Python
+packages from the user's `~/.local` site directory.
+
 ## Test and build tools
 
 - `pytest` 9.0.2, MIT metadata;

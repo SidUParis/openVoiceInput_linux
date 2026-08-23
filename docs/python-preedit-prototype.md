@@ -9,12 +9,12 @@ The executable, IBus engine, D-Bus bridge, systemd unit, and install directory
 below intentionally retain their historical `murmur-*` and `org.murmur.*`
 names as 0.x compatibility ABI.
 
-It is implemented and has been verified with the local Doubao Murmur sidecar.
-The sidecar bridge records the previous engine, temporarily selects
-`murmur-voice`, acquires the focused preedit session, forwards cumulative ASR
-partials and the final result, then restores the previous engine on final,
-cancel, or error. The bridge code remains in the local sidecar checkout and is
-not vendored into this repository.
+It is implemented and has offline coverage with the self-contained voice
+daemon in this repository. The daemon bridge records the previous engine,
+temporarily selects `murmur-voice`, acquires the focused preedit session,
+forwards cumulative ASR partials and the final result, then restores the
+previous engine on final, cancel, or error. It does not require a separate
+Doubao Murmur checkout.
 
 ## Run from the repository
 
@@ -47,9 +47,14 @@ For an optional persistent per-user development install:
 ./scripts/install-user.sh
 ```
 
-That script copies only the prototype engine under the XDG user data directory
-and enables the included systemd user unit. `scripts/uninstall-user.sh` removes
-those prototype files without touching IBus, Rime, Rime Ice, or user data.
+That script installs the prototype engine plus a managed standalone voice
+environment and two systemd user units under the XDG user directories. It
+requires an offline wheelhouse by default; network dependency resolution is
+available only through an explicit developer flag. Full installation,
+configuration, upgrade, and uninstall behavior is documented in
+[user-service.md](user-service.md). `scripts/uninstall-user.sh` removes managed
+code and units without touching IBus, Rime, Rime Ice, or their user data; the
+private voice configuration is retained.
 
 ## Temporary sidecar-to-engine D-Bus bridge
 
