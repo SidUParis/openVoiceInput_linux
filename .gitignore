@@ -1,0 +1,34 @@
+# Build outputs
+/build/
+/dist/
+/.cache/
+compile_commands.json
+CMakeUserPresets.json
+
+# C/C++
+*.o
+*.so
+*.a
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+
+# Editors and OS
+.idea/
+.vscode/
+*~
+.DS_Store
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*volcengine.json
+*credentials.json
+*.key
+*.token
