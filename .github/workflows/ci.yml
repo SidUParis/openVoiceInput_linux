@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            gir1.2-ibus-1.0 \
+            python3-gi \
+            python3-venv
+      - name: Create isolated test environment
+        run: |
+          python3 -m venv --system-site-packages .venv
+          .venv/bin/python -m pip install --disable-pip-version-check ruff==0.15.4
+      - name: Static checks
+        run: |
+          .venv/bin/ruff check engine scripts
+          .venv/bin/ruff format --check engine scripts
+          .venv/bin/python -m compileall -q engine scripts
+          git diff --check
+      - name: Engine tests
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=engine \
+            .venv/bin/python -m unittest discover -s engine/tests -v
+      - name: Shell syntax
+        run: |
+          bash -n scripts/install-user.sh scripts/uninstall-user.sh

@@ -1,5 +1,5 @@
 [Unit]
-Description=Murmur IME inline voice preedit prototype
+Description=Open Voice Input Linux inline voice preedit prototype
 After=graphical-session.target
 PartOf=graphical-session.target
 

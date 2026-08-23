@@ -1,4 +1,4 @@
-"""Executable entry point for dynamic IBus component registration."""
+"""Open Voice Input Linux entry point for dynamic IBus registration."""
 
 # ruff: noqa: E402 -- GI versions must be selected before repository imports.
 
@@ -24,21 +24,21 @@ logger = logging.getLogger(__name__)
 def build_component() -> IBus.Component:
     component = IBus.Component(
         name=COMPONENT_NAME,
-        description="Murmur inline voice preedit prototype",
+        description="Open Voice Input Linux inline voice preedit prototype",
         version=VERSION,
         license="GPL-3.0-only",
-        author="Murmur IME contributors",
-        homepage="https://github.com/SidUParis/murmur-ime",
+        author="Open Voice Input Linux contributors",
+        homepage="https://github.com/SidUParis/openVoiceInput_linux",
         textdomain="murmur-ime",
     )
     component.add_engine(
         IBus.EngineDesc(
             name=ENGINE_NAME,
-            longname="Murmur Voice (prototype)",
+            longname="Open Voice Input Linux (prototype)",
             description="Inline streaming voice transcription",
             language="zh",
             license="GPL-3.0-only",
-            author="Murmur IME contributors",
+            author="Open Voice Input Linux contributors",
             icon="audio-input-microphone-symbolic",
             layout="default",
             symbol="🎙",
@@ -50,7 +50,7 @@ def build_component() -> IBus.Component:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run the Murmur dynamic IBus preedit prototype"
+        description="Run the Open Voice Input Linux dynamic IBus preedit prototype"
     )
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--version", action="version", version=VERSION)

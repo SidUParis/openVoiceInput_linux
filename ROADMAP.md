@@ -1,8 +1,13 @@
-# Roadmap
+# Open Voice Input Linux roadmap
 
 This roadmap deliberately separates the keyboard-critical path from network
 and audio work. A milestone is complete only when keyboard input remains usable
 during ASR outages and cancellation/focus tests pass.
+
+The public project name is **Open Voice Input Linux**, with the canonical
+repository `SidUParis/openVoiceInput_linux`. Historical `murmur-*` and
+`org.murmur.*` runtime names remain unchanged throughout the 0.x line as
+compatibility ABI for existing installations and the verified sidecar bridge.
 
 ## Phase 0 — Repository and legal boundary
 

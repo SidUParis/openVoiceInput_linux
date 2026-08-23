@@ -1,4 +1,4 @@
-# Security and privacy requirements
+# Open Voice Input Linux security and privacy requirements
 
 ## Credentials
 

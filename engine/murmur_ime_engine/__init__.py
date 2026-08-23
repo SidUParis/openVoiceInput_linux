@@ -1,4 +1,4 @@
-"""Murmur IME's lightweight Python preedit prototype."""
+"""Open Voice Input Linux's lightweight Python preedit prototype."""
 
 from .constants import ENGINE_NAME, VERSION
 

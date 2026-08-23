@@ -1,9 +1,13 @@
-# Python inline-preedit prototype
+# Open Voice Input Linux Python inline-preedit prototype
 
 This prototype exists to make the core interaction testable before the
 ibus-rime/librime engine is implemented: cumulative speech hypotheses appear
 as native IBus preedit at the application's caret, and one authoritative final
 result becomes committed text.
+
+The executable, IBus engine, D-Bus bridge, systemd unit, and install directory
+below intentionally retain their historical `murmur-*` and `org.murmur.*`
+names as 0.x compatibility ABI.
 
 It is implemented and has been verified with the local Doubao Murmur sidecar.
 The sidecar bridge records the previous engine, temporarily selects

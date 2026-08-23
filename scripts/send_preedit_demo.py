@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send a deterministic Chinese preedit sequence to the Murmur IBus engine."""
+"""Send a deterministic Chinese preedit sequence to Open Voice Input Linux."""
 
 from __future__ import annotations
 
@@ -46,10 +46,11 @@ def call_accepted(
         CALL_TIMEOUT_MS,
         None,
     )
-    accepted, = reply.unpack()
+    (accepted,) = reply.unpack()
     if not accepted:
         raise DemoRejected(
-            f"{method} was rejected; keep a text field focused with Murmur IME active"
+            f"{method} was rejected; keep a text field focused with "
+            "Open Voice Input Linux active"
         )
 
 
@@ -70,8 +71,9 @@ def build_proxy() -> Gio.DBusProxy:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Show deterministic Chinese partial text at the active Murmur IME "
-            "caret, then commit a final sentence. No microphone or network is used."
+            "Show deterministic Chinese partial text at the active Open Voice Input "
+            "Linux caret, then commit a final sentence. No microphone or network is "
+            "used."
         )
     )
     parser.add_argument(
@@ -152,8 +154,8 @@ def main() -> int:
     except (GLib.Error, DemoRejected) as error:
         print(f"preedit demo failed: {error}", file=sys.stderr)
         print(
-            "Check that the Murmur preedit engine is running, selected, and focused "
-            "in a text field.",
+            "Check that the Open Voice Input Linux preedit engine is running, "
+            "selected, and focused in a text field.",
             file=sys.stderr,
         )
         return 1

@@ -1,0 +1,63 @@
+name: Bug report
+description: Report a reproducible openVoiceInput_linux problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste an API key, private dictated text, recording, or unredacted log.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: Commit SHA or release version
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Linux and desktop environment
+      placeholder: Ubuntu 24.04, GNOME, X11 or Wayland, IBus version
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Keyboard/Rime input
+        - Voice recording
+        - Live preedit
+        - Final commit
+        - Settings/API key
+        - Installation or removal
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use invented sample text and redact all identifiers.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed API keys, recordings, private dictation, and sensitive logs.
+          required: true

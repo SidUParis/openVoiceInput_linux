@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Repository and user-install launcher for Murmur's prototype engine."""
+"""Repository and user-install launcher for Open Voice Input Linux."""
 
 from murmur_ime_engine.main import main
 

@@ -35,6 +35,6 @@ systemctl --user daemon-reload
 systemctl --user enable --now murmur-ime-engine.service
 
 printf '%s\n' \
-  "Murmur Voice was registered dynamically." \
+  "Open Voice Input Linux was registered dynamically as murmur-voice." \
   "Choose it with: ibus engine murmur-voice" \
   "Restore Rime with: ibus engine rime"

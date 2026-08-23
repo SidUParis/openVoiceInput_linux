@@ -1,10 +1,11 @@
-# Architecture
+# Open Voice Input Linux architecture
 
 ## Design goal
 
-Murmur IME must feel like one input method while isolating keyboard input from
-all microphone, network, and provider failures. The IBus engine is therefore a
-small synchronous frontend; ASR runs in a separately supervised user daemon.
+Open Voice Input Linux must feel like one input method while isolating
+keyboard input from all microphone, network, and provider failures. The IBus
+engine is therefore a small synchronous frontend; ASR runs in a separately
+supervised user daemon.
 
 ## Implementation status
 
@@ -110,8 +111,12 @@ The initial package target is Debian/Ubuntu. IBus engines and D-Bus activation
 integrate poorly with a fully sandboxed Flatpak, so Flatpak is not the primary
 distribution format for the combined engine.
 
-Murmur IME will keep packaged Rime data in
+Open Voice Input Linux will keep packaged Rime data in
 `/usr/share/murmur-ime/rime-data` and mutable user data in
 `$XDG_DATA_HOME/murmur-ime/rime`. It must never concurrently open the stock
 ibus-rime database under `~/.config/ibus/rime`. Importing existing preferences
 or user data is an explicit, one-time migration operation.
+
+The `murmur-ime` paths above, along with the 0.x IBus, D-Bus, executable, and
+systemd names, remain historical compatibility ABI. The public product and
+repository name is Open Voice Input Linux / `openVoiceInput_linux`.

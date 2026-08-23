@@ -1,14 +1,17 @@
-# Murmur IME
+# Open Voice Input Linux
 
 **Rime Ice keyboard input + Volcengine voice dictation, presented as one Linux IBus engine.**
 
-Murmur IME 是面向 Linux/IBus 的开源中文输入法：键盘输入由
+Open Voice Input Linux 是面向 Linux/IBus 的开源中文输入法：键盘输入由
 librime + 雾凇拼音负责，语音输入由火山引擎流式 ASR 负责。识别草稿
 直接显示在当前应用的输入位置，二遍识别完成后原位提交。
 
-Murmur IME is an early-stage Linux input method project. Its goal is to keep
-the complete local Rime/Rime Ice typing experience while adding native voice
-dictation directly inside the focused input field.
+Open Voice Input Linux is an early-stage Linux input method project. Its goal
+is to keep the complete local Rime/Rime Ice typing experience while adding
+native voice dictation directly inside the focused input field.
+
+Canonical repository:
+[github.com/SidUParis/openVoiceInput_linux](https://github.com/SidUParis/openVoiceInput_linux)
 
 The voice path is faithful transcription, not generative writing: live ASR,
 two-pass recognition, disfluency removal, punctuation, sentence segmentation,
@@ -24,7 +27,7 @@ email or otherwise invent content.
 
 ## Why a new IBus engine?
 
-The original Murmur desktop application did not own the active IBus input
+The original Doubao Murmur desktop application did not own the active IBus input
 context, so it needed a separate transcription window and clipboard-based
 paste. The implemented Python prototype proves the replacement path by owning
 an IBus context during dictation:
@@ -39,7 +42,7 @@ The target combined architecture is:
 
 ```mermaid
 flowchart LR
-    K["Keyboard"] --> E["Murmur IBus Engine"]
+    K["Keyboard"] --> E["Open Voice Input IBus Engine"]
     E <--> R["librime + Rime Ice data"]
     M["Microphone"] --> V["Voice daemon"]
     S["Settings + Secret Service"] --> V
@@ -62,11 +65,30 @@ flowchart LR
 - `docs/` — architecture, security rules, prototype operation, and D-Bus
   contracts.
 
-Rime Ice data is not currently vendored. Murmur IME will use isolated system
-and user data directories; it will never concurrently write the live database
-used by stock `ibus-rime`. Existing preferences and user data will be imported
-only through an explicit migration flow. Release packages must not download
-code or data during installation.
+## 0.x compatibility ABI
+
+The public project name and repository are **Open Voice Input Linux** and
+`openVoiceInput_linux`. To avoid disrupting existing prototype installations
+and the verified local sidecar bridge, the 0.x line intentionally retains
+these historical internal identifiers:
+
+- IBus engine `murmur-voice` and component `org.murmur.IME.Engine`;
+- D-Bus bridge `org.murmur.IME.Preedit1` at
+  `/org/murmur/IME/Preedit1`;
+- executable and systemd unit `murmur-ime-engine` and
+  `murmur-ime-engine.service`;
+- Python package `murmur_ime_engine`, text domain `murmur-ime`, and user data
+  directory `$XDG_DATA_HOME/murmur-ime`.
+
+These names are compatibility ABI, not public branding to replace
+mechanically. Any future runtime-identifier migration must support existing
+installations explicitly.
+
+Rime Ice data is not currently vendored. Open Voice Input Linux will use
+isolated system and user data directories; it will never concurrently write
+the live database used by stock `ibus-rime`. Existing preferences and user
+data will be imported only through an explicit migration flow. Release
+packages must not download code or data during installation.
 
 ## What works now
 
@@ -110,7 +132,7 @@ The suite currently contains 13 tests.
 
 ## Target MVP behavior
 
-1. Select **Murmur IME** as the active IBus engine.
+1. Select **Open Voice Input Linux** as the active IBus engine.
 2. Type normally with Rime/Rime Ice, fully offline.
 3. Press the configured shortcut (right `Alt` where available) or the
    microphone button to start dictation.
@@ -139,14 +161,14 @@ See [ROADMAP.md](ROADMAP.md) and [docs/architecture.md](docs/architecture.md).
 
 ## License and upstream projects
 
-Murmur IME's new original code is licensed under GPL-3.0-only. It is designed
-around `ibus-rime` (GPL-3.0-or-later) and `librime` (BSD-3-Clause). Rime Ice is
-currently an external GPL-3.0-only project and is not bundled in this
-repository. Imported files retain their upstream license and copyright
-notices; voice-daemon code migrated from Doubao Murmur must preserve its MIT
-notices.
+Open Voice Input Linux's new original code is licensed under GPL-3.0-only. It
+is designed around `ibus-rime` (GPL-3.0-or-later) and `librime`
+(BSD-3-Clause). Rime Ice is currently an external GPL-3.0-only project and is
+not bundled in this repository. Imported files retain their upstream license
+and copyright notices; voice-daemon code migrated from Doubao Murmur must
+preserve its MIT notices.
 
 See [NOTICE.md](NOTICE.md) for attribution and distribution boundaries.
 
-Murmur IME is an independent community project and is not affiliated with
-Rime, Volcengine, ByteDance, or Doubao.
+Open Voice Input Linux is an independent community project and is not
+affiliated with Rime, Volcengine, ByteDance, or Doubao.

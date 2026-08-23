@@ -1,6 +1,9 @@
-# D-Bus API sketch
+# Open Voice Input Linux D-Bus API sketch
 
 This is a design sketch, not yet a stable public API.
+
+The 0.x `org.murmur.*` names are retained as compatibility ABI. They are
+internal protocol identifiers, not the current public project name.
 
 The currently implemented transition prototype uses the smaller
 `org.murmur.IME.Preedit1` sidecar-to-engine bridge documented in

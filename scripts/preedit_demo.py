@@ -9,6 +9,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gtk  # noqa: E402
 
 
+# Historical 0.x compatibility identifier; the public product name changed.
 APPLICATION_ID = "org.murmur.IME.PreeditDemo"
 
 
@@ -18,7 +19,7 @@ class PreeditDemoApplication(Gtk.Application):
 
     def do_activate(self) -> None:
         window = Gtk.ApplicationWindow(application=self)
-        window.set_title("Murmur IME - Inline Preedit Demo")
+        window.set_title("Open Voice Input Linux - Inline Preedit Demo")
         window.set_default_size(680, 430)
 
         page = Gtk.Box(
@@ -30,13 +31,13 @@ class PreeditDemoApplication(Gtk.Application):
             margin_end=22,
         )
 
-        title = Gtk.Label(label="Murmur IME 光标处实时文字演示", xalign=0)
+        title = Gtk.Label(label="Open Voice Input Linux 光标处实时文字演示", xalign=0)
         title.add_css_class("title-2")
         page.append(title)
 
         instructions = Gtk.Label(
             label=(
-                "切换到 Murmur IME，然后把光标留在下面的输入框中。"
+                "切换到 Open Voice Input Linux，然后把光标留在下面的输入框中。"
                 "在另一个终端运行 scripts/send_preedit_demo.py："
                 "草稿应以 preedit 形式在光标处逐步变化，最终文本才会成为已提交正文。"
             ),

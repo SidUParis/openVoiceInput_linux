@@ -28,5 +28,5 @@ rmdir -- "$package_dir" 2>/dev/null || true
 rmdir -- "$install_root" 2>/dev/null || true
 
 printf '%s\n' \
-  "Murmur Voice user service and prototype code were removed." \
+  "Open Voice Input Linux user service and prototype code were removed." \
   "No IBus daemon or Rime data was removed."

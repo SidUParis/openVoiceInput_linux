@@ -1,9 +1,12 @@
-# Inline preedit prototype demo
+# Open Voice Input Linux inline-preedit prototype demo
 
-This local-only demo proves that Murmur IME can replace a floating transcript
-box with text rendered by IBus directly at the active application caret. It
-uses fixed Chinese sample text: it does not open the microphone, read
-credentials, or make network requests.
+This local-only demo proves that Open Voice Input Linux can replace a floating
+transcript box with text rendered by IBus directly at the active application
+caret. It uses fixed Chinese sample text: it does not open the microphone,
+read credentials, or make network requests.
+
+The commands and D-Bus names below intentionally retain the historical
+`murmur-*` and `org.murmur.*` 0.x compatibility ABI.
 
 ## Run the demo
 
