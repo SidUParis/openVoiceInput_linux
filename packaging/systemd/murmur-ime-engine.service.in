@@ -1,0 +1,13 @@
+[Unit]
+Description=Murmur IME inline voice preedit prototype
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart="@ENGINE_EXEC@"
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=default.target

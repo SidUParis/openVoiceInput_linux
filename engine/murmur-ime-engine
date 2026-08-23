@@ -1,0 +1,6 @@
+#!/usr/bin/python3
+"""Repository and user-install launcher for Murmur's prototype engine."""
+
+from murmur_ime_engine.main import main
+
+raise SystemExit(main())

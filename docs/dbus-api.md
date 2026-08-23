@@ -2,6 +2,12 @@
 
 This is a design sketch, not yet a stable public API.
 
+The currently implemented transition prototype uses the smaller
+`org.murmur.IME.Preedit1` sidecar-to-engine bridge documented in
+[python-preedit-prototype.md](python-preedit-prototype.md). The API below is the
+target contract after the voice daemon and librime-capable engine are combined;
+it is not yet implemented.
+
 ## Service
 
 ```text

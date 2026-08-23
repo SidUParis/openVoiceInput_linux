@@ -11,7 +11,21 @@ during ASR outages and cancellation/focus tests pass.
 - [ ] Record file-level attribution before importing any upstream code.
 - [ ] Decide whether to preserve `ibus-rime` history or import a minimal fork.
 
-## Phase 1 — Rime-capable IBus engine
+## Phase 0.5 — Inline-preedit transition prototype
+
+- [x] Implement the pure Python `murmur-voice` IBus engine.
+- [x] Dynamically register it without root access or restarting IBus.
+- [x] Render cumulative partials as caret-local IBus preedit.
+- [x] Commit one final result exactly once without clipboard injection.
+- [x] Bind sessions to focus, caller, utterance, and increasing revisions.
+- [x] Reject password, PIN, private, fake, and non-preedit input contexts.
+- [x] Add deterministic GTK demo and a 13-test engine suite.
+- [x] Verify the local Doubao Murmur sidecar bridge with temporary
+  `rime → murmur-voice → rime` switching for each recording.
+- [x] Add optional per-user install/uninstall helpers and a systemd unit
+  template that re-registers after IBus restarts.
+
+## Phase 1 — Production Rime-capable IBus engine
 
 - [ ] Build and package an engine derived from `ibus-rime`.
 - [ ] Use isolated system and user Rime data directories.
@@ -22,7 +36,11 @@ during ASR outages and cancellation/focus tests pass.
 - [ ] Match normal ibus-rime typing, candidates, properties, and deployment.
 - [ ] Add engine focus/session identifiers for voice requests.
 
-## Phase 2 — Voice daemon
+The Python prototype does not satisfy this phase: IBus permits only one engine
+per input context, so stock Rime cannot compose Chinese while `murmur-voice` is
+selected.
+
+## Phase 2 — Integrated voice daemon
 
 - [ ] Extract the tested Volcengine v3 client behind a provider interface.
 - [ ] Capture 16 kHz mono PCM without blocking the engine.
@@ -30,7 +48,7 @@ during ASR outages and cancellation/focus tests pass.
 - [ ] Enable DDC, punctuation, ITN, and sentence segmentation by default.
 - [ ] Expose a versioned D-Bus API and utterance-based cancellation.
 
-## Phase 3 — Inline voice input
+## Phase 3 — Inline voice input in the combined engine
 
 - [ ] Start and stop from a configurable shortcut and microphone indicator.
 - [ ] Render partial ASR as IBus preedit at the caret.
@@ -38,6 +56,10 @@ during ASR outages and cancellation/focus tests pass.
 - [ ] Cancel on `Esc`, focus-out, engine switch, daemon restart, or timeout.
 - [ ] Reject voice start during an active Rime composition in the MVP.
 - [ ] Disable voice in password/PIN/private input contexts.
+
+The corresponding preedit, final-commit, focus, revision, and private-field
+rules are already exercised by the transition prototype; this phase ports
+them into the librime-capable production engine and removes engine switching.
 
 ## Phase 4 — Settings and packaging
 

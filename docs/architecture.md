@@ -6,13 +6,30 @@ Murmur IME must feel like one input method while isolating keyboard input from
 all microphone, network, and provider failures. The IBus engine is therefore a
 small synchronous frontend; ASR runs in a separately supervised user daemon.
 
+## Implementation status
+
+The repository now contains a pure Python, voice-only IBus engine that proves
+native caret-local preedit and final commit. A bridge in the local Doubao
+Murmur sidecar has been verified with this transition flow:
+
+```text
+rime -> murmur-voice -> Acquire/Partial/Final over D-Bus -> rime
+```
+
+The previous engine is restored on final, cancellation, or failure. This
+removes the black transcription box during dictation, but it is not the final
+combined input method: IBus assigns one engine per input context, so stock
+Rime cannot provide Chinese keyboard composition while the voice-only engine
+is selected. The production work is to move the proven session/preedit rules
+into an engine derived from `ibus-rime` and linked to librime.
+
 ## Components
 
 ### IBus engine
 
-The engine is derived from `ibus-rime` and links to librime. It owns the active
-IBus input context and is the only component allowed to mutate application
-preedit or commit text.
+The production engine will be derived from `ibus-rime` and link to librime. It
+will own the active IBus input context and be the only component allowed to
+mutate application preedit or commit text.
 
 Responsibilities:
 
