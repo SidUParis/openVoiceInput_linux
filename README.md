@@ -1,10 +1,11 @@
 # Open Voice Input Linux
 
-**Rime Ice keyboard input + Volcengine voice dictation, presented as one Linux IBus engine.**
+**A lightweight Linux/IBus voice-input preview with native caret-local preedit.**
 
-Open Voice Input Linux 是面向 Linux/IBus 的开源中文输入法：键盘输入由
-librime + 雾凇拼音负责，语音输入由火山引擎流式 ASR 负责。识别草稿
-直接显示在当前应用的输入位置，二遍识别完成后原位提交。
+Open Voice Input Linux 的目标是面向 Linux/IBus 的开源中文输入法：键盘输入
+由 librime + 雾凇拼音负责，语音输入由火山引擎流式 ASR 负责。当前开发预览
+已经让识别草稿直接显示在应用光标处，并在二遍识别完成后原位提交；键盘与
+语音永久合并为同一个 librime 引擎仍是下一阶段。
 
 Open Voice Input Linux is an early-stage Linux input method project. Its goal
 is to keep the complete local Rime/Rime Ice typing experience while adding
@@ -18,12 +19,12 @@ two-pass recognition, disfluency removal, punctuation, sentence segmentation,
 and inverse text normalization. It does not turn a short instruction into an
 email or otherwise invent content.
 
-> **Current status:** the Python IBus inline-preedit prototype is implemented,
-> and its bridge to the local Doubao Murmur sidecar has been verified. During
-> one recording the bridge temporarily switches `rime → murmur-voice`, streams
-> partial/final text over D-Bus, and restores the previous Rime engine on
-> final, cancel, or failure. The permanent combined Rime + voice engine is the
-> next milestone.
+> **Current status:** the Python IBus inline-preedit prototype and a
+> self-contained Volcengine voice daemon are implemented. During one recording
+> they temporarily switch `rime → murmur-voice`, stream partial/final text over
+> D-Bus, and restore the previous Rime engine on final, cancel, or failure. The
+> permanent combined Rime + voice engine and one-command distribution package
+> are the next milestones.
 
 ## Why a new IBus engine?
 
@@ -35,8 +36,10 @@ an IBus context during dictation:
 - ASR partial results use IBus preedit and appear at the caret.
 - The optimized final result uses IBus commit and enters the application once.
 - No black transcription window or synthetic paste is required.
-- A small floating microphone button only shows recording, finalizing, and
-  error state.
+- The target UI uses a small floating microphone button only for recording,
+  finalizing, and error state. The standalone daemon currently exposes these
+  states through its control command; the compatibility app has the visual
+  button.
 
 The target combined architecture is:
 
@@ -56,10 +59,12 @@ flowchart LR
 - `engine/` — implemented Python `murmur-voice` prototype with dynamic IBus
   registration, focus-safe preedit/final commit, and a temporary D-Bus bridge.
   It will be replaced by the production `ibus-rime`/librime-capable engine.
-- `voice/` — isolated Python daemon for microphone capture and Volcengine
-  streaming ASR. This remains to be migrated from the tested local sidecar.
+- `voice/` — implemented, isolated Python daemon for microphone capture,
+  Volcengine `bigmodel_async`, bounded local control, and the Preedit1 bridge.
 - `settings/` — GTK settings application for provider configuration and a
-  masked API key stored through Secret Service; not yet implemented.
+  masked API key stored through Secret Service; not yet implemented. The
+  current daemon instead provides a masked interactive `configure` command
+  that writes a private key-only file.
 - `scripts/` — user install/uninstall helpers and a deterministic GTK preedit
   demonstration that does not use a microphone or network.
 - `docs/` — architecture, security rules, prototype operation, and D-Bus
@@ -101,8 +106,10 @@ packages must not download code or data during installation.
 - Voice acquisition disabled for password, PIN, private, fake, and clients
   without preedit support.
 - Runtime IBus registration without root access or an IBus/desktop restart.
-- Local Doubao Murmur bridge verified with temporary
-  `rime → murmur-voice → rime` switching around each recording.
+- Self-contained microphone/Volcengine daemon with a 10-minute recording cap,
+  a 10-second pending-audio cap, and generation-safe late callback rejection.
+- A private mode-0600 Unix control socket with `toggle`, `start`, `stop`,
+  `cancel`, and `status` commands.
 
 The temporary switch is a development bridge. While `murmur-voice` is active,
 ordinary keys pass through and stock `ibus-rime` is not providing Chinese
@@ -122,13 +129,31 @@ The deterministic visual demo and sender are documented in
 temporary bridge, safety, and optional per-user install instructions are in
 [docs/python-preedit-prototype.md](docs/python-preedit-prototype.md).
 
-Run the current engine test suite with:
+To try the standalone daemon from source after installing the engine:
+
+```bash
+cd voice
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -e '.[test]'
+.venv/bin/murmur-voice-daemon configure
+.venv/bin/murmur-voice-daemon run
+```
+
+The configuration prompt is masked and never accepts a key as a command-line
+argument. Full daemon commands, permissions, limits, and dependencies are in
+[voice/README.md](voice/README.md). This is still a developer preview: there
+is not yet a one-command distro package or a built-in global shortcut.
+
+Run the current offline test suites with:
 
 ```bash
 PYTHONPATH=engine python3 -m unittest discover -s engine/tests -v
+PYTHONPATH=voice python3 -m pytest -q -p no:cacheprovider voice/tests
 ```
 
-The suite currently contains 13 tests.
+The current tree contains 13 engine tests and 37 voice-daemon tests. They use
+protocol fixtures and fake audio/D-Bus boundaries; they do not call a real
+microphone, IBus context, or cloud account.
 
 ## Target MVP behavior
 
@@ -148,8 +173,23 @@ Rime composition must be committed or cancelled before voice recording starts.
 
 The first provider is Volcengine BigModel ASR 2.0 using
 `bigmodel_async`, `enable_nonstream`, `enable_ddc`, `enable_itn`, and
-`enable_punc`. Only an API key is required. Provider interfaces will remain
-separate from the IBus engine so additional ASR services can be added later.
+`enable_punc`. After the user activates the matching speech service in their
+own Volcengine project, the application needs only that user's API key. No
+shared key is bundled. Provider interfaces remain separate from the IBus
+engine so additional ASR services can be added later.
+
+Microphone audio is streamed to Volcengine only during an active dictation and
+usage is billed to the user's own Volcengine account. Cancelling prevents a
+local commit but cannot retract audio already uploaded. Read
+[docs/privacy.md](docs/privacy.md) before using voice input with sensitive
+data.
+
+The correction strategy is documented in
+[docs/recognition-accuracy.md](docs/recognition-accuracy.md): provider-side
+two-pass recognition first, then explicit request hotwords or a managed hotword
+table for names and specialist terms. The standalone daemon does not yet expose
+the vocabulary editor; it must never learn silently from clipboard or typing
+history.
 
 ## Development targets
 
@@ -168,7 +208,9 @@ not bundled in this repository. Imported files retain their upstream license
 and copyright notices; voice-daemon code migrated from Doubao Murmur must
 preserve its MIT notices.
 
-See [NOTICE.md](NOTICE.md) for attribution and distribution boundaries.
+See [NOTICE.md](NOTICE.md) for attribution and distribution boundaries and
+[docs/dependencies.md](docs/dependencies.md) for the direct dependency and
+licence inventory.
 
 Open Voice Input Linux is an independent community project and is not
 affiliated with Rime, Volcengine, ByteDance, or Doubao.

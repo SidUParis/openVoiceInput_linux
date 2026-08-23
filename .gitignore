@@ -32,3 +32,4 @@ __pycache__/
 *credentials.json
 *.key
 *.token
+/voice.json

@@ -9,9 +9,9 @@ supervised user daemon.
 
 ## Implementation status
 
-The repository now contains a pure Python, voice-only IBus engine that proves
-native caret-local preedit and final commit. A bridge in the local Doubao
-Murmur sidecar has been verified with this transition flow:
+The repository now contains a pure Python, voice-only IBus engine and a
+self-contained Volcengine daemon that prove native caret-local preedit and
+final commit with this transition flow:
 
 ```text
 rime -> murmur-voice -> Acquire/Partial/Final over D-Bus -> rime
@@ -45,7 +45,10 @@ The engine never opens a microphone, reads secrets, or performs network I/O.
 
 ### Voice daemon
 
-The daemon is D-Bus activated and owns one dictation utterance at a time.
+The implemented developer-preview daemon runs in the foreground, owns one
+dictation utterance at a time, accepts bounded commands on a private Unix
+socket, and calls the engine's session D-Bus service. A future distribution
+package may add systemd/D-Bus activation; it is not implemented yet.
 
 Responsibilities:
 
@@ -59,13 +62,14 @@ The daemon never commits text and cannot choose a target application.
 
 ### Settings application
 
-The GTK settings application manages non-secret preferences and provider
-credentials. The API key is stored through Secret Service/libsecret. A
-permission-`0600` configuration file is a fallback for minimal systems only.
+A GTK settings application and Secret Service storage are target features, not
+current implementation. The developer preview uses a masked interactive
+`configure` command and an atomic, user-owned permission-`0600` key-only file.
 
 ### Recording indicator
 
-The indicator is deliberately not a transcription window. It may show only:
+The target indicator is deliberately not a transcription window. It may show
+only:
 
 - idle/ready;
 - recording;
@@ -93,8 +97,9 @@ increasing `revision`. The engine ignores any mismatched, stale, or late event.
 2. A `definite` two-pass sentence replaces the corresponding hypothesis.
 3. The connection-level final event permits a single `commit_text` call.
 4. Focus loss clears preedit and cancels the utterance.
-5. A safety timeout may offer the latest text for manual recovery, but must not
-   silently commit it into a different application.
+5. The implemented safety timeout cancels preedit when an authoritative final
+   is missing. Any future manual recovery must remain explicit and must never
+   silently commit into a different application.
 
 Clipboard injection and synthetic `Ctrl+V` are not part of the primary path.
 

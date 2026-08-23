@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -37,3 +37,53 @@ jobs:
       - name: Shell syntax
         run: |
           bash -n scripts/install-user.sh scripts/uninstall-user.sh
+
+  voice:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install voice test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libportaudio2 \
+            python3-gi \
+            python3-venv
+          python3 -m venv --system-site-packages .venv
+          .venv/bin/python -m pip install --disable-pip-version-check \
+            pytest==9.0.2 \
+            ruff==0.15.4
+      - name: Voice static checks
+        run: |
+          .venv/bin/ruff check voice
+          .venv/bin/ruff format --check voice
+          git diff --check
+      - name: Offline voice tests
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=voice \
+            .venv/bin/python -m pytest -q -p no:cacheprovider voice/tests
+      - name: Build distributable voice wheel
+        run: |
+          .venv/bin/python -m pip wheel ./voice \
+            --no-deps \
+            --wheel-dir dist
+      - name: Install and inspect voice wheel
+        run: |
+          python3 -m venv .wheel-venv
+          .wheel-venv/bin/python -m pip install --disable-pip-version-check \
+            dist/*.whl
+          .wheel-venv/bin/python -m pip check
+          (cd /tmp && "$GITHUB_WORKSPACE"/.wheel-venv/bin/python -c \
+            "import murmur_voice; print(murmur_voice.__version__)")
+          .wheel-venv/bin/murmur-voice-daemon --help >/dev/null
+          .wheel-venv/bin/python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheel = next(Path("dist").glob("*.whl"))
+          with ZipFile(wheel) as archive:
+              names = archive.namelist()
+          assert any(name.endswith("/licenses/LICENSE") for name in names)
+          assert any(name.endswith("/licenses/NOTICE.md") for name in names)
+          PY

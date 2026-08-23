@@ -15,11 +15,15 @@ other official project spaces, as well as to people officially representing
 the project elsewhere. Maintainers may remove content or restrict
 participation when needed to protect the community.
 
-To report conduct privately, contact the repository owner through the private
-contact method on their GitHub profile. Do not include API keys, recordings,
-private dictation, or other unrelated sensitive material. Reports will be
-handled as confidentially and fairly as possible.
+The public preview will publish a verified confidential conduct-reporting
+route before opening the repository. Until then the repository remains
+private. Do not place API keys, recordings, private dictation, or other
+unrelated sensitive material in an issue or conduct report.
 
 The Contributor Covenant 2.1 enforcement guidelines apply. This document is
 adapted from that covenant; its community impact guidelines were inspired by
 Mozilla's code of conduct enforcement ladder.
+
+The [Contributor Covenant](https://www.contributor-covenant.org/) is Copyright
+© Contributor Covenant contributors and is available under the
+[Creative Commons Attribution 4.0 International licence](https://creativecommons.org/licenses/by/4.0/).

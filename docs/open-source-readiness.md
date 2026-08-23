@@ -10,18 +10,21 @@ combined librime engine is already finished.
 - [x] No real API key, recording, transcript, or Rime user database tracked.
 - [x] Security policy, contribution guide, issue form, and pull-request checks.
 - [x] CI for engine tests, formatting, compilation, and shell syntax.
-- [ ] Public product name and repository URLs are consistent.
-- [ ] Voice daemon source is self-contained in this repository with MIT
+- [x] Public product name and repository URLs are consistent.
+- [x] Voice daemon source is self-contained in this repository with MIT
       attribution for migrated Doubao Murmur files.
-- [ ] Settings require only the user's own Volcengine API key after the user
+- [x] Configuration requires only the user's own Volcengine API key after the user
       has enabled the matching service in their account.
 - [ ] Clean Ubuntu install, upgrade, and uninstall are reproducible.
 - [ ] No installer writes to or locks `~/.config/ibus/rime`.
-- [ ] Live partial, final-once, cancel, focus-loss, private-field, daemon-loss,
+- [x] Live partial, final-once, cancel, focus-loss, private-field, daemon-loss,
       and API failure paths have automated tests.
-- [ ] README clearly labels the temporary engine-switch limitation.
-- [ ] Dependency and licence inventory has been reviewed.
+- [x] README clearly labels the temporary engine-switch limitation.
+- [x] Direct dependency and licence inventory has been reviewed.
 - [ ] A fresh-machine smoke test has been recorded without publishing secrets.
+- [ ] All provider keys used during pre-release development have been rotated.
+- [ ] GitHub private vulnerability reporting and protected required CI checks
+      are enabled as part of the public transition.
 
 ## Release gates
 
