@@ -64,9 +64,10 @@ The daemon never commits text and cannot choose a target application.
 
 ### Settings application
 
-A GTK settings application and Secret Service storage are target features, not
-current implementation. The developer preview uses a masked interactive
-`configure` command and an atomic, user-owned permission-`0600` key-only file.
+A bounded GTK4 settings application now manages the private key-only fallback,
+explicit vocabulary, and service controls. The masked interactive `configure`
+command remains available. Secret Service storage and its migration lifecycle
+remain target features rather than part of this transition prototype.
 
 ### Recording indicator
 

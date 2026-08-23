@@ -49,7 +49,7 @@ flowchart LR
     K["Keyboard"] --> E["Open Voice Input IBus Engine"]
     E <--> R["librime + Rime Ice data"]
     M["Microphone"] --> V["Voice daemon"]
-    S["Settings + Secret Service"] --> V
+    S["Settings UI + private config"] --> V
     V -->|"partial / final over D-Bus"| E
     E -->|"preedit / commit"| F["Focused input field"]
     V --> I["Small recording indicator"]
@@ -62,10 +62,9 @@ flowchart LR
   It will be replaced by the production `ibus-rime`/librime-capable engine.
 - `voice/` — implemented, isolated Python daemon for microphone capture,
   Volcengine `bigmodel_async`, bounded local control, and the Preedit1 bridge.
-- `settings/` — GTK settings application for provider configuration and a
-  masked API key stored through Secret Service; not yet implemented. The
-  current daemon instead provides a masked interactive `configure` command
-  that writes a private key-only file.
+- `settings/` — implemented bounded GTK4 settings window for a masked API key,
+  explicit personal vocabulary, and user-service status/control. It reuses the
+  daemon's private file storage; Secret Service migration remains later work.
 - `scripts/` — user install/uninstall helpers and a deterministic GTK preedit
   demonstration that does not use a microphone or network.
 - `docs/` — architecture, security rules, prototype operation, and D-Bus
@@ -111,6 +110,8 @@ packages must not download code or data during installation.
   a 10-second pending-audio cap, and generation-safe late callback rejection.
 - A private mode-0600 Unix control socket with `toggle`, `start`, `stop`,
   `cancel`, and `status` commands.
+- Native GTK4 settings that never prefill the saved key and never restart a
+  recording implicitly.
 
 The temporary switch is a development bridge. While `murmur-voice` is active,
 ordinary keys pass through and stock `ibus-rime` is not providing Chinese
@@ -154,6 +155,20 @@ python3 -m venv .venv
 # or, for connected source development only:
 ./scripts/install-user.sh --allow-network
 ```
+
+After installation, open the native configuration window with:
+
+```bash
+~/.local/share/murmur-ime/open-voice-input-settings
+```
+
+Saving a key never contacts the provider or interrupts a recording. Use the
+window's explicit enable/start action after configuration.
+
+CI also publishes a clean-source Ubuntu x86_64 preview archive with the
+complete Python wheelhouse and SHA256 manifests. Its offline installation and
+verification procedure is documented in
+[docs/offline-preview.md](docs/offline-preview.md).
 
 Configuration, systemd behavior, upgrades, desktop shortcuts, troubleshooting,
 and safe uninstall are documented in

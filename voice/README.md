@@ -19,6 +19,8 @@ written to logs.
   sounddevice);
 - Python packages sounddevice 0.4.6 or newer but below 1, and websockets 13
   or newer but below 18.
+- GTK4 introspection data when using the bundled native settings window
+  (`gir1.2-gtk-4.0` on Ubuntu).
 
 From this directory, install into a virtual environment that can see the
 system PyGObject package:
@@ -46,6 +48,12 @@ It atomically writes $XDG_CONFIG_HOME/murmur-ime/voice.json (or
 There is intentionally no API-key command-line argument, so the key does not
 enter shell history. config.example.json contains only a non-working
 placeholder.
+
+An installed preview also provides `open-voice-input-settings`. Its
+`Gtk.PasswordEntry` is never prefilled and is cleared after every save attempt.
+The window can edit the explicit vocabulary and explicitly enable/start or
+disable/stop the user service. Saving alone never contacts Volcengine or
+restarts an active recording.
 
 ## Optional explicit personal vocabulary
 

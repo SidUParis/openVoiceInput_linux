@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from gi.repository import GLib
 
+from murmur_voice.engine_restore import EngineRestoreState
 from murmur_voice.preedit import AcquireResult, PREEDIT_ENGINE, PreeditClient
 
 
@@ -56,11 +57,20 @@ def _client(proxy=None, runner=None, **kwargs):
     return client, runner, proxy
 
 
-def test_acquire_partial_final_reuses_proxy_and_restores_rime():
-    client, runner, proxy = _client()
+def _restore_state(tmp_path):
+    parent = tmp_path / "runtime" / "murmur-ime"
+    parent.mkdir(parents=True, mode=0o700)
+    parent.chmod(0o700)
+    return EngineRestoreState(parent / "previous-ibus-engine")
+
+
+def test_acquire_partial_final_reuses_proxy_and_restores_rime(tmp_path):
+    state = _restore_state(tmp_path)
+    client, runner, proxy = _client(restore_state=state)
 
     assert client.acquire_result("utterance-1") is AcquireResult.ACQUIRED
     assert runner.engine == PREEDIT_ENGINE
+    assert state.load() == "rime"
     assert client.partial("utterance-1", 1, "草稿")
     assert not client.partial("utterance-1", 1, "重复")
     assert client.final("utterance-1", 2, "最终")
@@ -72,28 +82,33 @@ def test_acquire_partial_final_reuses_proxy_and_restores_rime():
         "Final",
     ]
     assert not client.active
+    assert state.load() is None
 
 
-def test_missing_service_is_unavailable_and_restores_engine():
+def test_missing_service_is_unavailable_and_restores_engine(tmp_path):
     proxy = FakeProxy()
     proxy.name_owner = None
     proxy.fail_methods.add("Acquire")
-    client, runner, _ = _client(proxy=proxy)
+    state = _restore_state(tmp_path)
+    client, runner, _ = _client(proxy=proxy, restore_state=state)
 
     assert client.acquire_result("utterance-1") is AcquireResult.UNAVAILABLE
     assert runner.engine == "rime"
+    assert state.load() is None
 
 
-def test_explicit_rejection_is_not_reported_as_unavailable():
+def test_explicit_rejection_is_not_reported_as_unavailable(tmp_path):
     proxy = FakeProxy()
     proxy.responses["Acquire"] = False
-    client, runner, _ = _client(proxy=proxy)
+    state = _restore_state(tmp_path)
+    client, runner, _ = _client(proxy=proxy, restore_state=state)
 
     assert client.acquire_result("utterance-1") is AcquireResult.REJECTED
     assert runner.engine == "rime"
+    assert state.load() is None
 
 
-def test_acquire_retries_fake_focus_then_succeeds():
+def test_acquire_retries_fake_focus_then_succeeds(tmp_path):
     proxy = FakeProxy()
     outcomes = iter((False, False, True))
 
@@ -113,6 +128,7 @@ def test_acquire_retries_fake_focus_then_succeeds():
         acquire_retry_interval=0.05,
         monotonic=lambda: now[0],
         sleeper=lambda seconds: now.__setitem__(0, now[0] + seconds),
+        restore_state=_restore_state(tmp_path),
     )
 
     assert client.acquire_result("utterance-1") is AcquireResult.ACQUIRED
@@ -123,9 +139,12 @@ def test_acquire_retries_fake_focus_then_succeeds():
     ]
 
 
-def test_transcript_and_remote_exception_are_not_logged(caplog):
+def test_transcript_and_remote_exception_are_not_logged(tmp_path, caplog):
     proxy = FakeProxy()
-    client, runner, _ = _client(proxy=proxy)
+    client, runner, _ = _client(
+        proxy=proxy,
+        restore_state=_restore_state(tmp_path),
+    )
     assert client.acquire("utterance-1")
     proxy.fail_methods.add("Partial")
 

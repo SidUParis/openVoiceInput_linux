@@ -39,8 +39,8 @@ The local boundary is deliberately conservative:
 For a non-empty list, every ASR request adds `request.context` as the compact
 JSON string documented by Volcengine, containing `hotwords` objects with one
 `word` each. Empty lists omit `context` completely. No weight, automatic
-ranking, managed table, or settings-page integration is included in this
-first local implementation.
+ranking, or managed table is included in this first local implementation. The
+bounded GTK4 settings window edits the same explicit list one term per line.
 
 Volcengine separately documents request-level hotwords and managed hotword
 tables. Its managed tables support up to 5,000 terms, a per-term weight from 1

@@ -51,6 +51,7 @@ def test_verbose_daemon_keeps_websocket_header_logging_disabled(tmp_path, monkey
     monkeypatch.setattr(
         cli, "load_config", lambda path: (_ for _ in ()).throw(cli.ConfigError("stop"))
     )
+    monkeypatch.setattr(cli, "_restore_engine", lambda path: 0)
     websocket_logger = logging.getLogger("websockets")
     old_level = websocket_logger.level
     monkeypatch.setattr(websocket_logger, "setLevel", configured.append)
@@ -58,6 +59,43 @@ def test_verbose_daemon_keeps_websocket_header_logging_disabled(tmp_path, monkey
     assert cli._run(tmp_path / "voice.json", None, True) == 2
     assert configured == [logging.WARNING]
     websocket_logger.level = old_level
+
+
+def test_restore_engine_subcommand_uses_only_private_state_path(
+    tmp_path, monkeypatch, capsys
+):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    state_path = runtime / "murmur-ime" / "previous-ibus-engine"
+    seen = []
+    monkeypatch.setattr(
+        cli,
+        "restore_saved_engine",
+        lambda state: seen.append(state.path) or True,
+    )
+
+    assert cli.main(["restore-engine", "--state", str(state_path)]) == 0
+    assert seen == [state_path]
+    assert capsys.readouterr().out == ""
+
+
+def test_run_restores_crash_state_before_loading_configuration(tmp_path, monkeypatch):
+    order = []
+    monkeypatch.setattr(
+        cli,
+        "_restore_engine",
+        lambda path: order.append("restore") or 0,
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_config",
+        lambda path: (
+            order.append("config") or (_ for _ in ()).throw(cli.ConfigError("stop"))
+        ),
+    )
+
+    assert cli._run(tmp_path / "voice.json", None, False) == 2
+    assert order == ["restore", "config"]
 
 
 def test_interactive_vocabulary_is_line_based_private_and_not_echoed(
@@ -133,6 +171,7 @@ def test_run_loads_vocabulary_once_when_daemon_starts(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli.logging, "basicConfig", lambda **kwargs: None)
     monkeypatch.setattr(cli, "load_config", lambda path: VoiceConfig("test-key"))
+    monkeypatch.setattr(cli, "_restore_engine", lambda path: 0)
     monkeypatch.setattr(cli, "load_vocabulary", lambda path: ("PrivateName", "专业词"))
     monkeypatch.setattr(session_module, "VoiceSession", FakeSession)
     monkeypatch.setattr(cli, "ControlServer", FakeServer)

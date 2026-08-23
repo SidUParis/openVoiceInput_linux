@@ -9,7 +9,7 @@ distribution and preserve their own licence files.
 | Component | Declared/tested version | Purpose | Licence metadata |
 |---|---|---|---|
 | Python | `>=3.11` | Engine and daemon runtime | PSF licence; system package |
-| PyGObject / Gio | Ubuntu system package; tested `3.48.2` | IBus and session D-Bus bindings | GNU LGPL metadata; system package |
+| PyGObject / Gio / GTK4 | Ubuntu system package; tested PyGObject `3.48.2` and GTK `4.14.5` | IBus, session D-Bus, and native settings UI | GNU LGPL metadata; system package |
 | IBus GI bindings | Ubuntu system package | Focus-bound preedit and commit | External system package; not vendored |
 | `sounddevice` | `>=0.4.6,<1`; tested `0.5.6` | PortAudio microphone capture | MIT metadata |
 | `websockets` | `>=13,<18`; tested `17.0.1` | Volcengine WebSocket transport | BSD-3-Clause metadata |
@@ -36,8 +36,8 @@ packages from the user's `~/.local` site directory.
 - `setuptools>=77`, MIT metadata.
 
 CI builds the wheel, installs it into a fresh virtual environment, runs
-`pip check`, checks the console entry point, and asserts that both licence
-files are present in the archive.
+`pip check`, checks the daemon and GTK settings entry points (the latter under
+Xvfb), and asserts that both licence files are present in the archive.
 
 ## Release policy
 

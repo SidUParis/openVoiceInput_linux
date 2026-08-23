@@ -20,6 +20,7 @@ test = ["pytest>=8,<10"]
 
 [project.scripts]
 murmur-voice-daemon = "murmur_voice.cli:main"
+open-voice-input-settings = "murmur_voice.settings_app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -32,6 +32,7 @@ from .control import (
     ControlServer,
     request_command,
 )
+from .engine_restore import EngineRestoreState, RestoreError, restore_saved_engine
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,6 +67,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="read a private UTF-8 file containing one term per line",
     )
 
+    restore_parser = subparsers.add_parser(
+        "restore-engine",
+        help="restore an IBus engine left selected after an interrupted session",
+    )
+    restore_parser.add_argument(
+        "--state",
+        type=Path,
+        help="override the private runtime restore-state path",
+    )
+
     for command in sorted(KNOWN_COMMANDS):
         command_parser = subparsers.add_parser(
             command, help=f"send {command} to the running daemon"
@@ -81,6 +92,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
         return _configure(options.config)
     if options.command == "vocabulary":
         return _configure_vocabulary(options.vocabulary, options.import_file)
+    if options.command == "restore-engine":
+        return _restore_engine(options.state)
     if options.command == "run":
         return _run(
             options.config,
@@ -170,6 +183,8 @@ def _run(
     # WARNING even when our own lifecycle logging is verbose so X-Api-Key is
     # never exposed through dependency logs.
     logging.getLogger("websockets").setLevel(logging.WARNING)
+    if _restore_engine(None) != 0:
+        return 1
     try:
         config = replace(
             load_config(config_path),
@@ -206,4 +221,16 @@ def _run(
     except ControlError as error:
         print(str(error), file=sys.stderr)
         return 2
+    return 0
+
+
+def _restore_engine(path: Path | None) -> int:
+    try:
+        state = EngineRestoreState(path)
+    except RestoreError:
+        print("private IBus restore state is unavailable", file=sys.stderr)
+        return 1
+    if not restore_saved_engine(state):
+        print("the previous IBus engine could not be restored", file=sys.stderr)
+        return 1
     return 0

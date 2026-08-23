@@ -9,9 +9,7 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
-import shutil
 import subprocess
 import threading
 import time
@@ -24,10 +22,18 @@ import gi
 gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
+from .engine_restore import (
+    PREEDIT_ENGINE,
+    EngineRestoreState,
+    RestoreError,
+    command_candidates,
+    parse_engine_name,
+    restore_saved_engine,
+)
+
 PREEDIT_BUS_NAME = "org.murmur.IME.Preedit1"
 PREEDIT_OBJECT_PATH = "/org/murmur/IME/Preedit1"
 PREEDIT_INTERFACE = "org.murmur.IME.Preedit1"
-PREEDIT_ENGINE = "murmur-voice"
 
 _DBUS_TIMEOUT_MS = 250
 _IBUS_TIMEOUT_SECONDS = 3
@@ -47,17 +53,6 @@ class AcquireResult(Enum):
     ACQUIRED = "acquired"
     UNAVAILABLE = "unavailable"
     REJECTED = "rejected"
-
-
-def command_candidates(tool: str) -> list[list[str]]:
-    """Return direct or Flatpak-host command prefixes without shell parsing."""
-
-    commands: list[list[str]] = []
-    if shutil.which(tool):
-        commands.append([tool])
-    if os.path.exists("/.flatpak-info") and shutil.which("flatpak-spawn"):
-        commands.append(["flatpak-spawn", "--host", tool])
-    return commands
 
 
 def _default_proxy_factory() -> Gio.DBusProxy:
@@ -91,6 +86,7 @@ class PreeditClient:
         acquire_retry_interval: float = 0.05,
         monotonic: Callable[[], float] | None = None,
         sleeper: Callable[[float], None] | None = None,
+        restore_state: EngineRestoreState | None = None,
     ) -> None:
         self._proxy_factory = proxy_factory or _default_proxy_factory
         self._command_provider = command_provider or command_candidates
@@ -100,6 +96,7 @@ class PreeditClient:
         self._acquire_retry_interval = max(0.001, float(acquire_retry_interval))
         self._monotonic = monotonic or time.monotonic
         self._sleeper = sleeper or time.sleep
+        self._restore_state = restore_state
 
         self._proxy: Any | None = None
         self._utterance_id: str | None = None
@@ -161,16 +158,29 @@ class PreeditClient:
                 return AcquireResult.REJECTED
             if not self._retry_pending_restore():
                 return AcquireResult.REJECTED
+            if not self._recover_saved_engine():
+                return AcquireResult.UNAVAILABLE
 
             original_engine = self.current_engine()
             if original_engine is None:
                 return AcquireResult.UNAVAILABLE
             self._original_engine = original_engine
             self._switched_engine = original_engine != PREEDIT_ENGINE
-            if self._switched_engine and not self._set_engine(PREEDIT_ENGINE):
-                self._restore_original_engine()
-                self._clear_session_state()
-                return AcquireResult.UNAVAILABLE
+            if self._switched_engine:
+                state = self._state()
+                if state is None:
+                    self._clear_session_state()
+                    return AcquireResult.UNAVAILABLE
+                try:
+                    state.record(original_engine)
+                except RestoreError:
+                    logger.warning("Could not record private IBus restore state")
+                    self._clear_session_state()
+                    return AcquireResult.UNAVAILABLE
+                if not self._set_engine(PREEDIT_ENGINE):
+                    self._restore_original_engine()
+                    self._clear_session_state()
+                    return AcquireResult.UNAVAILABLE
 
             accepted = False
             outcome = AcquireResult.REJECTED
@@ -318,6 +328,8 @@ class PreeditClient:
             return True
         restored = self._set_engine(original_engine)
         if restored:
+            restored = self._clear_restore_state(original_engine)
+        if restored:
             self._pending_restore_engine = None
         else:
             self._pending_restore_engine = original_engine
@@ -330,8 +342,40 @@ class PreeditClient:
             return True
         if not self._set_engine(engine):
             return False
+        if not self._clear_restore_state(engine):
+            return False
         self._pending_restore_engine = None
         return True
+
+    def _recover_saved_engine(self) -> bool:
+        state = self._state()
+        if state is None:
+            return False
+        return restore_saved_engine(
+            state,
+            current_engine=self.current_engine,
+            set_engine=self._set_engine,
+        )
+
+    def _clear_restore_state(self, engine: str) -> bool:
+        state = self._state()
+        if state is None:
+            return False
+        try:
+            state.clear(engine)
+        except RestoreError:
+            logger.warning("Could not clear private IBus restore state")
+            return False
+        return True
+
+    def _state(self) -> EngineRestoreState | None:
+        if self._restore_state is None:
+            try:
+                self._restore_state = EngineRestoreState()
+            except RestoreError:
+                logger.warning("Private IBus restore state is unavailable")
+                return None
+        return self._restore_state
 
     def _set_engine(self, engine: str) -> bool:
         for prefix in self._ibus_command_candidates():
@@ -391,14 +435,4 @@ class PreeditClient:
 
     @staticmethod
     def _parse_engine_name(output: Any) -> str | None:
-        if isinstance(output, bytes):
-            output = output.decode("utf-8", "replace")
-        if not isinstance(output, str):
-            return None
-        lines = [line.strip() for line in output.splitlines() if line.strip()]
-        if len(lines) != 1:
-            return None
-        engine = lines[0]
-        if len(engine) > 256 or any(character.isspace() for character in engine):
-            return None
-        return engine
+        return parse_engine_name(output)

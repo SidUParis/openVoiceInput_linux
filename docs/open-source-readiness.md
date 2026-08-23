@@ -25,6 +25,10 @@ combined librime engine is already finished.
       and API failure paths have automated tests.
 - [x] README clearly labels the temporary engine-switch limitation.
 - [x] Direct dependency and licence inventory has been reviewed.
+- [x] CI builds a clean-source Ubuntu x86_64 preview with a complete offline
+      Python wheelhouse, exact SHA256 manifest, and unpacked mock-install test.
+- [x] A bounded native GTK4 settings window stores only private key/vocabulary
+      files and never preloads or logs the provider key.
 - [ ] A fresh-machine smoke test has been recorded without publishing secrets.
       A same-machine Ubuntu 24.04 install/upgrade/uninstall/reinstall smoke is
       recorded under `docs/smoke-tests/`; a fresh graphical user/VM remains

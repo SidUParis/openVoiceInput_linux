@@ -22,6 +22,8 @@ streamed to the Volcengine BigModel ASR service configured by the user.
 
 - `murmur-voice-daemon configure` uses a masked TTY prompt and never accepts a
   key as a command-line argument.
+- The GTK4 settings window never preloads or reveals the stored key and clears
+  its password field after every save attempt.
 - The fallback key-only file is atomically written under
   `$XDG_CONFIG_HOME/murmur-ime/voice.json` with directory mode `0700` and file
   mode `0600`. It is rejected if it is a symlink, foreign-owned, public, too

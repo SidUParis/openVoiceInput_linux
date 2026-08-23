@@ -10,6 +10,7 @@ StartLimitBurst=3
 [Service]
 Type=simple
 ExecStart=@VOICE_EXEC@ run --config @VOICE_CONFIG@ --vocabulary @VOICE_VOCABULARY@
+ExecStopPost=@VOICE_EXEC@ restore-engine
 Restart=on-failure
 RestartPreventExitStatus=2
 RestartSec=2
@@ -17,6 +18,7 @@ TimeoutStopSec=10
 UMask=0077
 RuntimeDirectory=murmur-ime
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=restart
 NoNewPrivileges=yes
 PrivateTmp=yes
 LockPersonality=yes

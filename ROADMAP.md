@@ -72,7 +72,10 @@ them into the librime-capable production engine and removes engine switching.
 
 ## Phase 4 — Settings and packaging
 
-- [ ] GTK settings window with masked API key and connection test.
+- [x] Bounded GTK4 settings window with masked API key, explicit vocabulary,
+  and user-service controls.
+- [ ] Optional explicit provider test that clearly warns it creates a real,
+  potentially billable ASR session.
 - [ ] Store secrets in Secret Service; provide a documented `0600` fallback.
 - [ ] Debian/Ubuntu package and user D-Bus activation.
 - [ ] Arch package and reproducible CI builds.

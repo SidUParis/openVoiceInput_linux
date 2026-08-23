@@ -11,7 +11,7 @@ does not use root, modify the IBus daemon, or read or write
 On Ubuntu, install the system runtime first:
 
 ```bash
-sudo apt install ibus gir1.2-ibus-1.0 python3-gi python3-venv libportaudio2
+sudo apt install ibus gir1.2-ibus-1.0 gir1.2-gtk-4.0 python3-gi python3-venv libportaudio2
 ```
 
 The normal installer never silently downloads Python packages. A release or
@@ -26,6 +26,10 @@ python3 -m venv .venv
 ./scripts/install-user.sh --wheelhouse ./wheelhouse
 ```
 
+CI-produced Ubuntu x86_64 archives already contain that wheelhouse. See
+[offline-preview.md](offline-preview.md) for artifact checksums, host tags, and
+the verified no-network installation procedure.
+
 For source development only, the opt-in form below lets pip use the configured
 package indexes. The warning and flag make the network boundary explicit:
 
@@ -33,13 +37,16 @@ package indexes. The warning and flag make the network boundary explicit:
 ./scripts/install-user.sh --allow-network
 ```
 
-The installer rejects relative XDG roots, linked/unmanaged destination
-environments, incomplete offline wheelhouses, and unknown options. During an
-upgrade it stops an active voice service first and the engine second, replaces
-and temporarily disables both units before replacing their project-owned code,
-then re-enables, restarts, and verifies every service that should be active.
-An interrupted replacement therefore cannot auto-start a half-updated runtime.
-Stale Python modules and the managed voice environment are rebuilt.
+The installer rejects relative or overlapping XDG roots, linked/unowned
+destinations, incomplete wheelhouses, unknown same-name services, and unknown
+options. It first builds and import-checks the complete replacement in a
+same-filesystem staging directory while the installed version keeps running.
+Only then does it briefly stop voice and engine, atomically exchange the
+project-owned runtime and units, restore the exact IBus engine, and verify the
+services. ERR, interruption, start failure, or IBus failure rolls the old
+runtime, units, enabled/active state, and engine back. A private ownership
+manifest prevents upgrades or uninstalls from claiming unrelated same-name
+files.
 
 ## First configuration and startup
 
@@ -47,6 +54,8 @@ Installed files use these XDG-relative locations:
 
 - code and managed virtual environment:
   `$XDG_DATA_HOME/murmur-ime/`;
+- private ownership manifest:
+  `$XDG_DATA_HOME/murmur-ime/install-manifest.json`;
 - user units: `$XDG_CONFIG_HOME/systemd/user/`;
 - API key: `$XDG_CONFIG_HOME/murmur-ime/voice.json`;
 - optional vocabulary: `$XDG_CONFIG_HOME/murmur-ime/vocabulary.json`.
@@ -59,8 +68,18 @@ consistently even if it is absent from the systemd manager's environment.
 The engine service starts after installation. The voice unit is installed but
 is enabled and started only when the key file and optional vocabulary already
 pass the daemon's ownership, permission, schema, and content checks. Configure
-a missing or invalid key using the exact command printed by the installer, for
-example:
+a missing or invalid key in the GTK4 settings window:
+
+```bash
+~/.local/share/murmur-ime/open-voice-input-settings
+```
+
+The stored key is never prefilled or revealed. Saving clears the password
+field, does not contact Volcengine, and does not restart an active recording.
+Use the explicit **Enable and start service** button after configuration.
+
+The masked terminal flow remains available, using the exact command printed
+by the installer, for example:
 
 ```bash
 ~/.local/share/murmur-ime/murmur-voice-daemon configure \
@@ -113,6 +132,12 @@ provider. The installed launcher disables Python's per-user site-packages so
 unrelated packages under `~/.local` cannot alter this managed runtime. Logs
 contain lifecycle/error classes, never keys, vocabulary, or dictated text.
 
+Before a recording temporarily selects `murmur-voice`, the daemon atomically
+records the actual prior engine in that private runtime directory. Normal
+final/cancel clears it; startup and the systemd `ExecStopPost` helper restore a
+record left by a crash or forced kill. The helper never guesses `rime` and does
+not override a newer real engine selected explicitly by the user.
+
 On unusual desktop sessions, confirm that the systemd user manager has the
 graphical variables needed by IBus:
 
@@ -131,11 +156,11 @@ Do not import API keys through the systemd environment.
 ```
 
 Installation records the first valid, non-voice IBus engine in a private state
-file. Uninstall stops voice before the engine. Only if the current engine is
-still exactly `murmur-voice` does it restore that validated recorded engine and
-verify the result; it never hard-codes `rime` or changes an unrelated current
-engine. The units, managed virtual environment, engine code, and state file are
-removed. A leftover current-user-owned Unix control socket is removed only
-after the voice service is confirmed inactive. The private API-key and
-vocabulary files are deliberately retained, and no Rime program or user
-database is touched.
+file. Uninstall verifies the ownership manifest before stopping anything,
+requests a controlled shutdown from a foreground daemon, and refuses to remove
+files while any managed daemon remains. Only if the current engine is exactly
+`murmur-voice` does it restore and verify the recorded engine; failure is a hard
+stop, never a warning followed by deletion. The managed runtime and units move
+to same-filesystem quarantine before final deletion so an interrupted
+uninstall can roll back. The private API-key and vocabulary files are retained,
+and no Rime program or user database is touched.

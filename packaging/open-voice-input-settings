@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+launcher_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export PYTHONNOUSERSITE=1
+exec "$launcher_dir/voice-venv/bin/python" -s -m murmur_voice.settings_app "$@"
