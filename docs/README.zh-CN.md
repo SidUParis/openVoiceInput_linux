@@ -82,6 +82,20 @@ _截图使用空临时配置；当前 0.x 设置界面为英文，页面可继�
 也不会自动重启正在运行的服务。完成设置后，点击
 **Enable and start service**；要更换设置，先停止听写并手动停启服务。
 
+## 不用 Key 的轻量级实时光标验证
+
+无需下载虚拟机、无需麦克风、无需 Key，也不改变当前桌面的 IBus 引擎：
+
+```bash
+python3 -I scripts/run_isolated_preedit_smoke.py
+```
+
+脚本会建立临时 HOME、私有 Xvfb、D-Bus 和 IBus，发送固定的合成中文
+partial/final。partial 阶段文字必须出现在光标处而已提交值保持为空；final
+随后只提交一次。脚本会打印 mode-0700 结果目录，其中保留 partial/final
+截图与私有日志。它能验证真实 IBus/GTK preedit 路径，但不能替代干净系统、
+真实 systemd 用户会话、麦克风、火山账户或多应用兼容性验收。
+
 个人词表适合人名、项目名、地名和专业术语。显式纠错只适合模型反复把
 同一短语识别成同一种错误的情况。两者都会随每次新的语音请求发送给
 火山引擎，但不会从剪贴板、输入历史、文档、Rime 词库或既往转写中自动
@@ -142,6 +156,7 @@ GNOME/KDE 的键盘设置中自行把快捷键绑定到：
 
 当前目标是可审计的公开技术预览，不是已完成的发行版。`main` 已由四项
 required checks 保护；公开仓库前仍需完成干净图形 Ubuntu 虚拟机的真实
-麦克风／IBus 验收、轮换所有预发布 Key，并准备经过验证的私密联系渠道。
-公开转换时还必须立即启用并回读 GitHub private vulnerability reporting。
+麦克风／IBus 验收及轮换所有预发布 Key。私密安全与行为举报邮箱已经写入
+项目政策；公开转换时还必须立即启用并回读 GitHub private vulnerability
+reporting。
 完整状态见 [open-source readiness 清单](open-source-readiness.md)。

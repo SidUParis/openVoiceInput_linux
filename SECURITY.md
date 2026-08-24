@@ -2,18 +2,26 @@
 
 ## Reporting a vulnerability
 
-Please use GitHub's private vulnerability reporting after it is enabled for the
-public preview. Do not open a public issue containing an API key, dictated
-text, recording, credential-bearing log, or a reproducible exploit against
-another user.
+Send the initial private report to `sunxusidney@gmail.com` with the suggested
+subject `[Open Voice Input Linux Security] <short summary>`. Include the
+affected version or commit, impact, and minimal redacted reproduction steps.
+Ordinary email is not end-to-end encrypted: do not send an API key, recording,
+raw dictated text or transcript, credential-bearing log, or another user's
+private data. If sensitive evidence is essential, first ask the maintainer to
+agree on a safer transfer method.
+
+Do not open a public issue containing private vulnerability details or a
+reproducible exploit against another user. After GitHub private vulnerability
+reporting is enabled for the public preview, reporters may use either that
+GitHub channel or the private email route above.
 
 GitHub does not offer private vulnerability reporting while this repository is
-private. Before the transition, the maintainers must publish and verify a
-separate confidential contact route. Required CI checks must already protect
-`main` while the repository is private. During the controlled public
-transition, maintainers must enable GitHub private reporting, verify it, and
-only then announce or invite use of the preview. Until a contact route is
-chosen, this repository intentionally remains private.
+private. The email route above is the current non-public reporting channel;
+GitHub private vulnerability reporting remains a separate public-transition
+gate. Required CI checks must already protect `main` while the repository is
+private. During the controlled public transition, maintainers must enable
+GitHub private reporting, verify it, and only then announce or invite use of
+the preview.
 
 ## Supported versions
 

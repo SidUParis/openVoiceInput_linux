@@ -56,6 +56,27 @@ The development registration is intentionally temporary. Stopping
 `murmur-ime-engine` removes its D-Bus service and it must be started again for
 another demo session.
 
+## Zero-download isolated smoke
+
+The repository also contains a one-command smoke test that does not select or
+query the real desktop's IBus engine:
+
+```bash
+python3 -I scripts/run_isolated_preedit_smoke.py
+```
+
+It starts a private Xvfb display, session D-Bus, IBus daemon, temporary HOME,
+dynamic engine and GTK entry. Six fixed Chinese partials must be accepted while
+the entry's committed value remains empty; the fixed final must then be
+committed exactly once. It retains `partial.png`, `final.png`, and private logs
+in the printed mode-0700 temporary directory. It never starts the voice daemon,
+opens a microphone, reads provider configuration, or contacts a provider.
+
+This is a real IBus/GTK preedit test, but it is not a fresh-machine test. It
+reuses the host's installed IBus/GTK/Python packages and has no real logind,
+PipeWire, systemd user session, provider account, or application compatibility
+matrix.
+
 ## Demo protocol
 
 The sender keeps one `Gio.DBusProxy` and therefore one session-bus connection
@@ -87,8 +108,8 @@ after a successful acquisition, it makes a best-effort `Cancel` call.
   make sure another demo does not already own the preedit.
 - Calls are accepted but no inline text appears: click the GTK entry again and
   confirm `ibus engine` prints `murmur-voice`.
-- Use `Ctrl+C` in the engine terminal when finished, then restore `rime` with
-  the command above.
+- Use `Ctrl+C` in the engine terminal when finished, then restore the exact
+  engine captured in `previous_engine` with the command above.
 
 This prototype isolates UI behavior from ASR behavior. A later voice daemon can
 produce the same ordered calls from streaming recognition without changing the

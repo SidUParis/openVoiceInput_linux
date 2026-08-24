@@ -14,9 +14,14 @@ integrity; it does not prove who published the file.
 2. Limit Actions to GitHub-owned actions and require full commit-SHA pinning.
 3. Enable immutable releases for future releases. This protects a release only
    after it is published; it is not a substitute for build provenance.
-4. Create and verify a confidential security and conduct-reporting route. Put
-   the real route in `SECURITY.md` and `CODE_OF_CONDUCT.md` before making the
-   repository public.
+4. Keep the current non-public security and conduct-reporting route documented
+   in `SECURITY.md` and `CODE_OF_CONDUCT.md`: `sunxusidney@gmail.com`, using
+   the suggested subjects `[Open Voice Input Linux Security] <short summary>`
+   and `[Open Voice Input Linux Conduct] <short summary>`. Confirm access to
+   the mailbox immediately before making the repository public. Initial
+   reports must not contain keys, recordings, raw dictated text, or
+   credential-bearing logs; arrange a safer transfer method first if sensitive
+   evidence is essential.
 5. Configure a maintainer-controlled SSH or GPG signing identity, including a
    documented recovery/rotation plan. Do not rewrite old unsigned history.
 

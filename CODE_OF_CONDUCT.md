@@ -15,10 +15,14 @@ other official project spaces, as well as to people officially representing
 the project elsewhere. Maintainers may remove content or restrict
 participation when needed to protect the community.
 
-The public preview will publish a verified confidential conduct-reporting
-route before opening the repository. Until then the repository remains
-private. Do not place API keys, recordings, private dictation, or other
-unrelated sensitive material in an issue or conduct report.
+Send a private conduct report to `sunxusidney@gmail.com` with the suggested
+subject `[Open Voice Input Linux Conduct] <short summary>`. Include only the
+minimum context needed to identify the project space and conduct at issue.
+Ordinary email is not end-to-end encrypted: do not send an API key, recording,
+raw dictated text or transcript, credential-bearing log, or unrelated private
+material. If sensitive evidence is essential, first ask the maintainer to
+agree on a safer transfer method. Do not place private conduct-report details
+in a public issue.
 
 The Contributor Covenant 2.1 enforcement guidelines apply. This document is
 adapted from that covenant; its community impact guidelines were inspired by

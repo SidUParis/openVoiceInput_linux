@@ -78,6 +78,10 @@ must produce its own broader installation-level SBOM.
 
 - `pytest` 9.0.2, MIT metadata;
 - `ruff` 0.15.4 in CI, MIT metadata;
+- system `Xvfb`, `xdotool`, `x11-utils` (`xwininfo`), ImageMagick (`import`
+  and `compare`), `dbus-daemon` (`dbus-run-session`), IBus with `ibus-gtk4`,
+  and GTK4 for the isolated real-preedit smoke; these are CI/test inputs, not
+  preview payloads;
 - `setuptools>=77` for general source builds; the preview project wheel uses
   the separately pinned and hashed `setuptools==83.0.0` build backend, MIT
   metadata. The build-backend wheel is not shipped in the runtime wheelhouse.

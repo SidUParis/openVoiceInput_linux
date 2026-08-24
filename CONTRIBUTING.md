@@ -18,9 +18,10 @@ well-tested changes.
 
 ## Local checks
 
-On Ubuntu, install `desktop-file-utils`, `python3-gi`, `gir1.2-ibus-1.0`,
-`gir1.2-gtk-4.0`, `libportaudio2`, `python3-venv`, `util-linux`, and `xvfb`.
-In an isolated environment with the test tools installed, run the same
+On Ubuntu, install `dbus-daemon`, `desktop-file-utils`, `python3-gi`,
+`gir1.2-ibus-1.0`, `gir1.2-gtk-4.0`, `ibus`, `ibus-gtk4`, `imagemagick`,
+`libportaudio2`, `python3-venv`, `util-linux`, `x11-utils`, `xdotool`, and
+`xvfb`. In an isolated environment with the test tools installed, run the same
 boundaries as CI:
 
 ```bash
@@ -28,6 +29,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=engine \
   python3 -m unittest discover -s engine/tests -v
 PYTHONDONTWRITEBYTECODE=1 \
   python3 -m unittest discover -s scripts/tests -v
+python3 -I scripts/run_isolated_preedit_smoke.py
 xvfb-run -a env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=voice \
   python3 -m pytest -q -p no:cacheprovider voice/tests
 ruff check engine scripts voice
@@ -49,7 +51,9 @@ a verified SBOM. Do not extend that claim to the Ubuntu packages, CPython patch
 release, pip, or other host toolchain inputs that the preview does not pin.
 
 Tests must not contact Volcengine, record a microphone, alter the clipboard,
-or switch the user's real IBus engine. Network paths use local fakes.
+or switch the user's real IBus engine. The isolated preedit smoke creates its
+own X server, D-Bus, IBus daemon and temporary HOME, and uses only fixed
+synthetic Chinese text. Network paths use local fakes.
 
 ## Reporting recognition errors
 
