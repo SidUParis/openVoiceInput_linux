@@ -136,6 +136,19 @@ The deterministic visual demo and sender are documented in
 temporary bridge, safety, and optional per-user install instructions are in
 [docs/python-preedit-prototype.md](docs/python-preedit-prototype.md).
 
+For a zero-download, no-key smoke test that leaves the current desktop and
+IBus engine untouched, run:
+
+```bash
+python3 -I scripts/run_isolated_preedit_smoke.py
+```
+
+It creates a temporary HOME plus private Xvfb, D-Bus and IBus instances,
+sends fixed synthetic partial/final text, and retains private partial/final
+screenshots at the printed path. This proves the real caret-local IBus path;
+it does not test a microphone, provider account, systemd user session or fresh
+operating-system dependencies.
+
 To try the standalone daemon from source after installing the engine:
 
 ```bash

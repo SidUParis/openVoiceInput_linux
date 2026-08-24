@@ -32,11 +32,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
+            dbus-daemon \
             desktop-file-utils \
             gir1.2-ibus-1.0 \
+            gir1.2-gtk-4.0 \
+            ibus \
+            ibus-gtk4 \
+            imagemagick \
             python3-gi \
             python3-venv \
-            util-linux
+            util-linux \
+            x11-utils \
+            xdotool \
+            xvfb
       - name: Create isolated test environment
         run: |
           python3 -m venv --system-site-packages .venv
@@ -51,6 +59,10 @@ jobs:
         run: |
           PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=engine \
             .venv/bin/python -m unittest discover -s engine/tests -v
+      - name: Isolated real-IBus preedit smoke
+        run: |
+          .venv/bin/python -I scripts/run_isolated_preedit_smoke.py \
+            --output-dir "$RUNNER_TEMP/openvoice-isolated-preedit"
       - name: Installer and user-unit tests
         run: |
           PYTHONDONTWRITEBYTECODE=1 \

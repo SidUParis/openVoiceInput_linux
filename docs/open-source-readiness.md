@@ -24,6 +24,11 @@ combined librime engine is already finished.
       enforces this; retain the gate until the fresh-machine smoke test.
 - [x] Live partial, final-once, cancel, focus-loss, private-field, daemon-loss,
       and API failure paths have automated tests.
+- [x] A zero-download isolated smoke test exercises a real private IBus daemon,
+      dynamically registered engine and GTK4 entry under Xvfb: partials remain
+      uncommitted at the caret and the final is committed exactly once, without
+      reading a key, microphone, provider service or the desktop's real IBus
+      state.
 - [x] README clearly labels the temporary engine-switch limitation.
 - [x] Direct dependency and licence inventory has been reviewed and recorded
       in `docs/license-audit.md`; the transition threat model and accepted
@@ -42,11 +47,17 @@ combined librime engine is already finished.
       A same-machine Ubuntu 24.04 install/upgrade/uninstall/reinstall smoke is
       recorded for the exact final artifact in
       `docs/smoke-tests/2026-08-24-final-artifact.md`; a fresh graphical user/VM
-      remains required.
+      remains required. The isolated real-IBus smoke closes the caret-rendering
+      gap but intentionally does not claim a fresh OS, logind/systemd user
+      session, microphone, provider or application-matrix result.
 - [ ] All provider keys used during pre-release development have been rotated.
 - [x] `main` requires the `security`, `engine`, `voice`, and `preview-bundle`
       checks while the repository is private; Actions are limited to
       GitHub-owned, full-SHA-pinned actions.
+- [x] A current non-public security and conduct-reporting route is documented
+      in `SECURITY.md` and `CODE_OF_CONDUCT.md`: `sunxusidney@gmail.com`, with
+      separate suggested subject prefixes for the two report types and an
+      explicit prohibition on sending keys, recordings, or raw dictated text.
 - [ ] GitHub private vulnerability reporting is enabled and verified during
       the controlled public transition; GitHub does not expose it for this
       private personal repository.
