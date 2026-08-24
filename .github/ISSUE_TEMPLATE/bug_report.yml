@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible openVoiceInput_linux problem
+description: Report a reproducible Open Voice Input Linux problem
 title: "[Bug]: "
 labels: [bug]
 body:

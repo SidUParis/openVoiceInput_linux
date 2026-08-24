@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose a focused improvement to Open Voice Input Linux
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, recordings, private dictation, real vocabulary, or sensitive logs.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user problem without private data.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the smallest useful outcome and relevant trade-offs.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - IBus or Rime integration
+        - Voice recognition
+        - Settings and accessibility
+        - Installation or packaging
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Privacy check
+      options:
+        - label: This request contains no key, recording, private dictation, or sensitive log.
+          required: true

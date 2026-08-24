@@ -1,0 +1,14 @@
+# Offline-preview runtime lock for Ubuntu 24.04 x86_64 and CPython 3.12.
+#
+# Every entry is an exact version and the SHA256 of the one wheel accepted for
+# this target.  scripts/build-preview-bundle.sh also passes --require-hashes
+# and --only-binary=:all:; source distributions are never accepted.
+
+sounddevice==0.5.6 \
+    --hash=sha256:de099612311ad81e55d31ccbd83f43ea6bf4d87b48f9b6ea55a1fbcde0eee4e0
+cffi==2.1.1 \
+    --hash=sha256:c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf
+pycparser==3.0 \
+    --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
+websockets==17.0.1 \
+    --hash=sha256:f47b0815af3948ec6a440b3afa02f05b18cc0939549e91b5c677b5d9c2c8472a

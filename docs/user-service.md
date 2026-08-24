@@ -11,24 +11,16 @@ does not use root, modify the IBus daemon, or read or write
 On Ubuntu, install the system runtime first:
 
 ```bash
-sudo apt install ibus gir1.2-ibus-1.0 gir1.2-gtk-4.0 python3-gi python3-venv libportaudio2
+sudo apt install ibus gir1.2-ibus-1.0 gir1.2-gtk-4.0 python3-gi python3-venv libportaudio2 util-linux
 ```
 
-The normal installer never silently downloads Python packages. A release or
-offline test bundle should contain a wheelhouse with exactly one
-`murmur_ime_voice-*.whl` plus wheels for all declared and transitive runtime
-dependencies. On a connected development machine, creating that directory is
-an explicit network/build action:
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip wheel --wheel-dir wheelhouse ./voice
-./scripts/install-user.sh --wheelhouse ./wheelhouse
-```
-
-CI-produced Ubuntu x86_64 archives already contain that wheelhouse. See
+The normal installer never silently downloads Python packages. A no-network
+install must come from the complete CI preview bundle: its project wheel,
+runtime dependency wheels, target lock, deterministic SBOM, and hashes are
+verified as one set before the installer creates a virtual environment. An ad
+hoc directory produced by `pip wheel` is intentionally rejected. See
 [offline-preview.md](offline-preview.md) for artifact checksums, host tags, and
-the verified no-network installation procedure.
+the verified installation procedure.
 
 For source development only, the opt-in form below lets pip use the configured
 package indexes. The warning and flag make the network boundary explicit:
@@ -46,7 +38,15 @@ project-owned runtime and units, restore the exact IBus engine, and verify the
 services. ERR, interruption, start failure, or IBus failure rolls the old
 runtime, units, enabled/active state, and engine back. A private ownership
 manifest prevents upgrades or uninstalls from claiming unrelated same-name
-files.
+files. Before an upgrade replaces the managed tree, it requests a controlled
+shutdown through the fixed private socket and refuses to continue while any
+exactly matched managed foreground daemon (including one using a custom socket)
+remains. The final check runs after the fixed launcher path is atomically moved
+to quarantine, closing the normal launch race before replacement. A failed
+commit likewise isolates the replacement root first; if that version has
+already started, both runtime quarantines are retained and services remain
+stopped for recovery. These checks do not signal an argv-only match or read the
+API-key file.
 
 ## First configuration and startup
 
@@ -76,6 +76,11 @@ window:
 ```bash
 ~/.local/share/murmur-ime/open-voice-input-settings
 ```
+
+The managed installation also registers an **Open Voice Input Linux** settings
+entry in the current user's desktop application menu. The desktop file and
+icon are covered by the ownership manifest and removed transactionally during
+uninstall.
 
 The stored key is never prefilled or revealed. Saving clears the password
 field, does not contact Volcengine, and does not restart an active recording.
@@ -168,6 +173,10 @@ Do not import API keys through the systemd environment.
 ```bash
 ./scripts/uninstall-user.sh
 ```
+
+The technical preview does not copy its uninstaller into the managed install
+root. Keep the extracted preview directory (or download and verify the exact
+same preview bundle again) so this command remains available.
 
 Installation records the first valid, non-voice IBus engine in a private state
 file. Uninstall verifies the ownership manifest before stopping anything,

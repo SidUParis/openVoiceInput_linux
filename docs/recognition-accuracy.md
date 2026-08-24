@@ -1,6 +1,6 @@
 # Recognition accuracy and correction loop
 
-openVoiceInput_linux treats a live ASR hypothesis as a draft. It can be wrong
+Open Voice Input Linux treats a live ASR hypothesis as a draft. It can be wrong
 and may be replaced several times before the provider emits the authoritative
 two-pass result. Only that final result is committed.
 

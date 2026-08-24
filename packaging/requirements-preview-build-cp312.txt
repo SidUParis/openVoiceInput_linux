@@ -1,0 +1,6 @@
+# Pinned PEP 517 backend used only while building the project wheel.
+# It is installed into a disposable build environment and is not shipped in
+# the runtime wheelhouse.
+
+setuptools==82.0.1 \
+    --hash=sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb

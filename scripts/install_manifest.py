@@ -9,6 +9,8 @@ content digests have been checked independently.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -20,13 +22,16 @@ from pathlib import Path
 from typing import Any, Sequence
 
 MANIFEST_FORMAT = "openvoice-user-install"
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 MANIFEST_NAME = "install-manifest.json"
 MAX_MANIFEST_BYTES = 64 * 1024
+DESKTOP_ENTRY_NAME = "io.github.SidUParis.OpenVoiceInputLinux.Settings.desktop"
+ICON_NAME = "io.github.SidUParis.OpenVoiceInputLinux.Settings.svg"
 
 _INSTALL_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
-_EXPECTED_DIGESTS = frozenset(
+_IDENTITY_RE = re.compile(r"^[0-9]+:[0-9]+$")
+_V1_DIGESTS = frozenset(
     {
         "engine_launcher",
         "settings_launcher",
@@ -39,6 +44,8 @@ _EXPECTED_DIGESTS = frozenset(
         "voice_unit",
     }
 )
+_V2_DIGESTS = _V1_DIGESTS | {"desktop_entry", "settings_icon"}
+_SUPPORTED_VERSIONS = {1, MANIFEST_VERSION}
 _EXPECTED_ROOT_ENTRIES = frozenset(
     {
         MANIFEST_NAME,
@@ -90,6 +97,149 @@ def secure_directory(
         raise ManifestError(
             f"{kind} directory must be {qualifier}user-owned and not linked"
         )
+
+
+def secure_directory_descriptor(path: Path, descriptor: int) -> str:
+    """Require an inherited descriptor for the current secure directory path."""
+
+    _require_absolute(path, "lock directory")
+    try:
+        path_metadata = path.lstat()
+        descriptor_metadata = os.fstat(descriptor)
+    except OSError as error:
+        raise ManifestError("lock directory descriptor is unavailable") from error
+    if (
+        not stat.S_ISDIR(path_metadata.st_mode)
+        or not stat.S_ISDIR(descriptor_metadata.st_mode)
+        or path_metadata.st_uid != os.getuid()
+        or descriptor_metadata.st_uid != os.getuid()
+        or stat.S_IMODE(path_metadata.st_mode) & 0o022
+        or stat.S_IMODE(descriptor_metadata.st_mode) & 0o022
+        or (path_metadata.st_dev, path_metadata.st_ino)
+        != (descriptor_metadata.st_dev, descriptor_metadata.st_ino)
+    ):
+        raise ManifestError(
+            "lock descriptor must reference the current user-owned directory"
+        )
+    return f"{descriptor_metadata.st_dev}:{descriptor_metadata.st_ino}"
+
+
+def require_absent(paths: Sequence[Path]) -> None:
+    """Recheck that fixed destinations are absent immediately before commit."""
+
+    for path in paths:
+        _require_absolute(path, "asset destination")
+        secure_directory(path.parent, kind="asset destination")
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise ManifestError("asset destination metadata is unavailable") from error
+        raise ManifestError("refusing to replace an existing destination")
+
+
+def move_no_clobber(source: Path, destination: Path) -> str:
+    """Atomically rename one owned staged path without replacing a path."""
+
+    _require_absolute(source, "staged asset")
+    _require_absolute(destination, "asset destination")
+    secure_directory(source.parent, kind="staged path")
+    secure_directory(destination.parent, kind="destination")
+    directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    directory_flags |= getattr(os, "O_DIRECTORY", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    try:
+        source_parent = os.open(source.parent, directory_flags)
+        destination_parent = os.open(destination.parent, directory_flags)
+    except OSError as error:
+        raise ManifestError("asset directory could not be opened safely") from error
+    try:
+        source_parent_metadata = os.fstat(source_parent)
+        destination_parent_metadata = os.fstat(destination_parent)
+        if (
+            not stat.S_ISDIR(source_parent_metadata.st_mode)
+            or not stat.S_ISDIR(destination_parent_metadata.st_mode)
+            or source_parent_metadata.st_uid != os.getuid()
+            or destination_parent_metadata.st_uid != os.getuid()
+            or stat.S_IMODE(source_parent_metadata.st_mode) & 0o022
+            or stat.S_IMODE(destination_parent_metadata.st_mode) & 0o022
+        ):
+            raise ManifestError("move directory metadata is unsafe")
+        source_metadata = os.stat(
+            source.name, dir_fd=source_parent, follow_symlinks=False
+        )
+        if (
+            not (
+                stat.S_ISREG(source_metadata.st_mode)
+                or stat.S_ISDIR(source_metadata.st_mode)
+            )
+            or source_metadata.st_uid != os.getuid()
+            or stat.S_IMODE(source_metadata.st_mode) & 0o022
+        ):
+            raise ManifestError("staged path must be owned and not linked")
+        rename = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+        if rename is None:
+            raise ManifestError("atomic no-clobber rename is unavailable")
+        rename.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        rename.restype = ctypes.c_int
+        if (
+            rename(
+                source_parent,
+                os.fsencode(source.name),
+                destination_parent,
+                os.fsencode(destination.name),
+                1,
+            )
+            != 0
+        ):
+            error_number = ctypes.get_errno()
+            if error_number in (errno.EEXIST, errno.ENOTEMPTY):
+                raise ManifestError("refusing to replace an existing destination")
+            if error_number == errno.EXDEV:
+                raise ManifestError(
+                    "staged path and destination must use one filesystem"
+                )
+            raise ManifestError(
+                "staged path could not be committed safely"
+            ) from OSError(error_number, os.strerror(error_number))
+        # A successful renameat2 is the commit point.  Do not introduce a
+        # fallible post-rename check that could hide the completed move from
+        # the caller's rollback flag; the fixed-path manifest verification is
+        # responsible for validating committed content before services start.
+        return f"{source_metadata.st_dev}:{source_metadata.st_ino}"
+    except OSError as error:
+        raise ManifestError("staged path metadata is unavailable") from error
+    finally:
+        for descriptor in (destination_parent, source_parent):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def quarantine_committed(source: Path, quarantine: Path, identity: str) -> None:
+    """Isolate only the exact inode committed by a completed transaction."""
+
+    if _IDENTITY_RE.fullmatch(identity) is None:
+        raise ManifestError("committed path identity is invalid")
+    actual_identity = move_no_clobber(source, quarantine)
+    if actual_identity == identity:
+        return
+    try:
+        move_no_clobber(quarantine, source)
+    except ManifestError as error:
+        raise ManifestError(
+            "changed destination was retained in the rollback quarantine"
+        ) from error
+    raise ManifestError("committed destination identity changed")
 
 
 def _regular_digest(
@@ -188,6 +338,8 @@ def _critical_digests(
     voice_unit: Path,
     *,
     install_id: str,
+    desktop_entry: Path | None = None,
+    settings_icon: Path | None = None,
 ) -> dict[str, str]:
     secure_directory(root, kind="installation root")
     secure_directory(root / "murmur_ime_engine", kind="engine package")
@@ -200,7 +352,7 @@ def _critical_digests(
         raise ManifestError("voice ownership marker is invalid") from error
     if marker_value != f"{install_id}\n":
         raise ManifestError("voice ownership marker does not match the install id")
-    return {
+    digests = {
         "engine_launcher": _regular_digest(
             root / "murmur-ime-engine", kind="engine launcher", executable=True
         ),
@@ -225,6 +377,18 @@ def _critical_digests(
         "engine_unit": _regular_digest(engine_unit, kind="engine unit"),
         "voice_unit": _regular_digest(voice_unit, kind="voice unit"),
     }
+    if desktop_entry is not None or settings_icon is not None:
+        if desktop_entry is None or settings_icon is None:
+            raise ManifestError("both desktop assets are required")
+        secure_directory(desktop_entry.parent, kind="desktop entry")
+        secure_directory(settings_icon.parent, kind="settings icon")
+        digests.update(
+            {
+                "desktop_entry": _regular_digest(desktop_entry, kind="desktop entry"),
+                "settings_icon": _regular_digest(settings_icon, kind="settings icon"),
+            }
+        )
+    return digests
 
 
 def _read_manifest(path: Path) -> dict[str, Any]:
@@ -269,32 +433,38 @@ def _read_manifest(path: Path) -> dict[str, Any]:
     return document
 
 
-def _validate_document(document: dict[str, Any]) -> tuple[str, dict[str, str]]:
+def _validate_document(document: dict[str, Any]) -> tuple[int, str, dict[str, str]]:
     if set(document) != {"format", "version", "install_id", "digests"}:
         raise ManifestError("installation manifest schema is invalid")
+    version = document.get("version")
     if (
         document.get("format") != MANIFEST_FORMAT
-        or document.get("version") != MANIFEST_VERSION
+        or not isinstance(version, int)
+        or isinstance(version, bool)
+        or version not in _SUPPORTED_VERSIONS
     ):
         raise ManifestError("installation manifest version is unsupported")
     install_id = document.get("install_id")
     if not isinstance(install_id, str) or _INSTALL_ID_RE.fullmatch(install_id) is None:
         raise ManifestError("installation manifest install id is invalid")
     digests = document.get("digests")
-    if not isinstance(digests, dict) or set(digests) != _EXPECTED_DIGESTS:
+    expected_digests = _V1_DIGESTS if version == 1 else _V2_DIGESTS
+    if not isinstance(digests, dict) or set(digests) != expected_digests:
         raise ManifestError("installation manifest digest set is invalid")
     if any(
         not isinstance(value, str) or _DIGEST_RE.fullmatch(value) is None
         for value in digests.values()
     ):
         raise ManifestError("installation manifest contains an invalid digest")
-    return install_id, digests
+    return version, install_id, digests
 
 
 def create_manifest(
     root: Path,
     engine_unit: Path,
     voice_unit: Path,
+    desktop_entry: Path,
+    settings_icon: Path,
     output: Path,
     install_id: str,
 ) -> None:
@@ -309,7 +479,12 @@ def create_manifest(
         "version": MANIFEST_VERSION,
         "install_id": install_id,
         "digests": _critical_digests(
-            root, engine_unit, voice_unit, install_id=install_id
+            root,
+            engine_unit,
+            voice_unit,
+            install_id=install_id,
+            desktop_entry=desktop_entry,
+            settings_icon=settings_icon,
         ),
     }
     payload = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -333,17 +508,64 @@ def create_manifest(
         raise ManifestError("installation manifest could not be written") from error
 
 
-def verify_manifest(root: Path, engine_unit: Path, voice_unit: Path) -> str:
+def _expected_desktop_paths(root: Path) -> tuple[Path, Path]:
+    data_home = root.parent
+    desktop_entry = data_home / "applications" / DESKTOP_ENTRY_NAME
+    settings_icon = data_home / "icons" / "hicolor" / "scalable" / "apps" / ICON_NAME
+    return desktop_entry, settings_icon
+
+
+def _secure_desktop_directories(data_home: Path) -> None:
+    for relative, kind in (
+        (Path(), "XDG data"),
+        (Path("applications"), "desktop entry"),
+        (Path("icons"), "icon theme"),
+        (Path("icons/hicolor"), "hicolor icon theme"),
+        (Path("icons/hicolor/scalable"), "scalable icon theme"),
+        (Path("icons/hicolor/scalable/apps"), "application icon"),
+    ):
+        secure_directory(data_home / relative, kind=kind)
+
+
+def verify_manifest(
+    root: Path,
+    engine_unit: Path,
+    voice_unit: Path,
+    desktop_entry: Path | None = None,
+    settings_icon: Path | None = None,
+    *,
+    staged: bool = False,
+) -> tuple[str, int]:
     secure_directory(root, kind="installation root")
     entries = {path.name for path in root.iterdir()}
     if entries != _EXPECTED_ROOT_ENTRIES:
         raise ManifestError("installation root contains unowned top-level entries")
     document = _read_manifest(root / MANIFEST_NAME)
-    install_id, expected = _validate_document(document)
-    actual = _critical_digests(root, engine_unit, voice_unit, install_id=install_id)
+    version, install_id, expected = _validate_document(document)
+    if version == 1:
+        actual = _critical_digests(root, engine_unit, voice_unit, install_id=install_id)
+    else:
+        if not staged:
+            fixed_desktop_entry, fixed_settings_icon = _expected_desktop_paths(root)
+            if (
+                desktop_entry != fixed_desktop_entry
+                or settings_icon != fixed_settings_icon
+            ):
+                raise ManifestError(
+                    "desktop assets must use the fixed installation paths"
+                )
+            _secure_desktop_directories(root.parent)
+        actual = _critical_digests(
+            root,
+            engine_unit,
+            voice_unit,
+            install_id=install_id,
+            desktop_entry=desktop_entry,
+            settings_icon=settings_icon,
+        )
     if actual != expected:
         raise ManifestError("installed files do not match the ownership manifest")
-    return install_id
+    return install_id, version
 
 
 def socket_state(runtime_root: Path, path: Path) -> str:
@@ -406,12 +628,59 @@ def require_disjoint(left: Path, right: Path) -> None:
     raise ManifestError("data and config destinations must not be nested")
 
 
-def managed_voice_process_count(root: Path) -> int:
-    """Count exact installed-wrapper daemon argv owned by the current uid."""
+def managed_voice_process_count(root: Path, argv_root: Path | None = None) -> int:
+    """Count exact managed daemon argv using a trusted installation tree.
+
+    ``root`` remains available and trusted even after it has been quarantined.
+    ``argv_root`` may name the now-absent publication path recorded by an
+    already-running process.  Process executable identity prevents a spoofed
+    argv string from being treated as one of our Python workers.
+    """
 
     secure_directory(root, kind="installation root")
-    expected_python = os.fsencode(root / "voice-venv" / "bin" / "python")
-    expected_prefix = (expected_python, b"-s", b"-m", b"murmur_voice")
+    if argv_root is None:
+        argv_root = root
+    _require_absolute(argv_root, "process argv root")
+    trusted_python = root / "voice-venv" / "bin" / "python"
+    expected_argv_path = argv_root / "voice-venv" / "bin" / "python"
+    expected_argv_pythons = {os.fsencode(expected_argv_path)}
+    # The published root may already have been renamed, but its parent still
+    # exists.  Resolve only that parent so a canonical argv spelling through a
+    # symlinked XDG ancestor remains recognizable without following the now
+    # absent root or the venv's final interpreter symlink.
+    try:
+        canonical_argv_parent = argv_root.parent.resolve(strict=True)
+    except OSError as error:
+        raise ManifestError("process argv root parent is unavailable") from error
+    expected_argv_pythons.add(
+        os.fsencode(
+            canonical_argv_parent / argv_root.name / "voice-venv" / "bin" / "python"
+        )
+    )
+    try:
+        trusted_python_metadata = trusted_python.stat()
+    except OSError as error:
+        raise ManifestError("managed Python interpreter is unavailable") from error
+    trusted_python_mode = stat.S_IMODE(trusted_python_metadata.st_mode)
+    if (
+        not stat.S_ISREG(trusted_python_metadata.st_mode)
+        or trusted_python_mode & 0o022
+        or not trusted_python_mode & 0o111
+    ):
+        raise ManifestError("managed Python interpreter metadata is unsafe")
+    trusted_python_identity = (
+        trusted_python_metadata.st_dev,
+        trusted_python_metadata.st_ino,
+    )
+    expected_shapes = {
+        # Current launcher.  -I also implies -s, but its argv spelling matters
+        # here because this check deliberately recognizes only our wrappers.
+        (b"-I", b"-m", b"murmur_voice"),
+        # Compatibility with installations produced before the launcher moved
+        # from -s to isolated mode, so a live old daemon cannot escape an
+        # upgrade or uninstall guard.
+        (b"-s", b"-m", b"murmur_voice"),
+    }
     count = 0
     proc = Path("/proc")
     try:
@@ -434,8 +703,33 @@ def managed_voice_process_count(root: Path) -> int:
         if len(raw) > 128 * 1024:
             raise ManifestError("managed daemon command line is unexpectedly large")
         arguments = tuple(item for item in raw.split(b"\0") if item)
-        if arguments[:4] == expected_prefix:
-            count += 1
+        if len(arguments) < 4 or arguments[1:4] not in expected_shapes:
+            continue
+        try:
+            process_executable_metadata = (entry / "exe").stat()
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        except OSError as error:
+            raise ManifestError(
+                "managed daemon executable could not be inspected"
+            ) from error
+        process_executable_identity = (
+            process_executable_metadata.st_dev,
+            process_executable_metadata.st_ino,
+        )
+        if process_executable_identity != trusted_python_identity:
+            continue
+        if arguments[0] not in expected_argv_pythons:
+            try:
+                argv_python_metadata = os.stat(arguments[0])
+            except OSError:
+                continue
+            if (
+                argv_python_metadata.st_dev,
+                argv_python_metadata.st_ino,
+            ) != trusted_python_identity:
+                continue
+        count += 1
     return count
 
 
@@ -449,10 +743,28 @@ def _parser() -> argparse.ArgumentParser:
     secure.add_argument("--create", action="store_true")
     secure.add_argument("--private", action="store_true")
 
+    secure_fd = subparsers.add_parser("secure-dir-fd")
+    secure_fd.add_argument("--path", required=True, type=Path)
+    secure_fd.add_argument("--fd", required=True, type=int)
+
+    absent = subparsers.add_parser("require-absent")
+    absent.add_argument("--path", required=True, action="append", type=Path)
+
+    move_path = subparsers.add_parser("move-no-clobber")
+    move_path.add_argument("--source", required=True, type=Path)
+    move_path.add_argument("--destination", required=True, type=Path)
+
+    quarantine_path = subparsers.add_parser("quarantine-committed")
+    quarantine_path.add_argument("--source", required=True, type=Path)
+    quarantine_path.add_argument("--quarantine", required=True, type=Path)
+    quarantine_path.add_argument("--identity", required=True)
+
     create = subparsers.add_parser("create")
     create.add_argument("--root", required=True, type=Path)
     create.add_argument("--engine-unit", required=True, type=Path)
     create.add_argument("--voice-unit", required=True, type=Path)
+    create.add_argument("--desktop-entry", required=True, type=Path)
+    create.add_argument("--settings-icon", required=True, type=Path)
     create.add_argument("--output", required=True, type=Path)
     create.add_argument("--install-id", required=True)
 
@@ -460,6 +772,10 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--root", required=True, type=Path)
     verify.add_argument("--engine-unit", required=True, type=Path)
     verify.add_argument("--voice-unit", required=True, type=Path)
+    verify.add_argument("--desktop-entry", type=Path)
+    verify.add_argument("--settings-icon", type=Path)
+    verify.add_argument("--print-version", action="store_true")
+    verify.add_argument("--staged", action="store_true")
 
     probe = subparsers.add_parser("socket-state")
     probe.add_argument("--runtime-root", required=True, type=Path)
@@ -469,6 +785,7 @@ def _parser() -> argparse.ArgumentParser:
     disjoint.add_argument("--right", required=True, type=Path)
     processes = subparsers.add_parser("voice-process-count")
     processes.add_argument("--root", required=True, type=Path)
+    processes.add_argument("--argv-root", type=Path)
     subparsers.add_parser("new-id")
     return parser
 
@@ -484,24 +801,43 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 create=options.create,
                 private=options.private,
             )
+        elif options.command == "secure-dir-fd":
+            print(secure_directory_descriptor(options.path, options.fd))
+        elif options.command == "require-absent":
+            require_absent(options.path)
+        elif options.command == "move-no-clobber":
+            print(move_no_clobber(options.source, options.destination))
+        elif options.command == "quarantine-committed":
+            quarantine_committed(options.source, options.quarantine, options.identity)
         elif options.command == "create":
             create_manifest(
                 options.root,
                 options.engine_unit,
                 options.voice_unit,
+                options.desktop_entry,
+                options.settings_icon,
                 options.output,
                 options.install_id,
             )
         elif options.command == "verify":
-            print(
-                verify_manifest(options.root, options.engine_unit, options.voice_unit)
+            install_id, version = verify_manifest(
+                options.root,
+                options.engine_unit,
+                options.voice_unit,
+                options.desktop_entry,
+                options.settings_icon,
+                staged=options.staged,
             )
+            if options.print_version:
+                print(install_id, version)
+            else:
+                print(install_id)
         elif options.command == "socket-state":
             print(socket_state(options.runtime_root, options.path))
         elif options.command == "require-disjoint":
             require_disjoint(options.left, options.right)
         elif options.command == "voice-process-count":
-            print(managed_voice_process_count(options.root))
+            print(managed_voice_process_count(options.root, options.argv_root))
         else:
             print(secrets.token_hex(16))
     except ManifestError as error:

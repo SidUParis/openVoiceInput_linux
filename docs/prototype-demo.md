@@ -22,6 +22,8 @@ Run each command from the repository root.
    GTK test window:
 
    ```bash
+   previous_engine=$(ibus engine)
+   test -n "$previous_engine"
    ibus engine murmur-voice
    ./scripts/preedit_demo.py
    ```
@@ -44,10 +46,10 @@ To exercise cleanup without committing anything:
 ./scripts/send_preedit_demo.py --cancel
 ```
 
-Restore the normal Rime engine after testing:
+In the same second terminal, restore the exact engine recorded before testing:
 
 ```bash
-ibus engine rime
+ibus engine "$previous_engine"
 ```
 
 The development registration is intentionally temporary. Stopping

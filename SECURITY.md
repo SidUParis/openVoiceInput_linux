@@ -2,15 +2,17 @@
 
 ## Reporting a vulnerability
 
-Please use GitHub's private vulnerability reporting for this repository once
-the public preview opens. Do not open a public issue containing an API key,
-dictated text, recording, credential-bearing log, or a reproducible exploit
-against another user.
+Please use GitHub's private vulnerability reporting after it is enabled for the
+public preview. Do not open a public issue containing an API key, dictated
+text, recording, credential-bearing log, or a reproducible exploit against
+another user.
 
-The repository intentionally remains private while GitHub private reporting
-is unavailable. Enabling that feature and publishing a verified confidential
-contact route are release gates; the project must not be made public first and
-fixed later.
+GitHub does not offer private vulnerability reporting while this repository is
+private. Before the transition, the maintainers must publish and verify a
+separate confidential contact route. During the controlled public transition,
+they must enable GitHub private reporting and required CI checks immediately,
+verify both, and only then announce or invite use of the preview. Until a
+contact route is chosen, this repository intentionally remains private.
 
 ## Supported versions
 

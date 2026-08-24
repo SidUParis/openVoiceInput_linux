@@ -14,3 +14,10 @@ updates:
       interval: weekly
     labels:
       - dependencies
+
+  - package-ecosystem: pip
+    directory: /packaging
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies

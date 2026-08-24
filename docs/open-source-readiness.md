@@ -28,9 +28,14 @@ combined librime engine is already finished.
 - [x] Direct dependency and licence inventory has been reviewed.
 - [x] CI builds a clean-source Ubuntu x86_64 preview with a complete offline
       Python wheelhouse, exact SHA256 manifest, and unpacked mock-install test.
+- [x] The Ubuntu 24.04/CPython 3.12 preview pins and hashes every bundled
+      runtime wheel and its build backend, emits a deterministic CycloneDX 1.5
+      SBOM, and independently recomputes that inventory during verification.
 - [x] A bounded native GTK4 settings window stores only private key,
       vocabulary, and explicit-correction files and never preloads or logs the
       provider key.
+- [x] The settings window has a validated desktop-menu entry and local SVG
+      icon covered by the transactional ownership manifest and uninstall.
 - [ ] A fresh-machine smoke test has been recorded without publishing secrets.
       A same-machine Ubuntu 24.04 install/upgrade/uninstall/reinstall smoke is
       recorded under `docs/smoke-tests/`; a fresh graphical user/VM remains

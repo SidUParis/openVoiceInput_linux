@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for helping improve openVoiceInput_linux. The project welcomes bug
+Thank you for helping improve Open Voice Input Linux. The project welcomes bug
 reports, documentation fixes, accessibility work, packaging help, and small,
 well-tested changes.
 
@@ -18,9 +18,10 @@ well-tested changes.
 
 ## Local checks
 
-On Ubuntu, install `python3-gi`, `gir1.2-ibus-1.0`, `gir1.2-gtk-4.0`,
-`libportaudio2`, `python3-venv`, and `xvfb`. In an isolated environment with
-the test tools installed, run the same boundaries as CI:
+On Ubuntu, install `desktop-file-utils`, `python3-gi`, `gir1.2-ibus-1.0`,
+`gir1.2-gtk-4.0`, `libportaudio2`, `python3-venv`, `util-linux`, and `xvfb`.
+In an isolated environment with the test tools installed, run the same
+boundaries as CI:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=engine \
@@ -42,9 +43,10 @@ git diff --check
 
 The `preview-bundle` CI job additionally builds from `git archive`, verifies
 the checksum manifest, installs the complete wheelhouse with `--no-index`, and
-runs the mock install/upgrade/uninstall lifecycle. Do not describe that
-dependency snapshot as a time-reproducible build until the dependency lock,
-hash, and SBOM work in the roadmap is complete.
+runs the mock install/upgrade/uninstall lifecycle. The bundled Python wheels
+and project build backend are version- and hash-locked, and the bundle carries
+a verified SBOM. Do not extend that claim to the Ubuntu packages, CPython patch
+release, pip, or other host toolchain inputs that the preview does not pin.
 
 Tests must not contact Volcengine, record a microphone, alter the clipboard,
 or switch the user's real IBus engine. Network paths use local fakes.

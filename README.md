@@ -1,5 +1,7 @@
 # Open Voice Input Linux
 
+[简体中文快速上手](docs/README.zh-CN.md)
+
 **A lightweight Linux/IBus voice-input preview with native caret-local preedit.**
 
 Open Voice Input Linux 的目标是面向 Linux/IBus 的开源中文输入法：键盘输入
@@ -21,8 +23,9 @@ email or otherwise invent content.
 
 > **Current status:** the Python IBus inline-preedit prototype and a
 > self-contained Volcengine voice daemon are implemented. During one recording
-> they temporarily switch `rime → murmur-voice`, stream partial/final text over
-> D-Bus, and restore the previous Rime engine on final, cancel, or failure. The
+> they temporarily switch `current IBus engine → murmur-voice`, stream
+> partial/final text over D-Bus, and restore that exact previous engine on
+> final, cancel, or failure. The
 > optional per-user systemd installation now covers both processes. The
 > permanent combined Rime + voice engine and a distribution-native package are
 > the next milestones.
@@ -62,10 +65,11 @@ flowchart LR
   It will be replaced by the production `ibus-rime`/librime-capable engine.
 - `voice/` — implemented, isolated Python daemon for microphone capture,
   Volcengine `bigmodel_async`, bounded local control, and the Preedit1 bridge.
-- `settings/` — implemented bounded GTK4 settings window for a masked API key,
-  explicit personal vocabulary, explicit recognition corrections, and
-  user-service status/control. It reuses the
-  daemon's private file storage; Secret Service migration remains later work.
+- `settings/` — settings UI documentation and entry-point notes. The bounded
+  GTK4 implementation lives in `voice/murmur_voice/settings_app.py` and
+  `settings_controller.py`; it manages a masked API key, explicit vocabulary,
+  recognition corrections, and user-service status/control through the
+  daemon's private storage. Secret Service migration remains later work.
 - `scripts/` — user install/uninstall helpers and a deterministic GTK preedit
   demonstration that does not use a microphone or network.
 - `docs/` — architecture, security rules, prototype operation, and D-Bus
@@ -146,16 +150,17 @@ The configuration prompt is masked and never accepts a key as a command-line
 argument. Full daemon commands, permissions, limits, and dependencies are in
 [voice/README.md](voice/README.md).
 
-For a persistent per-user development install of both the engine and daemon,
-use an offline wheelhouse or explicitly opt into network dependency resolution:
+For a persistent per-user install from a connected source checkout, explicitly
+opt into development dependency resolution:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip wheel --wheel-dir wheelhouse ./voice  # explicit build/download
-./scripts/install-user.sh --wheelhouse ./wheelhouse
-# or, for connected source development only:
 ./scripts/install-user.sh --allow-network
 ```
+
+For a locked, no-network install, use the complete CI preview bundle described
+below. Its `--wheelhouse` path is accepted only together with the matching
+project wheel, runtime lock, SBOM, and hashes; an ad hoc `pip wheel` directory
+is intentionally rejected.
 
 After installation, open the native configuration window with:
 
@@ -163,13 +168,19 @@ After installation, open the native configuration window with:
 ~/.local/share/murmur-ime/open-voice-input-settings
 ```
 
+The managed user install also adds an **Open Voice Input Linux** settings
+launcher and project icon to the desktop application menu.
+
 Saving a key never contacts the provider or interrupts a recording. Use the
 window's explicit enable/start action after configuration.
 
-CI also publishes a clean-source Ubuntu x86_64 preview archive with the
-complete Python wheelhouse and SHA256 manifests. Its offline installation and
-verification procedure is documented in
+CI also publishes a clean-source Ubuntu x86_64 preview archive with a locked,
+hashed Python wheelhouse, deterministic CycloneDX SBOM, and complete SHA-256
+manifest. Its offline installation and verification procedure is documented in
 [docs/offline-preview.md](docs/offline-preview.md).
+
+User-visible preview changes and known limitations are tracked in
+[CHANGELOG.md](CHANGELOG.md).
 
 Configuration, systemd behavior, upgrades, desktop shortcuts, troubleshooting,
 and safe uninstall are documented in

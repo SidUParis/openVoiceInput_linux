@@ -30,12 +30,14 @@ development prototype should not need root access or an IBus restart. In a
 second terminal, while a normal text field has focus:
 
 ```bash
+previous_engine=$(ibus engine)
+test -n "$previous_engine"
 ibus engine murmur-voice
 ```
 
 Use `scripts/send_preedit_demo.py` to feed partial/final text, or connect the
-voice sidecar to the D-Bus contract below. Restore the normal input method with
-`ibus engine rime`.
+voice sidecar to the D-Bus contract below. Keep that second shell open and
+restore the exact engine it recorded with `ibus engine "$previous_engine"`.
 
 The deterministic demo uses manual engine selection so every transition is
 visible. The verified local voice sidecar performs the same selection and
@@ -44,13 +46,14 @@ restoration automatically for the duration of a recording.
 For an optional persistent per-user development install:
 
 ```bash
-./scripts/install-user.sh
+./scripts/install-user.sh --allow-network
 ```
 
 That script installs the prototype engine plus a managed standalone voice
-environment and two systemd user units under the XDG user directories. It
-requires an offline wheelhouse by default; network dependency resolution is
-available only through an explicit developer flag. Full installation,
+environment and two systemd user units under the XDG user directories. A
+source checkout uses the explicit developer-network flag shown above; a
+no-network install requires the complete lock/SBOM-verified preview bundle.
+Full installation,
 configuration, upgrade, and uninstall behavior is documented in
 [user-service.md](user-service.md). `scripts/uninstall-user.sh` removes managed
 code and units without touching IBus, Rime, Rime Ice, or their user data; the

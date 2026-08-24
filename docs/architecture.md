@@ -14,7 +14,8 @@ self-contained Volcengine daemon that prove native caret-local preedit and
 final commit with this transition flow:
 
 ```text
-rime -> murmur-voice -> Acquire/Partial/Final over D-Bus -> rime
+current IBus engine -> murmur-voice -> Acquire/Partial/Final over D-Bus
+                    -> exact previous IBus engine
 ```
 
 The previous engine is restored on final, cancellation, or failure. This

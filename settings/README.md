@@ -6,13 +6,16 @@ provides only the controls needed for the standalone voice preview:
 
 - save a replacement Volcengine API key through a masked `Gtk.PasswordEntry`;
 - edit the explicit private personal vocabulary, one term per line;
+- edit bounded, explicit wrong-to-canonical recognition corrections;
+- clear the validated local key through an explicit two-step action while the
+  managed voice service is inactive;
 - inspect, explicitly enable/start, and disable/stop the
   `murmur-ime-voice.service` user unit.
 
 The existing key is never placed in a widget or displayed. A save attempt
 always clears the password entry, does not contact Volcengine, and does not
-restart the service. Vocabulary and provider-key persistence reuse the
-daemon's validated atomic private-file APIs.
+restart the service. Vocabulary, corrections, and provider-key persistence
+reuse the daemon's validated atomic private-file APIs.
 
 GTK service operations use fixed `systemctl --user` argument vectors without a
 shell. Disabling/stopping the service is an explicit action and may cancel an

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Usage questions and ideas
+    url: https://github.com/SidUParis/openVoiceInput_linux/discussions
+    about: Ask a non-sensitive question or discuss an idea with the community.
+  - name: Security policy
+    url: https://github.com/SidUParis/openVoiceInput_linux/security/policy
+    about: Never disclose keys, recordings, real dictation, or exploits in a public issue.

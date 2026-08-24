@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>Open Voice Input Linux settings</title>
+  <rect width="128" height="128" rx="28" fill="#243447"/>
+  <path
+    d="M64 22c-12.15 0-22 9.85-22 22v22c0 12.15 9.85 22 22 22s22-9.85 22-22V44c0-12.15-9.85-22-22-22Z"
+    fill="#70d6ff"
+  />
+  <path
+    d="M32 62v4c0 17.67 14.33 32 32 32s32-14.33 32-32v-4M64 98v14M48 112h32"
+    fill="none"
+    stroke="#f7fbff"
+    stroke-linecap="round"
+    stroke-width="8"
+  />
+  <path
+    d="M53 45h22M53 57h22M53 69h14"
+    fill="none"
+    stroke="#243447"
+    stroke-linecap="round"
+    stroke-width="5"
+  />
+</svg>

@@ -26,7 +26,8 @@ compatibility ABI for existing installations and the verified sidecar bridge.
 - [x] Reject password, PIN, private, fake, and non-preedit input contexts.
 - [x] Add deterministic GTK demo and a 13-test engine suite.
 - [x] Verify the self-contained voice bridge with temporary
-  `rime → murmur-voice → rime` switching for each recording.
+  `current IBus engine → murmur-voice → exact previous engine`
+  switching for each recording.
 - [x] Add optional per-user install/uninstall helpers and systemd user units
   for both the engine and standalone daemon.
 
