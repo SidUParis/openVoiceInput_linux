@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 permissions:
@@ -15,6 +17,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Scan current files and reachable Git history
         run: python3 scripts/scan_repository_secrets.py
 
@@ -23,6 +26,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -64,6 +69,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install voice test dependencies
         run: |
           sudo apt-get update
@@ -118,6 +125,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install preview build prerequisites
         run: |
           sudo apt-get update
@@ -129,19 +138,56 @@ jobs:
             python3-venv \
             util-linux
           python3 -m venv .venv
-      - name: Build clean offline preview bundle
+      - name: Build clean offline preview bundle twice
         run: |
           printf '%s\n' 'ignored-preview-sentinel' >.env
           mkdir -p voice/__pycache__
           printf '%s\n' 'ignored-preview-sentinel' >voice/__pycache__/local.pyc
+          reproducibility_dir=$(mktemp -d \
+            "$RUNNER_TEMP/openvoice-repro.XXXXXX")
+          export REPRODUCIBILITY_DIR="$reproducibility_dir"
           PREVIEW_PYTHON=.venv/bin/python \
-            ./scripts/build-preview-bundle.sh --output-dir dist
+            ./scripts/build-preview-bundle.sh \
+              --ref "$GITHUB_SHA" \
+              --output-dir dist
+          PREVIEW_PYTHON=.venv/bin/python \
+            ./scripts/build-preview-bundle.sh \
+              --ref "$GITHUB_SHA" \
+              --output-dir "$REPRODUCIBILITY_DIR"
+          .venv/bin/python -I - <<'PY'
+          import filecmp
+          import os
+          from pathlib import Path
+
+          directories = (Path("dist"), Path(os.environ["REPRODUCIBILITY_DIR"]))
+          assets: list[tuple[Path, Path]] = []
+          for directory in directories:
+              entries = sorted(directory.iterdir())
+              if any(entry.is_symlink() or not entry.is_file() for entry in entries):
+                  raise SystemExit(f"unsafe preview output in {directory}")
+              archives = [entry for entry in entries if entry.name.endswith(".tar.gz")]
+              checksums = [
+                  entry for entry in entries if entry.name.endswith(".tar.gz.sha256")
+              ]
+              if len(entries) != 2 or len(archives) != 1 or len(checksums) != 1:
+                  raise SystemExit(f"unexpected preview assets in {directory}")
+              if checksums[0].name != f"{archives[0].name}.sha256":
+                  raise SystemExit(f"preview checksum name mismatch in {directory}")
+              assets.append((archives[0], checksums[0]))
+
+          for first, repeated in zip(assets[0], assets[1], strict=True):
+              if first.name != repeated.name or not filecmp.cmp(
+                  first, repeated, shallow=False
+              ):
+                  raise SystemExit("repeated preview build is not byte-identical")
+          PY
+          git diff --exit-code
       - name: Verify archive, wheelhouse, and mock install paths
         run: |
           .venv/bin/python scripts/verify_preview_bundle.py \
             dist/*.tar.gz \
             --source-repository . \
-            --source-ref HEAD
+            --source-ref "$GITHUB_SHA"
           (cd dist && sha256sum --check *.tar.gz.sha256)
       - name: Upload offline Ubuntu x86_64 preview
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

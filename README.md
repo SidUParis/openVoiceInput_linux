@@ -171,6 +171,11 @@ After installation, open the native configuration window with:
 The managed user install also adds an **Open Voice Input Linux** settings
 launcher and project icon to the desktop application menu.
 
+![Open Voice Input Linux settings window with no API key configured](docs/assets/settings-window.png)
+
+_Rendered from an empty temporary profile. The scrollable page continues to
+explicit corrections and service controls._
+
 Saving a key never contacts the provider or interrupts a recording. Use the
 window's explicit enable/start action after configuration.
 

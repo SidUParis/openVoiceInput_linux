@@ -87,5 +87,7 @@ them into the librime-capable production engine and removes engine switching.
 - [x] Threat-model and privacy review for the transition preview.
 - [x] Licence and attribution audit for the current source and wheelhouse.
 - [ ] End-to-end tests for GTK, Qt, Chromium/Electron, terminals, and Wayland.
-- [ ] Chinese documentation, screenshots, demo video, and contribution guide.
+- [x] Chinese quick-start, settings screenshot, and contribution guide.
+- [ ] Short inline-preedit demo video recorded with synthetic, non-sensitive
+      text.
 - [ ] Make the repository public and publish the first signed preview release.

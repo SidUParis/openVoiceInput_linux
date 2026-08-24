@@ -19,7 +19,9 @@ unattributed third-party source in the current bundle.
 - Project metadata declares `GPL-3.0-only`, the canonical repository, issue,
   documentation, and security-policy URLs.
 - The local SVG settings icon is original project artwork and has no external
-  binary or font dependency.
+  binary or font dependency. The settings screenshot is a project-generated
+  rendering from an empty temporary profile; it contains no user content or
+  third-party media.
 
 ## Adapted Doubao Murmur code
 
