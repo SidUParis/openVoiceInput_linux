@@ -11,17 +11,15 @@ private data. If sensitive evidence is essential, first ask the maintainer to
 agree on a safer transfer method.
 
 Do not open a public issue containing private vulnerability details or a
-reproducible exploit against another user. After GitHub private vulnerability
-reporting is enabled for the public preview, reporters may use either that
-GitHub channel or the private email route above.
+reproducible exploit against another user. GitHub private vulnerability
+reporting is enabled for this public preview, so reporters may use
+[Report a vulnerability](https://github.com/SidUParis/openVoiceInput_linux/security/advisories/new)
+or the private email route above.
 
-GitHub does not offer private vulnerability reporting while this repository is
-private. The email route above is the current non-public reporting channel;
-GitHub private vulnerability reporting remains a separate public-transition
-gate. Required CI checks must already protect `main` while the repository is
-private. During the controlled public transition, maintainers must enable
-GitHub private reporting, verify it, and only then announce or invite use of
-the preview.
+Required CI checks protect `main`, and GitHub Secret Scanning with Push
+Protection is enabled. These controls reduce accidental exposure but do not
+make a provider key safe to share in an issue, pull request, recording, log, or
+support message.
 
 ## Supported versions
 
