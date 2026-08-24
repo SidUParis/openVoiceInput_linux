@@ -1,10 +1,11 @@
 # Open-source readiness checklist
 
-The repository remains private until every required item below is complete.
-“Ready” means a public technical preview, not a claim that the permanent
-combined librime engine is already finished.
+This repository is a public early technical preview for community testing and
+feedback. The unchecked items below remain release or production-readiness
+gates; opening the source does not claim that the permanent combined librime
+engine or a supported distribution package is already finished.
 
-## Required before opening the repository
+## Public-preview readiness and remaining gates
 
 - [x] Repository licence and upstream boundary documented.
 - [x] No real API key, recording, transcript, or Rime user database tracked.
@@ -52,15 +53,13 @@ combined librime engine is already finished.
       session, microphone, provider or application-matrix result.
 - [ ] All provider keys used during pre-release development have been rotated.
 - [x] `main` requires the `security`, `engine`, `voice`, and `preview-bundle`
-      checks while the repository is private; Actions are limited to
-      GitHub-owned, full-SHA-pinned actions.
-- [x] A current non-public security and conduct-reporting route is documented
+      checks; Actions are limited to GitHub-owned, full-SHA-pinned actions.
+- [x] A private security and conduct-reporting route is documented
       in `SECURITY.md` and `CODE_OF_CONDUCT.md`: `sunxusidney@gmail.com`, with
       separate suggested subject prefixes for the two report types and an
       explicit prohibition on sending keys, recordings, or raw dictated text.
-- [ ] GitHub private vulnerability reporting is enabled and verified during
-      the controlled public transition; GitHub does not expose it for this
-      private personal repository.
+- [x] GitHub private vulnerability reporting is enabled and verified for the
+      public repository; Secret Scanning and Push Protection are also enabled.
 - [ ] The release procedure in `docs/release-process.md` has been completed
       with a verified signing identity and an immutable signed preview.
 

@@ -154,9 +154,9 @@ GNOME/KDE 的键盘设置中自行把快捷键绑定到：
 
 ## 项目状态
 
-当前目标是可审计的公开技术预览，不是已完成的发行版。`main` 已由四项
-required checks 保护；公开仓库前仍需完成干净图形 Ubuntu 虚拟机的真实
-麦克风／IBus 验收及轮换所有预发布 Key。私密安全与行为举报邮箱已经写入
-项目政策；公开转换时还必须立即启用并回读 GitHub private vulnerability
-reporting。
+当前是面向社区测试与反馈的公开 early technical preview，不是已完成的
+发行版。`main` 已由四项 required checks 保护；GitHub private vulnerability
+reporting、Secret Scanning 和 Push Protection 已启用。干净图形 Ubuntu 环境的
+真实麦克风／IBus 验收、预发布 Key 轮换和签名正式预览仍是未完成的
+发布门槛，不影响现在公开源码征集反馈。
 完整状态见 [open-source readiness 清单](open-source-readiness.md)。
