@@ -441,7 +441,8 @@ def run_session_child(args: argparse.Namespace) -> int:
             return window is not None
 
         wait_for(window_is_ready, description="focused GTK probe window")
-        assert window is not None
+        if window is None:
+            raise SmokeFailure("focused GTK probe window disappeared")
         with (output / "windows.txt").open("wb") as windows_log:
             subprocess.run(
                 [system_command("xwininfo"), "-root", "-tree"],
