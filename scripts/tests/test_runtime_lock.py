@@ -98,6 +98,9 @@ class PreviewRuntimeLockTests(unittest.TestCase):
         self,
     ) -> None:
         workflow = (REPOSITORY / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "  push:\n    branches:\n      - main\n  pull_request:\n", workflow
+        )
         self.assertEqual(workflow.count("persist-credentials: false"), 4)
         self.assertEqual(workflow.count("./scripts/build-preview-bundle.sh"), 2)
         self.assertEqual(workflow.count('--ref "$GITHUB_SHA"'), 2)
