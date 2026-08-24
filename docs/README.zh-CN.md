@@ -73,6 +73,11 @@ sha256sum --check SHA256SUMS
 完成受管安装后，也可以直接从桌面应用菜单打开 **Open Voice Input Linux
 设置**。
 
+![未配置 API Key 的 Open Voice Input Linux 设置窗口](assets/settings-window.png)
+
+_截图使用空临时配置；当前 0.x 设置界面为英文，页面可继续下滚到纠错与
+服务控制。_
+
 设置窗口不会预填或显示已经保存的 Key。保存 Key、词表或纠错不会联网，
 也不会自动重启正在运行的服务。完成设置后，点击
 **Enable and start service**；要更换设置，先停止听写并手动停启服务。
@@ -135,7 +140,8 @@ GNOME/KDE 的键盘设置中自行把快捷键绑定到：
 
 ## 项目状态
 
-当前目标是可审计的公开技术预览，不是已完成的发行版。公开仓库前仍需
-完成干净图形 Ubuntu 虚拟机的真实麦克风／IBus 验收、轮换所有预发布
-Key，并同时开启 GitHub required checks 与私密漏洞报告入口。完整状态见
-[open-source readiness 清单](open-source-readiness.md)。
+当前目标是可审计的公开技术预览，不是已完成的发行版。`main` 已由四项
+required checks 保护；公开仓库前仍需完成干净图形 Ubuntu 虚拟机的真实
+麦克风／IBus 验收、轮换所有预发布 Key，并准备经过验证的私密联系渠道。
+公开转换时还必须立即启用并回读 GitHub private vulnerability reporting。
+完整状态见 [open-source readiness 清单](open-source-readiness.md)。

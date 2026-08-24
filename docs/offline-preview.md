@@ -106,6 +106,14 @@ derived deterministically from the source commit, target, full Python version,
 wheel filenames, and wheel hashes, so regenerating from identical inputs
 produces identical bytes.
 
+The required CI job passes the exact `$GITHUB_SHA` to both builder and verifier,
+builds the archive twice into separate empty directories on the same ephemeral
+runner, requires each directory to contain only one archive plus its matching
+checksum, and compares both files byte for byte. This catches nondeterministic
+timestamps, ordering, identifiers, and surplus release assets. It is a
+same-runner determinism check, not a claim that two independently provisioned
+operating systems are bit-for-bit identical.
+
 These controls lock the Python wheel payload, not the operating system. The
 archive does not vendor or pin Ubuntu `.deb` packages, the CPython patch
 release, pip, glibc, PortAudio, GTK, or IBus. Consequently this preview is not
