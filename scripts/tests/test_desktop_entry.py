@@ -25,6 +25,11 @@ SPEC.loader.exec_module(renderer)
 
 
 class DesktopEntryTests(unittest.TestCase):
+    def test_entry_declares_only_one_main_category(self) -> None:
+        template = TEMPLATE_PATH.read_text(encoding="utf-8")
+        self.assertIn("Categories=Settings;Accessibility;", template)
+        self.assertNotIn(";Utility;", template)
+
     def test_quote_preserves_literal_path_metacharacters(self) -> None:
         quoted = renderer.desktop_exec_quote(
             '/tmp/a space/"quoted"/%value/$HOME/`tick`/back\\slash'

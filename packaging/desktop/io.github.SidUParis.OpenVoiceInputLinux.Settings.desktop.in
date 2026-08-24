@@ -9,6 +9,6 @@ Exec=/usr/bin/env -- @SETTINGS_EXEC@
 Icon=io.github.SidUParis.OpenVoiceInputLinux.Settings
 Terminal=false
 DBusActivatable=false
-Categories=Settings;Utility;Accessibility;
+Categories=Settings;Accessibility;
 StartupNotify=true
 StartupWMClass=io.github.SidUParis.OpenVoiceInputLinux.Settings
