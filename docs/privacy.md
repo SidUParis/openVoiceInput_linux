@@ -14,9 +14,9 @@ streamed to the Volcengine BigModel ASR service configured by the user.
 - Provider-side storage, retention, regional processing, and account policy
   are governed by the user's Volcengine agreement and configuration.
 - The current standalone daemon sends audio and reviewed ASR options. Its
-  optional personal vocabulary sends only terms the user explicitly adds; it
-  never reads the clipboard, typing history, document, transcript history, or
-  Rime user database automatically.
+  optional personal vocabulary and recognition corrections send only values
+  the user explicitly adds; they never read the clipboard, typing history,
+  document, transcript history, or Rime user database automatically.
 
 ## Local secrets and text
 
@@ -24,14 +24,20 @@ streamed to the Volcengine BigModel ASR service configured by the user.
   key as a command-line argument.
 - The GTK4 settings window never preloads or reveals the stored key and clears
   its password field after every save attempt.
+- Its two-step key-clear action is allowed only while the managed voice service
+  is explicitly inactive. It removes only a validated private local key file;
+  users must revoke or rotate the credential separately in Volcengine.
 - The fallback key-only file is atomically written under
   `$XDG_CONFIG_HOME/murmur-ime/voice.json` with directory mode `0700` and file
   mode `0600`. It is rejected if it is a symlink, foreign-owned, public, too
   large, or contains fields other than `api_key`.
 - The optional vocabulary is stored separately as `vocabulary.json` under the
   same private directory, with the same ownership and permission checks.
-- API keys, transcripts, vocabulary, and remote payloads are not written to
-  logs. Status and errors use fixed codes.
+- Optional recognition corrections are stored separately as
+  `corrections.json` with the same checks. They are sent provider-side only;
+  no local global replacement is applied to committed text.
+- API keys, transcripts, vocabulary, corrections, and remote payloads are not
+  written to logs. Status and errors use fixed codes.
 - Live text travels over the user's session D-Bus to the focused IBus engine.
   It does not use clipboard paste in the primary path.
 

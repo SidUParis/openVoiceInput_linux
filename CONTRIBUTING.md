@@ -6,8 +6,9 @@ well-tested changes.
 
 ## Before opening a change
 
-- Do not include API keys, dictated text, recordings, private Rime user data,
-  screenshots of sensitive fields, or unredacted logs.
+- Do not include API keys, dictated text, recordings, private vocabulary or
+  correction files, private Rime user data, screenshots of sensitive fields,
+  or unredacted logs.
 - Keep microphone/network work outside the keyboard-critical IBus process.
 - Preserve the focus token, utterance ID, caller identity, revision ordering,
   and final-once checks on every inline-text path.
@@ -17,27 +18,42 @@ well-tested changes.
 
 ## Local checks
 
-On Ubuntu, install `python3-gi` and `gir1.2-ibus-1.0`, then run:
+On Ubuntu, install `python3-gi`, `gir1.2-ibus-1.0`, `gir1.2-gtk-4.0`,
+`libportaudio2`, `python3-venv`, and `xvfb`. In an isolated environment with
+the test tools installed, run the same boundaries as CI:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=engine \
   python3 -m unittest discover -s engine/tests -v
 PYTHONDONTWRITEBYTECODE=1 \
   python3 -m unittest discover -s scripts/tests -v
-ruff check engine scripts
-ruff format --check engine scripts
-python3 -m compileall -q engine scripts
+xvfb-run -a env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=voice \
+  python3 -m pytest -q -p no:cacheprovider voice/tests
+ruff check engine scripts voice
+ruff format --check engine scripts voice
+python3 -m compileall -q engine scripts voice/murmur_voice
+python3 scripts/scan_repository_secrets.py
 bash -n packaging/murmur-voice-daemon \
-  scripts/install-user.sh scripts/uninstall-user.sh
+  packaging/open-voice-input-settings \
+  scripts/build-preview-bundle.sh scripts/install-user.sh \
+  scripts/uninstall-user.sh
 git diff --check
 ```
+
+The `preview-bundle` CI job additionally builds from `git archive`, verifies
+the checksum manifest, installs the complete wheelhouse with `--no-index`, and
+runs the mock install/upgrade/uninstall lifecycle. Do not describe that
+dependency snapshot as a time-reproducible build until the dependency lock,
+hash, and SBOM work in the roadmap is complete.
 
 Tests must not contact Volcengine, record a microphone, alter the clipboard,
 or switch the user's real IBus engine. Network paths use local fakes.
 
 ## Reporting recognition errors
 
-Please report the language, expected text, actual text, whether the final
-two-pass result differed from the live draft, and relevant non-sensitive
-vocabulary. Do not attach the original recording unless you have intentionally
-removed private content and explicitly choose to share it.
+Please report the language, error category, and whether the final two-pass
+result differed from the live draft. Include expected/actual text only as a
+fully synthetic or deliberately redacted minimal example that contains no
+private content. Do not upload the original recording: speech audio is hard to
+anonymize reliably. If a real transcript is essential to diagnosis, wait for
+the documented confidential reporting route instead of opening a public issue.

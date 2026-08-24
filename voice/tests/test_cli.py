@@ -8,7 +8,12 @@ import pytest
 
 from murmur_voice import cli
 from murmur_voice import session as session_module
-from murmur_voice.config import VoiceConfig, load_config, load_vocabulary
+from murmur_voice.config import (
+    CorrectionPair,
+    VoiceConfig,
+    load_config,
+    load_vocabulary,
+)
 
 
 class _InteractiveInput:
@@ -153,9 +158,27 @@ def test_vocabulary_terms_cannot_be_passed_on_command_line():
         parser.parse_args(["vocabulary", "--term", "PrivateName"])
 
 
-def test_run_loads_vocabulary_once_when_daemon_starts(tmp_path, monkeypatch):
+def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_path):
+    corrections_path = tmp_path / "corrections.json"
+    parser = cli.build_parser()
+
+    options = parser.parse_args(["run", "--corrections", str(corrections_path)])
+
+    assert options.corrections == corrections_path
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run", "--wrong", "private wrong form"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run", "--canonical", "private canonical form"])
+
+
+def test_run_loads_vocabulary_and_corrections_once_when_daemon_starts(
+    tmp_path, monkeypatch
+):
     vocabulary_path = tmp_path / "vocabulary.json"
+    corrections_path = tmp_path / "corrections.json"
     captured = []
+    correction_loads = []
+    correction = CorrectionPair("deep seek", "DeepSeek")
 
     class FakeSession:
         def __init__(self, config):
@@ -173,6 +196,11 @@ def test_run_loads_vocabulary_once_when_daemon_starts(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "load_config", lambda path: VoiceConfig("test-key"))
     monkeypatch.setattr(cli, "_restore_engine", lambda path: 0)
     monkeypatch.setattr(cli, "load_vocabulary", lambda path: ("PrivateName", "专业词"))
+    monkeypatch.setattr(
+        cli,
+        "load_corrections",
+        lambda path: correction_loads.append(path) or (correction,),
+    )
     monkeypatch.setattr(session_module, "VoiceSession", FakeSession)
     monkeypatch.setattr(cli, "ControlServer", FakeServer)
     monkeypatch.setattr(cli.signal, "signal", lambda *args: None)
@@ -183,13 +211,17 @@ def test_run_loads_vocabulary_once_when_daemon_starts(tmp_path, monkeypatch):
             None,
             False,
             vocabulary_path=vocabulary_path,
+            corrections_path=corrections_path,
         )
         == 0
     )
 
     assert len(captured) == 1
+    assert correction_loads == [corrections_path]
     assert captured[0].hotwords == ("PrivateName", "专业词")
+    assert captured[0].corrections == (correction,)
     assert captured[0].provider_settings()["hotwords"] == (
         "PrivateName",
         "专业词",
     )
+    assert captured[0].provider_settings()["corrections"] == (correction,)

@@ -73,7 +73,7 @@ them into the librime-capable production engine and removes engine switching.
 ## Phase 4 — Settings and packaging
 
 - [x] Bounded GTK4 settings window with masked API key, explicit vocabulary,
-  and user-service controls.
+  explicit provider-side corrections, and user-service controls.
 - [ ] Optional explicit provider test that clearly warns it creates a real,
   potentially billable ASR session.
 - [ ] Store secrets in Secret Service; provide a documented `0600` fallback.

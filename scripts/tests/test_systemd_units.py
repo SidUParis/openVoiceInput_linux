@@ -52,13 +52,15 @@ class SystemdUnitTests(unittest.TestCase):
                 "VOICE_EXEC": "/bin/true",
                 "VOICE_CONFIG": "/dev/null",
                 "VOICE_VOCABULARY": "/tmp/vocabulary.json",
+                "VOICE_CORRECTIONS": "/tmp/corrections.json",
             },
         )
 
         self.assertNotIn("ConditionPathExists=", voice_unit)
         self.assertIn(
             'ExecStart="/bin/true" run --config "/dev/null" '
-            '--vocabulary "/tmp/vocabulary.json"',
+            '--vocabulary "/tmp/vocabulary.json" '
+            '--corrections "/tmp/corrections.json"',
             voice_unit,
         )
         self.assertIn("UMask=0077", voice_unit)

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "murmur-ime-voice"
 version = "0.1.0"
-description = "Standalone Volcengine voice daemon for the Murmur IBus preedit bridge"
+description = "Volcengine voice daemon for Open Voice Input Linux"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "GPL-3.0-only"

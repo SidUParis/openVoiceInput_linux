@@ -152,6 +152,7 @@ def verify_bundle_shape(root: Path) -> Path:
         "credentials.json",
         "voice.json",
         "vocabulary.json",
+        "corrections.json",
         "volcengine.json",
     }
     for path in root.rglob("*"):

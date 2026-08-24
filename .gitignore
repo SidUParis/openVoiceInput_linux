@@ -34,3 +34,4 @@ __pycache__/
 *.token
 /voice.json
 /vocabulary.json
+/corrections.json

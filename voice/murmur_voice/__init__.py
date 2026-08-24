@@ -1,4 +1,4 @@
-"""Standalone voice sidecar for the Murmur IBus preedit engine."""
+"""Standalone voice service for Open Voice Input Linux."""
 
 from __future__ import annotations
 

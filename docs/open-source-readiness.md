@@ -10,7 +10,8 @@ combined librime engine is already finished.
 - [x] No real API key, recording, transcript, or Rime user database tracked.
 - [x] Security policy, contribution guide, issue form, and pull-request checks.
 - [x] CI for engine, voice, mock installer lifecycle, unit rendering,
-      formatting, compilation, and shell syntax.
+      formatting, compilation, shell syntax, and provider-aware current/history
+      credential scanning.
 - [x] Public product name and repository URLs are consistent.
 - [x] Voice daemon source is self-contained in this repository with MIT
       attribution for migrated Doubao Murmur files.
@@ -27,8 +28,9 @@ combined librime engine is already finished.
 - [x] Direct dependency and licence inventory has been reviewed.
 - [x] CI builds a clean-source Ubuntu x86_64 preview with a complete offline
       Python wheelhouse, exact SHA256 manifest, and unpacked mock-install test.
-- [x] A bounded native GTK4 settings window stores only private key/vocabulary
-      files and never preloads or logs the provider key.
+- [x] A bounded native GTK4 settings window stores only private key,
+      vocabulary, and explicit-correction files and never preloads or logs the
+      provider key.
 - [ ] A fresh-machine smoke test has been recorded without publishing secrets.
       A same-machine Ubuntu 24.04 install/upgrade/uninstall/reinstall smoke is
       recorded under `docs/smoke-tests/`; a fresh graphical user/VM remains

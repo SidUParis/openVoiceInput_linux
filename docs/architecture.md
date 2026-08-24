@@ -65,7 +65,8 @@ The daemon never commits text and cannot choose a target application.
 ### Settings application
 
 A bounded GTK4 settings application now manages the private key-only fallback,
-explicit vocabulary, and service controls. The masked interactive `configure`
+explicit vocabulary, optional explicit recognition corrections, and service
+controls. The masked interactive `configure`
 command remains available. Secret Service storage and its migration lifecycle
 remain target features rather than part of this transition prototype.
 

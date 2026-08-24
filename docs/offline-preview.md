@@ -34,9 +34,10 @@ then performs a real install of the Python wheel set in a fresh virtual
 environment with package indexes disabled. The SHA256 files detect accidental
 corruption; they are not a cryptographic statement of publisher identity.
 
-Maintainers can build the same artifact only from a clean committed tree on
-Ubuntu x86_64. Building the wheelhouse may use the network; installing it does
-not:
+Maintainers can build an equivalent clean-source offline snapshot only from a
+clean committed tree on Ubuntu x86_64. Dependency ranges are not yet locked,
+so a later build is not guaranteed to be byte-for-byte identical. Building the
+wheelhouse may use the network; installing it does not:
 
 ```bash
 python3 -m venv .venv

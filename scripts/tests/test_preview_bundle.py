@@ -67,25 +67,29 @@ class PreviewBundleTests(unittest.TestCase):
                 extract_archive(archive, base / "extract")
 
     def test_bundle_shape_rejects_local_configuration(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            for relative in (
-                "BUNDLE-INFO",
-                "LICENSE",
-                "README.md",
-                "packaging/open-voice-input-settings",
-                "scripts/install-user.sh",
-                "scripts/uninstall-user.sh",
-                "voice/pyproject.toml",
-                "wheelhouse/murmur_ime_voice-0.1.0-py3-none-any.whl",
-                "voice.json",
+        for forbidden in ("voice.json", "vocabulary.json", "corrections.json"):
+            with (
+                self.subTest(forbidden=forbidden),
+                tempfile.TemporaryDirectory() as temporary,
             ):
-                path = root / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.touch()
+                root = Path(temporary)
+                for relative in (
+                    "BUNDLE-INFO",
+                    "LICENSE",
+                    "README.md",
+                    "packaging/open-voice-input-settings",
+                    "scripts/install-user.sh",
+                    "scripts/uninstall-user.sh",
+                    "voice/pyproject.toml",
+                    "wheelhouse/murmur_ime_voice-0.1.0-py3-none-any.whl",
+                    forbidden,
+                ):
+                    path = root / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.touch()
 
-            with self.assertRaisesRegex(VerificationError, "local configuration"):
-                verify_bundle_shape(root)
+                with self.assertRaisesRegex(VerificationError, "local configuration"):
+                    verify_bundle_shape(root)
 
 
 if __name__ == "__main__":

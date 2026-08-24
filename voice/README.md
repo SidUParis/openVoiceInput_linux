@@ -51,9 +51,12 @@ placeholder.
 
 An installed preview also provides `open-voice-input-settings`. Its
 `Gtk.PasswordEntry` is never prefilled and is cleared after every save attempt.
-The window can edit the explicit vocabulary and explicitly enable/start or
-disable/stop the user service. Saving alone never contacts Volcengine or
-restarts an active recording.
+The window can edit the explicit vocabulary and optional recognition
+corrections, and explicitly enable/start or disable/stop the user service.
+Saving alone never contacts Volcengine or restarts an active recording.
+After the service is explicitly disabled and stopped, a two-step destructive
+button can remove only the local private key file; it never contacts or revokes
+the provider credential itself.
 
 ## Optional explicit personal vocabulary
 
@@ -92,6 +95,29 @@ provider's documented `request.context` hotwords JSON string; empty lists omit
 typing history, documents, transcripts, or the Rime database, and they are
 never written to logs. Provider-side handling follows the user's Volcengine
 account policy.
+
+## Optional explicit recognition corrections
+
+For a phrase that is repeatedly recognized in the same wrong form, the native
+settings window can store an explicit `recognized as` to `correct to` pair.
+Pairs live separately in
+`$XDG_CONFIG_HOME/murmur-ime/corrections.json` (or
+`~/.config/murmur-ime/corrections.json`) with the same private ownership,
+regular-file, `0700` directory, and `0600` file checks as the key and
+vocabulary. Missing or empty corrections are valid defaults.
+
+The daemon accepts at most 50 pairs, with at most 64 Unicode characters on
+each side. It rejects empty values, control characters, unexpected fields,
+and conflicting duplicate sources. Corrections are loaded once when `run`
+starts, so changing them requires the same explicit service restart as the
+vocabulary.
+
+Each saved pair is sent with every new dictation in Volcengine's documented
+`request.context.correct_words` map. Nothing is learned automatically, the
+application never reads a previous transcript to create a pair, and the client
+does not run a second local string replacement after ASR. Because Volcengine
+does not publish request-level pair limits or matching-boundary guarantees,
+this feature is labelled experimental and uses conservative local limits.
 
 ## Run and control
 

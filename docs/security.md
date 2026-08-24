@@ -7,6 +7,12 @@
   telemetry, or debug logs.
 - Mask settings UI values and avoid returning a stored key to the UI process.
 - A file fallback must be atomic and mode `0600` inside a mode `0700` directory.
+- Local key removal must require an inactive managed service, explicit
+  confirmation, and the same owner/type/symlink/permission validation. It does
+  not replace provider-side credential revocation.
+- CI scans the index, worktree, and complete reachable history for supported
+  Volcengine, AWS, GitHub, OpenAI, and PEM credential shapes without printing
+  matched values. It is a release guard, not a substitute for key rotation.
 
 ## Audio and text
 
@@ -16,6 +22,9 @@
   uploaded audio cannot be withdrawn.
 - Never log dictated text. Length, timing, protocol status, and redacted request
   identifiers are sufficient for diagnostics.
+- Treat personal vocabulary and correction pairs as private text: load only
+  explicit user entries from private files, never infer them from transcripts,
+  and never apply an unbounded local string replacement.
 
 ## Focus safety
 

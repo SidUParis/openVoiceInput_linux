@@ -8,7 +8,7 @@ import threading
 
 import pytest
 
-from murmur_voice.config import VoiceConfig
+from murmur_voice.config import CorrectionPair, VoiceConfig
 from murmur_voice.volcengine import (
     AudioBackpressureError,
     VolcengineASRClient,
@@ -82,6 +82,78 @@ def test_personal_vocabulary_uses_official_request_context_json(caplog):
     }
     assert "PrivateName" not in caplog.text
     assert "专业词" not in caplog.text
+
+
+def test_explicit_corrections_use_official_correct_words_context_json(caplog):
+    private_wrong = "deep seek"
+    private_canonical = "DeepSeek"
+    client = VolcengineASRClient(
+        VoiceConfig(
+            "test-key",
+            corrections=(CorrectionPair(private_wrong, private_canonical),),
+        ).provider_settings()
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        payload = client._build_payload()
+
+    context = payload["request"]["context"]
+    assert isinstance(context, str)
+    assert context == '{"correct_words":{"deep seek":"DeepSeek"}}'
+    assert json.loads(context) == {"correct_words": {private_wrong: private_canonical}}
+    assert private_wrong not in caplog.text
+    assert private_canonical not in caplog.text
+
+
+def test_hotwords_and_corrections_share_one_compact_context_string(caplog):
+    private_hotword = "PrivateName"
+    private_wrong = "欧盆爱"
+    private_canonical = "OpenAI"
+    client = VolcengineASRClient(
+        VoiceConfig(
+            "test-key",
+            (private_hotword,),
+            (CorrectionPair(private_wrong, private_canonical),),
+        ).provider_settings()
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        payload = client._build_payload()
+
+    context = payload["request"]["context"]
+    assert context == (
+        '{"hotwords":[{"word":"PrivateName"}],"correct_words":{"欧盆爱":"OpenAI"}}'
+    )
+    assert json.loads(context) == {
+        "hotwords": [{"word": private_hotword}],
+        "correct_words": {private_wrong: private_canonical},
+    }
+    assert private_hotword not in caplog.text
+    assert private_wrong not in caplog.text
+    assert private_canonical not in caplog.text
+
+
+def test_client_never_applies_a_local_correction_to_provider_results():
+    client = VolcengineASRClient(
+        VoiceConfig(
+            "test-key",
+            corrections=(CorrectionPair("wrong form", "canonical form"),),
+        ).provider_settings()
+    )
+    with client._lock:
+        client._generation = 9
+        client._active = True
+    events = []
+    client.on_result = events.append
+
+    assert client._handle_message(
+        _server_frame(
+            {"result": {"text": "wrong form remains"}},
+            final=True,
+        ),
+        9,
+    )
+    assert events == ["wrong form remains"]
 
 
 def test_request_and_audio_binary_envelopes():

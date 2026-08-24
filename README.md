@@ -63,7 +63,8 @@ flowchart LR
 - `voice/` — implemented, isolated Python daemon for microphone capture,
   Volcengine `bigmodel_async`, bounded local control, and the Preedit1 bridge.
 - `settings/` — implemented bounded GTK4 settings window for a masked API key,
-  explicit personal vocabulary, and user-service status/control. It reuses the
+  explicit personal vocabulary, explicit recognition corrections, and
+  user-service status/control. It reuses the
   daemon's private file storage; Secret Service migration remains later work.
 - `scripts/` — user install/uninstall helpers and a deterministic GTK preedit
   demonstration that does not use a microphone or network.
@@ -219,9 +220,11 @@ data.
 
 The correction strategy is documented in
 [docs/recognition-accuracy.md](docs/recognition-accuracy.md): provider-side
-two-pass recognition first, then the implemented explicit private vocabulary
-for names and specialist terms. A provider-managed hotword table remains a
-later advanced option. The daemon never learns silently from clipboard, typing
+two-pass recognition first, then the explicit private vocabulary for names and
+specialist terms, with optional user-confirmed wrong-to-canonical mappings sent
+through Volcengine's documented `context.correct_words`. There is no local
+post-hoc text replacement. A provider-managed hotword table remains a later
+advanced option. The daemon never learns silently from clipboard, typing
 history, transcripts, documents, or the Rime database.
 
 ## Development targets

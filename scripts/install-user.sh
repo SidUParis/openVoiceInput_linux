@@ -113,6 +113,7 @@ engine_unit_path="$unit_dir/murmur-ime-engine.service"
 voice_unit_path="$unit_dir/murmur-ime-voice.service"
 voice_config="$config_home/murmur-ime/voice.json"
 voice_vocabulary="$config_home/murmur-ime/vocabulary.json"
+voice_corrections="$config_home/murmur-ime/corrections.json"
 
 stage_root=""
 unit_stage_dir=""
@@ -335,7 +336,8 @@ python3 "$script_dir/render_systemd_units.py" \
   --output "$stage_voice_unit" \
   --set "VOICE_EXEC=$install_root/murmur-voice-daemon" \
   --set "VOICE_CONFIG=$voice_config" \
-  --set "VOICE_VOCABULARY=$voice_vocabulary"
+  --set "VOICE_VOCABULARY=$voice_vocabulary" \
+  --set "VOICE_CORRECTIONS=$voice_corrections"
 chmod 0644 "$stage_engine_unit" "$stage_voice_unit"
 
 service_active murmur-ime-engine.service && engine_was_active=true
@@ -440,7 +442,14 @@ if PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
   "$voice_vocabulary" >/dev/null 2>&1; then
   voice_vocabulary_ready=true
 fi
-if [[ $voice_config_ready == true && $voice_vocabulary_ready == true ]]; then
+voice_corrections_ready=false
+if PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+  "$install_root/voice-venv/bin/python" -c \
+  "from murmur_voice.config import load_corrections; import sys; load_corrections(sys.argv[1])" \
+  "$voice_corrections" >/dev/null 2>&1; then
+  voice_corrections_ready=true
+fi
+if [[ $voice_config_ready == true && $voice_vocabulary_ready == true && $voice_corrections_ready == true ]]; then
   systemctl --user enable murmur-ime-voice.service
   systemctl --user start murmur-ime-voice.service
   service_active murmur-ime-voice.service || die \
@@ -463,7 +472,12 @@ if [[ $voice_vocabulary_ready == false ]]; then
     "Replace or clear the invalid private vocabulary with:" \
     "  $install_root/murmur-voice-daemon vocabulary --vocabulary $voice_vocabulary"
 fi
-if [[ $voice_config_ready == false || $voice_vocabulary_ready == false ]]; then
+if [[ $voice_corrections_ready == false ]]; then
+  printf '%s\n' \
+    "Replace or clear the invalid private recognition corrections with the settings window:" \
+    "  $install_root/open-voice-input-settings"
+fi
+if [[ $voice_config_ready == false || $voice_vocabulary_ready == false || $voice_corrections_ready == false ]]; then
   printf '%s\n' \
     "Then enable and start the idle service with:" \
     "  systemctl --user enable --now murmur-ime-voice.service"

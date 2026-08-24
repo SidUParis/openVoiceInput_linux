@@ -18,8 +18,10 @@ from .config import (
     MAX_VOCABULARY_TERM_CHARACTERS,
     ConfigError,
     default_config_path,
+    default_corrections_path,
     default_vocabulary_path,
     load_config,
+    load_corrections,
     load_vocabulary,
     load_vocabulary_import,
     normalize_vocabulary_terms,
@@ -46,6 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--config", type=Path, default=default_config_path())
     run_parser.add_argument(
         "--vocabulary", type=Path, default=default_vocabulary_path()
+    )
+    run_parser.add_argument(
+        "--corrections", type=Path, default=default_corrections_path()
     )
     run_parser.add_argument("--socket", type=Path)
     run_parser.add_argument("--verbose", action="store_true")
@@ -100,6 +105,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             options.socket,
             options.verbose,
             vocabulary_path=options.vocabulary,
+            corrections_path=options.corrections,
         )
     try:
         response = request_command(options.command, options.socket)
@@ -174,6 +180,7 @@ def _run(
     verbose: bool,
     *,
     vocabulary_path: Path | None = None,
+    corrections_path: Path | None = None,
 ) -> int:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -189,6 +196,7 @@ def _run(
         config = replace(
             load_config(config_path),
             hotwords=load_vocabulary(vocabulary_path),
+            corrections=load_corrections(corrections_path),
         )
         # Delay GI, sounddevice, and provider imports until run. Status and
         # configure remain useful on systems missing optional runtime pieces.

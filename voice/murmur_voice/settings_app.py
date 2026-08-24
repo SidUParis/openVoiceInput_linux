@@ -12,6 +12,8 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gtk  # noqa: E402
 
 from .settings_controller import (  # noqa: E402
+    CORRECTION_PAIR_LIMIT,
+    CORRECTION_TEXT_LIMIT,
     KeyState,
     ServiceSnapshot,
     SettingsController,
@@ -66,16 +68,21 @@ class SettingsWindow(Gtk.ApplicationWindow):
         refresh_service_on_start: bool = True,
     ) -> None:
         super().__init__(application=application, title="Open Voice Input Linux")
-        self.set_default_size(560, 640)
+        self.set_default_size(620, 760)
         self._controller = controller or SettingsController()
         self._service_busy = False
+        self._key_clear_armed = False
+        self._correction_pairs: list[tuple[str, str]] = []
 
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         page.set_margin_top(20)
         page.set_margin_bottom(20)
         page.set_margin_start(20)
         page.set_margin_end(20)
-        self.set_child(page)
+        page_scroll = Gtk.ScrolledWindow()
+        page_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        page_scroll.set_child(page)
+        self.set_child(page_scroll)
 
         title = Gtk.Label(label="Voice input settings", xalign=0)
         title.add_css_class("title-1")
@@ -88,6 +95,17 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.key_status_label = Gtk.Label(xalign=0, wrap=True)
         page.append(self.key_status_label)
 
+        self.remote_audio_notice_label = Gtk.Label(
+            label=(
+                "During an explicitly started dictation, microphone audio is "
+                "streamed to Volcengine and billed to your account. Cancelling "
+                "cannot retract audio that was already sent."
+            ),
+            xalign=0,
+            wrap=True,
+        )
+        page.append(self.remote_audio_notice_label)
+
         self.key_entry = Gtk.PasswordEntry()
         self.key_entry.set_show_peek_icon(False)
         self.key_entry.set_property("placeholder-text", "Paste a new API key")
@@ -98,6 +116,10 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.save_key_button = Gtk.Button(label="Save new key")
         self.save_key_button.connect("clicked", self._on_save_key)
         key_actions.append(self.save_key_button)
+        self.clear_key_button = Gtk.Button(label="Clear saved key…")
+        self.clear_key_button.add_css_class("destructive-action")
+        self.clear_key_button.connect("clicked", self._on_clear_key)
+        key_actions.append(self.clear_key_button)
         page.append(key_actions)
 
         page.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
@@ -130,6 +152,67 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.save_vocabulary_button = Gtk.Button(label="Save vocabulary")
         self.save_vocabulary_button.connect("clicked", self._on_save_vocabulary)
         page.append(self.save_vocabulary_button)
+
+        page.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        corrections_title = Gtk.Label(
+            label="Explicit corrections (optional, experimental)", xalign=0
+        )
+        corrections_title.add_css_class("heading")
+        page.append(corrections_title)
+
+        self.corrections_help_label = Gtk.Label(
+            label=(
+                "Every saved pair is sent to Volcengine with each dictation "
+                "request. Corrections are explicit: this application does not "
+                "learn them automatically."
+            ),
+            xalign=0,
+            wrap=True,
+        )
+        page.append(self.corrections_help_label)
+
+        correction_inputs = Gtk.Grid(column_spacing=8, row_spacing=6)
+        correction_inputs.attach(
+            Gtk.Label(label="Recognized incorrectly as", xalign=0), 0, 0, 1, 1
+        )
+        correction_inputs.attach(
+            Gtk.Label(label="Replace with canonical text", xalign=0), 1, 0, 1, 1
+        )
+        self.correction_wrong_entry = Gtk.Entry(
+            placeholder_text="Often misrecognized phrase"
+        )
+        self.correction_wrong_entry.set_max_length(CORRECTION_TEXT_LIMIT)
+        self.correction_wrong_entry.set_hexpand(True)
+        correction_inputs.attach(self.correction_wrong_entry, 0, 1, 1, 1)
+        self.correction_canonical_entry = Gtk.Entry(
+            placeholder_text="Preferred canonical text"
+        )
+        self.correction_canonical_entry.set_max_length(CORRECTION_TEXT_LIMIT)
+        self.correction_canonical_entry.set_hexpand(True)
+        correction_inputs.attach(self.correction_canonical_entry, 1, 1, 1, 1)
+        self.add_correction_button = Gtk.Button(label="Add correction")
+        self.add_correction_button.connect("clicked", self._on_add_correction)
+        correction_inputs.attach(self.add_correction_button, 2, 1, 1, 1)
+        page.append(correction_inputs)
+
+        self.corrections_list = Gtk.ListBox(
+            selection_mode=Gtk.SelectionMode.NONE,
+        )
+        self.corrections_list.add_css_class("boxed-list")
+        self.corrections_scroll = Gtk.ScrolledWindow()
+        self.corrections_scroll.set_policy(
+            Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC
+        )
+        self.corrections_scroll.set_min_content_height(90)
+        self.corrections_scroll.set_max_content_height(190)
+        self.corrections_scroll.set_propagate_natural_height(True)
+        self.corrections_scroll.set_child(self.corrections_list)
+        page.append(self.corrections_scroll)
+
+        self.save_corrections_button = Gtk.Button(label="Save explicit corrections")
+        self.save_corrections_button.connect("clicked", self._on_save_corrections)
+        page.append(self.save_corrections_button)
 
         page.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
@@ -172,8 +255,14 @@ class SettingsWindow(Gtk.ApplicationWindow):
             terms = self._controller.load_vocabulary()
         except SettingsError as error:
             self._show_error(str(error))
-            return
-        self.vocabulary_view.get_buffer().set_text("\n".join(terms))
+        else:
+            self.vocabulary_view.get_buffer().set_text("\n".join(terms))
+        try:
+            pairs = self._controller.load_corrections()
+        except SettingsError as error:
+            self._show_error(str(error))
+        else:
+            self._replace_correction_rows(pairs)
 
     def _set_key_state(self, state: KeyState) -> None:
         labels = {
@@ -188,6 +277,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.save_key()
 
     def save_key(self) -> None:
+        self._reset_key_clear_confirmation()
         api_key = self.key_entry.get_text()
         try:
             if not api_key.strip():
@@ -206,6 +296,45 @@ class SettingsWindow(Gtk.ApplicationWindow):
             # every save attempt so a key does not linger in the window.
             self.key_entry.set_text("")
 
+    def _on_clear_key(self, button: Gtk.Button) -> None:
+        del button
+        self.clear_key()
+
+    def clear_key(self) -> None:
+        if not self._key_clear_armed:
+            self._key_clear_armed = True
+            self.clear_key_button.set_label("Confirm clear saved key")
+            self._show_message(
+                "Nothing was removed. First disable and stop the voice service, "
+                "then click Confirm clear saved key to permanently remove only "
+                "the locally saved API key."
+            )
+            return
+
+        self._reset_key_clear_confirmation()
+        try:
+            removed = self._controller.clear_key()
+        except SettingsError as error:
+            self._show_error(str(error))
+        except Exception:
+            self._show_error("The saved API key could not be removed safely.")
+        else:
+            self._set_key_state(KeyState.MISSING)
+            if removed:
+                self._show_message(
+                    "The locally saved API key was removed. No provider was contacted."
+                )
+            else:
+                self._show_message(
+                    "No saved API key was present. No provider was contacted."
+                )
+        finally:
+            self.key_entry.set_text("")
+
+    def _reset_key_clear_confirmation(self) -> None:
+        self._key_clear_armed = False
+        self.clear_key_button.set_label("Clear saved key…")
+
     def _on_save_vocabulary(self, button: Gtk.Button) -> None:
         del button
         self.save_vocabulary()
@@ -221,6 +350,104 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self._show_error("The personal vocabulary could not be saved safely.")
         else:
             self._show_message(f"Saved {count} vocabulary entries. {APPLY_NOTICE}")
+
+    def _on_add_correction(self, button: Gtk.Button) -> None:
+        del button
+        self.add_correction()
+
+    def add_correction(self) -> None:
+        wrong = self.correction_wrong_entry.get_text().strip()
+        canonical = self.correction_canonical_entry.get_text().strip()
+        if not wrong or not canonical:
+            self._show_error("Enter both sides of the explicit correction.")
+            return
+        for existing_wrong, existing_canonical in self._correction_pairs:
+            if existing_wrong != wrong:
+                continue
+            if existing_canonical == canonical:
+                self._show_error("That explicit correction is already in the list.")
+            else:
+                self._show_error(
+                    "That recognized form already has a different canonical "
+                    "correction. Remove it before adding a replacement."
+                )
+            return
+        if len(self._correction_pairs) >= CORRECTION_PAIR_LIMIT:
+            self._show_error(
+                f"At most {CORRECTION_PAIR_LIMIT} explicit corrections can be saved."
+            )
+            return
+        pair = (wrong, canonical)
+        self._correction_pairs.append(pair)
+        self._append_correction_row(pair)
+        self.correction_wrong_entry.set_text("")
+        self.correction_canonical_entry.set_text("")
+        self._show_message(
+            "Correction added locally to this list. Use Save explicit corrections "
+            "to store it."
+        )
+
+    def _replace_correction_rows(self, pairs: Sequence[tuple[str, str]]) -> None:
+        child = self.corrections_list.get_first_child()
+        while child is not None:
+            next_child = child.get_next_sibling()
+            self.corrections_list.remove(child)
+            child = next_child
+        self._correction_pairs = list(pairs)
+        for pair in self._correction_pairs:
+            self._append_correction_row(pair)
+
+    def _append_correction_row(self, pair: tuple[str, str]) -> None:
+        wrong, canonical = pair
+        row = Gtk.ListBoxRow()
+        content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        content.set_margin_top(6)
+        content.set_margin_bottom(6)
+        content.set_margin_start(8)
+        content.set_margin_end(8)
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        text.set_hexpand(True)
+        text.append(Gtk.Label(label=f"Recognized as: {wrong}", xalign=0, wrap=True))
+        text.append(
+            Gtk.Label(label=f"Canonical text: {canonical}", xalign=0, wrap=True)
+        )
+        content.append(text)
+        remove_button = Gtk.Button(label="Remove")
+        remove_button.connect("clicked", self._on_remove_correction, row)
+        content.append(remove_button)
+        row.set_child(content)
+        self.corrections_list.append(row)
+
+    def _on_remove_correction(self, button: Gtk.Button, row: Gtk.ListBoxRow) -> None:
+        del button
+        index = row.get_index()
+        if index < 0 or index >= len(self._correction_pairs):
+            self._show_error("The correction could not be removed safely.")
+            return
+        del self._correction_pairs[index]
+        self.corrections_list.remove(row)
+        self._show_message(
+            "Correction removed locally from this list. Use Save explicit "
+            "corrections to store the change."
+        )
+
+    def _on_save_corrections(self, button: Gtk.Button) -> None:
+        del button
+        self.save_corrections()
+
+    def save_corrections(self) -> None:
+        try:
+            count = self._controller.save_corrections(tuple(self._correction_pairs))
+            normalized_pairs = self._controller.load_corrections()
+        except SettingsError as error:
+            self._show_error(str(error))
+        except Exception:
+            self._show_error("The explicit corrections could not be saved safely.")
+        else:
+            self._replace_correction_rows(normalized_pairs)
+            self._show_message(
+                f"Saved {count} explicit correction pairs. {APPLY_NOTICE}"
+            )
 
     def _on_refresh_service(self, button: Gtk.Button) -> None:
         del button
@@ -278,6 +505,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
 
     def _set_service_controls_busy(self, busy: bool) -> None:
         self._service_busy = busy
+        self.clear_key_button.set_sensitive(not busy)
         self.start_service_button.set_sensitive(not busy)
         self.stop_service_button.set_sensitive(not busy)
         self.refresh_service_button.set_sensitive(not busy)

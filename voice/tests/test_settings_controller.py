@@ -5,7 +5,11 @@ from dataclasses import dataclass
 
 import pytest
 
-from murmur_voice.config import load_config, load_vocabulary
+from murmur_voice.config import (
+    load_config,
+    load_corrections as load_corrections_file,
+    load_vocabulary,
+)
 from murmur_voice.settings_controller import (
     SYSTEMCTL,
     VOICE_SERVICE,
@@ -49,6 +53,7 @@ def _controller(tmp_path, runner=None, status_reader=None):
     options = {
         "config_path": tmp_path / "private" / "voice.json",
         "vocabulary_path": tmp_path / "private" / "vocabulary.json",
+        "corrections_path": tmp_path / "private" / "corrections.json",
         "runner": runner or RecordingRunner(),
     }
     if status_reader is not None:
@@ -84,6 +89,69 @@ def test_key_error_never_contains_the_submitted_key(tmp_path):
     assert "that-must-not-appear" not in str(captured.value)
 
 
+def test_key_clear_requires_inactive_service_and_never_contacts_provider(tmp_path):
+    runner = RecordingRunner(active_state="inactive")
+
+    def provider_reader(command):
+        raise AssertionError(
+            f"provider/control socket must not be contacted: {command}"
+        )
+
+    controller = _controller(tmp_path, runner, provider_reader)
+    controller.save_key("private-key-sentinel")
+
+    assert controller.clear_key() is True
+    assert controller.key_state() is KeyState.MISSING
+    assert controller.clear_key() is False
+    assert [call[0] for call in runner.calls] == [
+        (SYSTEMCTL, "--user", "is-active", VOICE_SERVICE),
+        (SYSTEMCTL, "--user", "is-active", VOICE_SERVICE),
+    ]
+
+
+@pytest.mark.parametrize("active_state", ("active", "failed", "activating"))
+def test_key_clear_refuses_every_service_state_except_inactive(tmp_path, active_state):
+    runner = RecordingRunner(active_state=active_state)
+
+    def daemon_reader(command):
+        raise AssertionError(f"daemon socket must not be contacted: {command}")
+
+    controller = _controller(tmp_path, runner, daemon_reader)
+    secret = "private-key-that-must-not-appear"
+    controller.save_key(secret)
+
+    with pytest.raises(SettingsError, match="Disable and stop") as captured:
+        controller.clear_key()
+
+    assert load_config(tmp_path / "private" / "voice.json").api_key == secret
+    assert secret not in str(captured.value)
+    assert len(runner.calls) == 1
+
+
+def test_key_clear_refuses_unknown_service_state_and_unsafe_key_file(tmp_path):
+    class UnknownRunner(RecordingRunner):
+        def __call__(self, command, **kwargs):
+            self.calls.append((command, kwargs))
+            return FakeCompletedProcess(
+                returncode=1, stdout="unexpected-private-output"
+            )
+
+    unknown_controller = _controller(tmp_path, UnknownRunner())
+    unknown_controller.save_key("private-key-sentinel")
+    with pytest.raises(SettingsError, match="Disable and stop") as captured:
+        unknown_controller.clear_key()
+    assert "unexpected-private-output" not in str(captured.value)
+
+    runner = RecordingRunner(active_state="inactive")
+    controller = _controller(tmp_path, runner)
+    path = tmp_path / "private" / "voice.json"
+    path.chmod(0o644)
+    with pytest.raises(SettingsError, match="could not be removed safely") as captured:
+        controller.clear_key()
+    assert "private-key-sentinel" not in str(captured.value)
+    assert path.exists()
+
+
 def test_vocabulary_save_deduplicates_without_running_service(tmp_path):
     runner = RecordingRunner()
     controller = _controller(tmp_path, runner)
@@ -107,6 +175,62 @@ def test_vocabulary_error_never_contains_a_term(tmp_path):
 
     assert private_term not in str(captured.value)
     assert "term-that-must-not-appear" not in str(captured.value)
+
+
+def test_corrections_load_save_normalize_without_running_service(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+
+    count = controller.save_corrections(
+        (
+            ("  commonly misheard  ", "  canonical form  "),
+            ("commonly misheard", "canonical form"),
+            ("另一个错误", "标准写法"),
+        )
+    )
+
+    assert count == 2
+    assert controller.load_corrections() == (
+        ("commonly misheard", "canonical form"),
+        ("另一个错误", "标准写法"),
+    )
+    stored = load_corrections_file(tmp_path / "private" / "corrections.json")
+    assert tuple((pair.wrong, pair.canonical) for pair in stored) == (
+        ("commonly misheard", "canonical form"),
+        ("另一个错误", "标准写法"),
+    )
+    assert runner.calls == []
+
+
+def test_correction_error_never_contains_submitted_text(tmp_path):
+    controller = _controller(tmp_path)
+    private_wrong = "private-wrong-that-must-not-appear-" + ("界" * 65)
+    private_canonical = "private-canonical-that-must-not-appear"
+
+    with pytest.raises(SettingsError) as captured:
+        controller.save_corrections(((private_wrong, private_canonical),))
+
+    message = str(captured.value)
+    assert private_wrong not in message
+    assert private_canonical not in message
+    assert "must-not-appear" not in message
+
+
+def test_correction_load_error_never_contains_existing_private_text(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+    private_text = "private-existing-correction-that-must-not-appear"
+    path = tmp_path / "private" / "corrections.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(private_text, encoding="utf-8")
+    path.chmod(0o600)
+
+    with pytest.raises(SettingsError) as captured:
+        controller.load_corrections()
+
+    assert private_text not in str(captured.value)
+    assert "must-not-appear" not in str(captured.value)
+    assert runner.calls == []
 
 
 def test_status_start_and_stop_use_only_fixed_argv_without_a_shell(tmp_path):
@@ -144,6 +268,23 @@ def test_start_requires_safe_local_configuration_before_systemctl(tmp_path):
     controller = _controller(tmp_path, runner)
 
     with pytest.raises(SettingsError, match="valid saved API key"):
+        controller.start_service()
+
+    assert runner.calls == []
+
+
+def test_start_validates_corrections_before_systemctl(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+    controller.save_key("test-key")
+    corrections_path = tmp_path / "private" / "corrections.json"
+    corrections_path.write_text(
+        '{"version": 1, "pairs": [{"wrong": "a", "canonical": "b"}]}',
+        encoding="utf-8",
+    )
+    corrections_path.chmod(0o644)
+
+    with pytest.raises(SettingsError, match="Valid explicit corrections"):
         controller.start_service()
 
     assert runner.calls == []

@@ -48,22 +48,33 @@ to 10, and one table per request. See the official
 [hotword documentation](https://www.volcengine.com/docs/6561/155739) and
 [streaming SDK example](https://www.volcengine.com/docs/6561/1395846).
 
-### 3. Correction feedback, only after explicit user action
+### 3. Explicit provider-side correction pairs
 
-When the final result still contains a wrong proper noun, a future
-“识别纠错” action should let the user enter the intended spelling. That action
-adds or raises the canonical term in the personal vocabulary. It must not
-silently learn the provider's wrong transcript, nor monitor normal typing.
+When the final result repeatedly contains the same wrong form, the settings
+window lets the user explicitly enter `recognized as` and `correct to` values.
+The pair is stored in a separate private `corrections.json`; no transcript,
+timestamp, weight, or surrounding document context is retained.
 
-The minimal feedback record is:
+The local boundary is conservative because Volcengine does not publish a
+request-level pair count, phrase-length limit, or matching-boundary guarantee:
 
-```text
-canonical term | weight | last explicitly confirmed time
-```
+- at most 50 pairs and at most 64 Unicode characters on either side;
+- strict versioned JSON with no unexpected fields;
+- empty values, controls, unsafe files, and conflicting source mappings are
+  rejected;
+- missing or empty corrections leave the request unchanged;
+- the file is loaded once at daemon startup, so changes require a restart.
 
-An optional spoken/wrong form can later drive an explicit replacement rule,
-but replacement must be bounded to word or phrase boundaries. A global string
-replacement can corrupt unrelated sentences and is not acceptable.
+For a non-empty mapping, the daemon merges `correct_words` with any existing
+`hotwords` inside the same compact `request.context` JSON string documented by
+Volcengine. The provider performs the correction during recognition. The
+client does not run `.replace()` or any other post-hoc local rewrite, so it
+cannot accidentally alter an unrelated committed phrase. Nothing is learned
+from partial hypotheses, final transcripts, typing, or the clipboard.
+
+See the official [streaming SDK
+example](https://www.volcengine.com/docs/6561/1395846), which documents
+`{"correct_words":{"deep seek":"DeepSeek"}}` inside `context`.
 
 ### 4. Advanced managed vocabulary
 
@@ -93,7 +104,8 @@ text. Report character error rate separately for:
 
 1. live draft;
 2. two-pass final;
-3. two-pass final plus personal vocabulary.
+3. two-pass final plus personal vocabulary;
+4. two-pass final plus explicit correction pairs.
 
 The audio and expected text stay outside Git. Repository tests use invented
 text and protocol fixtures only.

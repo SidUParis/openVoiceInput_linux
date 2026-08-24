@@ -7,3 +7,4 @@ build/
 dist/
 /voice.json
 /vocabulary.json
+/corrections.json

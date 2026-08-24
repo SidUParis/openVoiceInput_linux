@@ -1,4 +1,4 @@
-"""Read separate private provider-key and personal-vocabulary JSON files."""
+"""Read separate private provider-key, vocabulary, and correction JSON files."""
 
 from __future__ import annotations
 
@@ -17,10 +17,26 @@ MAX_API_KEY_BYTES = 4096
 MAX_VOCABULARY_BYTES = 128 * 1024
 MAX_VOCABULARY_ENTRIES = 200
 MAX_VOCABULARY_TERM_CHARACTERS = 64
+CORRECTIONS_SCHEMA_VERSION = 1
+MAX_CORRECTIONS_BYTES = 64 * 1024
+MAX_CORRECTION_PAIRS = 50
+MAX_CORRECTION_TEXT_CHARACTERS = 64
 
 
 class ConfigError(RuntimeError):
     """A safe-to-display configuration error that never contains a secret."""
+
+
+class _DuplicateJSONField(ValueError):
+    """Internal marker for an ambiguous object in a private JSON file."""
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class CorrectionPair:
+    """One explicit provider-side replacement, hidden from debug reprs."""
+
+    wrong: str
+    canonical: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +50,7 @@ class VoiceConfig:
 
     api_key: str = field(repr=False)
     hotwords: tuple[str, ...] = field(default=(), repr=False)
+    corrections: tuple[CorrectionPair, ...] = field(default=(), repr=False)
 
     def provider_settings(self) -> dict[str, Any]:
         settings = {
@@ -55,6 +72,9 @@ class VoiceConfig:
         hotwords = normalize_vocabulary_terms(self.hotwords)
         if hotwords:
             settings["hotwords"] = hotwords
+        corrections = normalize_correction_pairs(self.corrections)
+        if corrections:
+            settings["corrections"] = corrections
         return settings
 
 
@@ -68,6 +88,12 @@ def default_vocabulary_path() -> Path:
     config_home = os.environ.get("XDG_CONFIG_HOME")
     root = Path(config_home) if config_home else Path.home() / ".config"
     return root / "murmur-ime" / "vocabulary.json"
+
+
+def default_corrections_path() -> Path:
+    config_home = os.environ.get("XDG_CONFIG_HOME")
+    root = Path(config_home) if config_home else Path.home() / ".config"
+    return root / "murmur-ime" / "corrections.json"
 
 
 def load_config(path: str | os.PathLike[str] | None = None) -> VoiceConfig:
@@ -124,6 +150,92 @@ def save_api_key(api_key: str, path: str | os.PathLike[str] | None = None) -> Pa
     )
 
 
+def delete_api_key(path: str | os.PathLike[str] | None = None) -> bool:
+    """Remove only a private, regular, user-owned key file.
+
+    The settings controller is responsible for proving that the voice service
+    is inactive before calling this filesystem-only operation.  Returning
+    ``False`` for an absent file makes a repeated confirmed removal harmless.
+    """
+
+    config_path = Path(path) if path is not None else default_config_path()
+    directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    directory_flags |= getattr(os, "O_DIRECTORY", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+
+    try:
+        directory_descriptor = os.open(config_path.parent, directory_flags)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise ConfigError("voice configuration could not be removed safely") from error
+
+    try:
+        directory_metadata = os.fstat(directory_descriptor)
+        if (
+            not stat.S_ISDIR(directory_metadata.st_mode)
+            or directory_metadata.st_uid != os.getuid()
+            or stat.S_IMODE(directory_metadata.st_mode) & 0o077
+        ):
+            raise ConfigError("voice configuration could not be removed safely")
+
+        file_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        file_flags |= getattr(os, "O_NONBLOCK", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            file_flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(
+                config_path.name,
+                file_flags,
+                dir_fd=directory_descriptor,
+            )
+        except FileNotFoundError:
+            return False
+        except OSError as error:
+            raise ConfigError(
+                "voice configuration could not be removed safely"
+            ) from error
+
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or stat.S_IMODE(metadata.st_mode) & 0o077
+            ):
+                raise ConfigError("voice configuration could not be removed safely")
+            current_metadata = os.stat(
+                config_path.name,
+                dir_fd=directory_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                current_metadata.st_dev != metadata.st_dev
+                or current_metadata.st_ino != metadata.st_ino
+            ):
+                raise ConfigError("voice configuration could not be removed safely")
+        except OSError as error:
+            raise ConfigError(
+                "voice configuration could not be removed safely"
+            ) from error
+        finally:
+            os.close(descriptor)
+
+        try:
+            os.unlink(config_path.name, dir_fd=directory_descriptor)
+            os.fsync(directory_descriptor)
+        except FileNotFoundError:
+            return False
+        except OSError as error:
+            raise ConfigError(
+                "voice configuration could not be removed safely"
+            ) from error
+    finally:
+        os.close(directory_descriptor)
+    return True
+
+
 def load_vocabulary(
     path: str | os.PathLike[str] | None = None,
 ) -> tuple[str, ...]:
@@ -160,6 +272,57 @@ def save_vocabulary(
         {"terms": list(normalized)},
         kind="personal vocabulary",
         temporary_prefix=".vocabulary.json.",
+    )
+
+
+def load_corrections(
+    path: str | os.PathLike[str] | None = None,
+) -> tuple[CorrectionPair, ...]:
+    """Load optional explicit recognition corrections from a private JSON file."""
+
+    corrections_path = Path(path) if path is not None else default_corrections_path()
+    raw = _load_private_bytes(
+        corrections_path,
+        kind="recognition corrections",
+        limit=MAX_CORRECTIONS_BYTES,
+        missing_ok=True,
+    )
+    if raw is None:
+        return ()
+    try:
+        document = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_fields,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateJSONField) as error:
+        raise ConfigError("recognition corrections are not valid UTF-8 JSON") from error
+    if not isinstance(document, dict) or set(document) != {"version", "pairs"}:
+        raise ConfigError("recognition corrections must contain only version and pairs")
+    version = document.get("version")
+    if type(version) is not int or version != CORRECTIONS_SCHEMA_VERSION:
+        raise ConfigError("recognition corrections use an unsupported schema version")
+    return normalize_correction_pairs(document.get("pairs"))
+
+
+def save_corrections(
+    pairs: Any,
+    path: str | os.PathLike[str] | None = None,
+) -> Path:
+    """Validate and atomically store explicit recognition corrections."""
+
+    normalized = normalize_correction_pairs(pairs)
+    corrections_path = Path(path) if path is not None else default_corrections_path()
+    return _write_private_json(
+        corrections_path,
+        {
+            "version": CORRECTIONS_SCHEMA_VERSION,
+            "pairs": [
+                {"wrong": pair.wrong, "canonical": pair.canonical}
+                for pair in normalized
+            ],
+        },
+        kind="recognition corrections",
+        temporary_prefix=".corrections.json.",
     )
 
 
@@ -218,6 +381,75 @@ def normalize_vocabulary_terms(values: Any) -> tuple[str, ...]:
         seen.add(folded)
         normalized.append(term)
     return tuple(normalized)
+
+
+def normalize_correction_pairs(values: Any) -> tuple[CorrectionPair, ...]:
+    """Validate, trim, and deterministically deduplicate explicit corrections."""
+
+    if not isinstance(values, (list, tuple)):
+        raise ConfigError("recognition correction pairs must be a list")
+    if len(values) > MAX_CORRECTION_PAIRS:
+        raise ConfigError(
+            f"recognition corrections exceed {MAX_CORRECTION_PAIRS} pairs"
+        )
+
+    normalized: list[CorrectionPair] = []
+    by_wrong: dict[str, str] = {}
+    for value in values:
+        if isinstance(value, CorrectionPair):
+            wrong_value = value.wrong
+            canonical_value = value.canonical
+        elif isinstance(value, dict) and set(value) == {"wrong", "canonical"}:
+            wrong_value = value.get("wrong")
+            canonical_value = value.get("canonical")
+        else:
+            raise ConfigError(
+                "each recognition correction must contain only wrong and canonical"
+            )
+
+        wrong = _normalize_correction_text(wrong_value, side="wrong")
+        canonical = _normalize_correction_text(
+            canonical_value,
+            side="canonical",
+        )
+        if wrong in by_wrong:
+            if by_wrong[wrong] != canonical:
+                raise ConfigError(
+                    "recognition corrections contain a conflicting wrong form"
+                )
+            continue
+        by_wrong[wrong] = canonical
+        normalized.append(CorrectionPair(wrong=wrong, canonical=canonical))
+    return tuple(normalized)
+
+
+def _normalize_correction_text(value: Any, *, side: str) -> str:
+    if not isinstance(value, str):
+        raise ConfigError(f"recognition correction {side} values must be strings")
+    if any(not character.isprintable() for character in value):
+        raise ConfigError(
+            f"recognition correction {side} contains a forbidden control character"
+        )
+    text = value.strip()
+    if not text:
+        raise ConfigError(f"recognition correction {side} must not be empty")
+    if len(text) > MAX_CORRECTION_TEXT_CHARACTERS:
+        raise ConfigError(
+            f"recognition correction {side} exceeds "
+            f"{MAX_CORRECTION_TEXT_CHARACTERS} Unicode characters"
+        )
+    return text
+
+
+def _reject_duplicate_json_fields(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    document: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in document:
+            raise _DuplicateJSONField
+        document[name] = value
+    return document
 
 
 def _load_private_bytes(

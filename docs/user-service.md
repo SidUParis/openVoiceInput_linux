@@ -58,17 +58,20 @@ Installed files use these XDG-relative locations:
   `$XDG_DATA_HOME/murmur-ime/install-manifest.json`;
 - user units: `$XDG_CONFIG_HOME/systemd/user/`;
 - API key: `$XDG_CONFIG_HOME/murmur-ime/voice.json`;
-- optional vocabulary: `$XDG_CONFIG_HOME/murmur-ime/vocabulary.json`.
+- optional vocabulary: `$XDG_CONFIG_HOME/murmur-ime/vocabulary.json`;
+- optional corrections: `$XDG_CONFIG_HOME/murmur-ime/corrections.json`.
 
 If `XDG_DATA_HOME` or `XDG_CONFIG_HOME` is unset, the standard
 `~/.local/share` and `~/.config` defaults apply. The generated service records
-the resolved config and vocabulary paths, so a custom XDG config root is used
-consistently even if it is absent from the systemd manager's environment.
+the resolved config, vocabulary, and correction paths, so a custom XDG config
+root is used consistently even if it is absent from the systemd manager's
+environment.
 
 The engine service starts after installation. The voice unit is installed but
-is enabled and started only when the key file and optional vocabulary already
-pass the daemon's ownership, permission, schema, and content checks. Configure
-a missing or invalid key in the GTK4 settings window:
+is enabled and started only when the key file, optional vocabulary, and
+optional corrections already pass the daemon's ownership, permission, schema,
+and content checks. Configure a missing or invalid key in the GTK4 settings
+window:
 
 ```bash
 ~/.local/share/murmur-ime/open-voice-input-settings
@@ -77,6 +80,9 @@ a missing or invalid key in the GTK4 settings window:
 The stored key is never prefilled or revealed. Saving clears the password
 field, does not contact Volcengine, and does not restart an active recording.
 Use the explicit **Enable and start service** button after configuration.
+To remove the local key, first use **Disable and stop**, then use the two-step
+**Clear saved key** action. This deletes only the validated private local file;
+it does not revoke the key in the provider console.
 
 The masked terminal flow remains available, using the exact command printed
 by the installer, for example:
@@ -98,6 +104,13 @@ configuration is used:
 ```bash
 systemctl --user restart murmur-ime-voice.service
 ```
+
+Optional user-confirmed recognition corrections are edited in the native
+settings window. They are private `recognized as` to `correct to` pairs, loaded
+once at service start, and sent in Volcengine's documented provider-side
+`context.correct_words` map. They are not learned from transcripts and are not
+applied as a local string replacement. Saving either vocabulary or corrections
+does not restart the service automatically.
 
 The optional explicit vocabulary can be edited separately and then loaded by
 restarting the idle daemon:
@@ -130,7 +143,8 @@ no-new-privileges policy still allow the user-session D-Bus/IBus and
 PipeWire/PulseAudio Unix sockets plus IPv4/IPv6 access to the configured ASR
 provider. The installed launcher disables Python's per-user site-packages so
 unrelated packages under `~/.local` cannot alter this managed runtime. Logs
-contain lifecycle/error classes, never keys, vocabulary, or dictated text.
+contain lifecycle/error classes, never keys, vocabulary, corrections, or
+dictated text.
 
 Before a recording temporarily selects `murmur-voice`, the daemon atomically
 records the actual prior engine in that private runtime directory. Normal
@@ -162,5 +176,5 @@ files while any managed daemon remains. Only if the current engine is exactly
 `murmur-voice` does it restore and verify the recorded engine; failure is a hard
 stop, never a warning followed by deletion. The managed runtime and units move
 to same-filesystem quarantine before final deletion so an interrupted
-uninstall can roll back. The private API-key and vocabulary files are retained,
-and no Rime program or user database is touched.
+uninstall can roll back. The private API-key, vocabulary, and correction files
+are retained, and no Rime program or user database is touched.

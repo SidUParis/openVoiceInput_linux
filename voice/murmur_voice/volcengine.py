@@ -21,6 +21,7 @@ from typing import Any
 from .config import (
     DEFAULT_ENDPOINT,
     DEFAULT_RESOURCE_ID,
+    normalize_correction_pairs,
     normalize_vocabulary_terms,
 )
 
@@ -382,6 +383,7 @@ class VolcengineASRClient:
             SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * pending_seconds
         )
         self._hotwords = normalize_vocabulary_terms(settings.get("hotwords", ()))
+        self._corrections = normalize_correction_pairs(settings.get("corrections", ()))
         self._request_options = {
             "model_name": "bigmodel",
             "enable_itn": bool(settings.get("enable_itn", True)),
@@ -435,11 +437,19 @@ class VolcengineASRClient:
 
     def _build_payload(self) -> dict[str, Any]:
         request = dict(self._request_options)
+        context: dict[str, Any] = {}
         if self._hotwords:
+            context["hotwords"] = [{"word": term} for term in self._hotwords]
+        if self._corrections:
+            context["correct_words"] = {
+                pair.wrong: pair.canonical for pair in self._corrections
+            }
+        if context:
             # Volcengine's request-level API expects context itself to be a
-            # compact JSON string, not a nested JSON object.
+            # compact JSON string, not a nested JSON object. Hotwords and
+            # explicit replacements are members of that same inner object.
             request["context"] = json.dumps(
-                {"hotwords": [{"word": term} for term in self._hotwords]},
+                context,
                 ensure_ascii=False,
                 separators=(",", ":"),
             )

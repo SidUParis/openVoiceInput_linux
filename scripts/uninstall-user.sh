@@ -312,5 +312,5 @@ commit_complete=true
 rmdir -- "$runtime_root/murmur-ime" 2>/dev/null || true
 printf '%s\n' \
   "Open Voice Input Linux user services and managed installed code were removed." \
-  "The private API-key and vocabulary files were retained under the XDG config directory." \
+  "The private API-key, vocabulary, and correction files were retained under the XDG config directory." \
   "No IBus daemon, Rime installation, or ~/.config/ibus/rime data was removed."

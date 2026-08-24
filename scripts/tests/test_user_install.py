@@ -138,6 +138,8 @@ class InstallerHarness:
                 config=${!#}
                 if [[ $code == *load_vocabulary* ]]; then
                   [[ ${MOCK_VOCABULARY_INVALID:-0} != 1 ]] || exit 1
+                elif [[ $code == *load_corrections* ]]; then
+                  [[ ${MOCK_CORRECTIONS_INVALID:-0} != 1 ]] || exit 1
                 else
                   [[ -f $config ]] || exit 1
                 fi
@@ -361,6 +363,8 @@ class UserInstallTests(unittest.TestCase):
         self.assertIn("%%literal$$", unit)
         self.assertIn("--vocabulary", unit)
         self.assertIn(str(self.harness.config / "murmur-ime/vocabulary.json"), unit)
+        self.assertIn("--corrections", unit)
+        self.assertIn(str(self.harness.config / "murmur-ime/corrections.json"), unit)
         self.assertTrue(config.exists())
         self.assertFalse((self.harness.config / "ibus/rime").exists())
         launcher = (install_root / "murmur-voice-daemon").read_text(encoding="utf-8")
@@ -560,8 +564,31 @@ class UserInstallTests(unittest.TestCase):
         self.assertIn("vocabulary --vocabulary", result.stdout)
         self.assertIn("enable --now murmur-ime-voice.service", result.stdout)
 
+    def test_invalid_corrections_do_not_enable_or_start_voice(self) -> None:
+        self.harness.configure_key_placeholder()
+        self.harness.environment["MOCK_CORRECTIONS_INVALID"] = "1"
+
+        result = self.harness.run(
+            INSTALLER, "--wheelhouse", str(self.harness.wheelhouse)
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.harness.calls()
+        self.assertIn("systemctl --user disable murmur-ime-voice.service", calls)
+        self.assertNotIn("systemctl --user enable murmur-ime-voice.service", calls)
+        self.assertNotIn("systemctl --user start murmur-ime-voice.service", calls)
+        self.assertNotIn("configure --config", result.stdout)
+        self.assertIn("recognition corrections", result.stdout)
+        self.assertIn("enable --now murmur-ime-voice.service", result.stdout)
+
     def test_uninstall_restores_only_recorded_engine_and_retains_key(self) -> None:
         config = self.harness.configure_key_placeholder()
+        corrections = config.parent / "corrections.json"
+        corrections.write_text(
+            '{"version":1,"pairs":[{"wrong":"test-wrong","canonical":"TestRight"}]}\n',
+            encoding="utf-8",
+        )
+        corrections.chmod(0o600)
         install_result = self.harness.run(
             INSTALLER, "--wheelhouse", str(self.harness.wheelhouse)
         )
@@ -591,6 +618,7 @@ class UserInstallTests(unittest.TestCase):
         engine_stop = calls.index("systemctl --user stop murmur-ime-engine.service")
         self.assertLess(voice_stop, engine_stop)
         self.assertTrue(config.exists())
+        self.assertTrue(corrections.exists())
         self.assertFalse((self.harness.data / "murmur-ime/voice-venv").exists())
         self.assertFalse((self.harness.config / "ibus/rime").exists())
         self.assertFalse(socket_path.exists())
