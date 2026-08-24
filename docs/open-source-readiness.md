@@ -44,8 +44,9 @@ combined librime engine is already finished.
       `docs/smoke-tests/2026-08-24-final-artifact.md`; a fresh graphical user/VM
       remains required.
 - [ ] All provider keys used during pre-release development have been rotated.
-- [ ] `main` requires the `security`, `engine`, `voice`, and `preview-bundle`
-      checks. This can and should be enabled while the repository is private.
+- [x] `main` requires the `security`, `engine`, `voice`, and `preview-bundle`
+      checks while the repository is private; Actions are limited to
+      GitHub-owned, full-SHA-pinned actions.
 - [ ] GitHub private vulnerability reporting is enabled and verified during
       the controlled public transition; GitHub does not expose it for this
       private personal repository.

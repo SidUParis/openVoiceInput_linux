@@ -28,6 +28,8 @@ here. The project has not published a stable release yet.
   private per-user files and are never bundled or logged.
 - Password, PIN, private, stale, and unfocused input contexts reject voice
   acquisition; late results are not redirected to a clipboard fallback.
+- The preview build backend is pinned to security-fixed `setuptools` 83.0.0;
+  the final dependency graph has no open Dependabot alert.
 
 ### Known preview limitations
 

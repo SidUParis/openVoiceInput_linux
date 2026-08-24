@@ -61,3 +61,27 @@ upgrade/uninstall sequence in a fresh graphical Ubuntu user or VM, using a
 newly rotated key entered only in that guest. The test must cover representative
 GTK, Qt, Chromium/Electron, terminal, and Wayland contexts without preserving
 audio or dictated text.
+
+## Follow-up build-backend and delivery verification
+
+Release-preparation commit
+`45f5226f2a5f68da400e4f5ac3a6bed8a678a6bb` updated only documentation and
+the separately pinned build-only backend from `setuptools` 82.0.1 to the
+security-fixed 83.0.0; runtime project source and runtime dependency locks did
+not change. GitHub Actions run
+[`32683906001`](https://github.com/SidUParis/openVoiceInput_linux/actions/runs/32683906001)
+passed all four required jobs and left zero open Dependabot alerts.
+
+Its CI archive and a new independent local clean build were byte-identical:
+
+```text
+2abfa6dda48fe0d0017ecc8397d483d834248255ebe216a73f50fecc9343ec6d
+```
+
+That exact CI archive then completed a real upgrade of the installed v2
+manifest. Before and after, the active IBus engine was `libpinyin`; the
+metadata-only Rime digest was identical; the engine service was active/enabled;
+and the unconfigured voice service remained inactive/disabled. The upgraded
+manifest, systemd units, managed environment, outer checksum, source/ref,
+SBOM, lock, and isolated no-index installation all verified. No provider
+credential or microphone session was involved.
