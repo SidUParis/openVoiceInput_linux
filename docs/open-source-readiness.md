@@ -25,7 +25,9 @@ combined librime engine is already finished.
 - [x] Live partial, final-once, cancel, focus-loss, private-field, daemon-loss,
       and API failure paths have automated tests.
 - [x] README clearly labels the temporary engine-switch limitation.
-- [x] Direct dependency and licence inventory has been reviewed.
+- [x] Direct dependency and licence inventory has been reviewed and recorded
+      in `docs/license-audit.md`; the transition threat model and accepted
+      risks are recorded in `docs/threat-model.md`.
 - [x] CI builds a clean-source Ubuntu x86_64 preview with a complete offline
       Python wheelhouse, exact SHA256 manifest, and unpacked mock-install test.
 - [x] The Ubuntu 24.04/CPython 3.12 preview pins and hashes every bundled
@@ -38,11 +40,17 @@ combined librime engine is already finished.
       icon covered by the transactional ownership manifest and uninstall.
 - [ ] A fresh-machine smoke test has been recorded without publishing secrets.
       A same-machine Ubuntu 24.04 install/upgrade/uninstall/reinstall smoke is
-      recorded under `docs/smoke-tests/`; a fresh graphical user/VM remains
-      required.
+      recorded for the exact final artifact in
+      `docs/smoke-tests/2026-08-24-final-artifact.md`; a fresh graphical user/VM
+      remains required.
 - [ ] All provider keys used during pre-release development have been rotated.
-- [ ] GitHub private vulnerability reporting and protected required CI checks
-      are enabled as part of the public transition.
+- [ ] `main` requires the `security`, `engine`, `voice`, and `preview-bundle`
+      checks. This can and should be enabled while the repository is private.
+- [ ] GitHub private vulnerability reporting is enabled and verified during
+      the controlled public transition; GitHub does not expose it for this
+      private personal repository.
+- [ ] The release procedure in `docs/release-process.md` has been completed
+      with a verified signing identity and an immutable signed preview.
 
 ## Release gates
 

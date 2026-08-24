@@ -2,7 +2,11 @@
 
 ## Credentials
 
-- Store API keys in Secret Service/libsecret when available.
+- The transition preview stores the API key only in its validated atomic
+  `0600` file inside a `0700` directory. Secret Service/libsecret is the
+  preferred future store once its migration and deletion lifecycle is
+  implemented and tested; the current UI must not imply that it is already in
+  use.
 - Never place real credentials in Git, examples, command output, crash reports,
   telemetry, or debug logs.
 - Mask settings UI values and avoid returning a stored key to the UI process.

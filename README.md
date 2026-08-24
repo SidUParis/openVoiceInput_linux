@@ -227,7 +227,11 @@ Microphone audio is streamed to Volcengine only during an active dictation and
 usage is billed to the user's own Volcengine account. Cancelling prevents a
 local commit but cannot retract audio already uploaded. Read
 [docs/privacy.md](docs/privacy.md) before using voice input with sensitive
-data.
+data. The reviewed security assumptions and accepted preview risks are in the
+[threat model](docs/threat-model.md); bundled-code and dependency attribution
+is recorded in the [licence audit](docs/license-audit.md) and
+[NOTICE](NOTICE.md). Maintainers should follow the
+[release process](docs/release-process.md) before publishing a preview.
 
 The correction strategy is documented in
 [docs/recognition-accuracy.md](docs/recognition-accuracy.md): provider-side

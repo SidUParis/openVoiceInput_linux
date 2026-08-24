@@ -33,7 +33,9 @@ here. The project has not published a stable release yet.
 
 - Dictation temporarily switches from the current IBus engine to
   `murmur-voice`, then restores the exact previous engine. The permanent
-  librime/Rime-capable combined engine is not implemented yet.
+  librime/Rime-capable combined engine is not implemented yet. Users must
+  commit or cancel a visible Rime composition before starting dictation because
+  the transition engine cannot inspect stock Rime composition state.
 - There is no built-in global shortcut or standalone recording indicator;
   users must bind the documented control command in their desktop settings.
 - One dictation is capped at 10 minutes and waits up to 20 seconds for the

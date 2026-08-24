@@ -9,10 +9,11 @@ another user.
 
 GitHub does not offer private vulnerability reporting while this repository is
 private. Before the transition, the maintainers must publish and verify a
-separate confidential contact route. During the controlled public transition,
-they must enable GitHub private reporting and required CI checks immediately,
-verify both, and only then announce or invite use of the preview. Until a
-contact route is chosen, this repository intentionally remains private.
+separate confidential contact route. Required CI checks must already protect
+`main` while the repository is private. During the controlled public
+transition, maintainers must enable GitHub private reporting, verify it, and
+only then announce or invite use of the preview. Until a contact route is
+chosen, this repository intentionally remains private.
 
 ## Supported versions
 

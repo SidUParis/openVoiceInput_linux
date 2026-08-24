@@ -110,10 +110,13 @@ Clipboard injection and synthetic `Ctrl+V` are not part of the primary path.
 
 ## Rime composition boundary
 
-The MVP refuses to start voice recording while a Rime composition is active.
-This avoids silently committing or discarding partially typed text. A future
-version may explicitly compose typed and spoken segments after interaction
-tests define predictable behavior.
+The transition preview cannot inspect composition state inside the stock Rime
+engine before switching to the voice-only engine. Users must therefore commit
+or cancel any visible Rime composition before starting dictation; switching
+may otherwise discard that unfinished composition. The future combined
+librime-capable engine must refuse voice start while a composition is active,
+unless interaction tests first define an explicit typed-and-spoken composition
+behavior.
 
 ## Packaging
 

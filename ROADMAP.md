@@ -84,8 +84,8 @@ them into the librime-capable production engine and removes engine switching.
 
 ## Phase 5 — Public preview
 
-- [ ] Threat-model and privacy review.
-- [ ] License and attribution audit.
+- [x] Threat-model and privacy review for the transition preview.
+- [x] Licence and attribution audit for the current source and wheelhouse.
 - [ ] End-to-end tests for GTK, Qt, Chromium/Electron, terminals, and Wayland.
 - [ ] Chinese documentation, screenshots, demo video, and contribution guide.
 - [ ] Make the repository public and publish the first signed preview release.
