@@ -24,6 +24,12 @@ class DocumentationAssetTests(unittest.TestCase):
         while offset < len(data):
             self.assertGreaterEqual(len(data) - offset, 12)
             length = struct.unpack(">I", data[offset : offset + 4])[0]
+            chunk_end = offset + 12 + length
+            self.assertLessEqual(
+                chunk_end,
+                len(data),
+                "PNG chunk extends beyond the end of the screenshot",
+            )
             kind = data[offset + 4 : offset + 8]
             payload = data[offset + 8 : offset + 8 + length]
             checksum = struct.unpack(
@@ -31,11 +37,14 @@ class DocumentationAssetTests(unittest.TestCase):
             )[0]
             self.assertEqual(checksum, zlib.crc32(kind + payload) & 0xFFFFFFFF)
             chunks.append((kind, payload))
-            offset += 12 + length
+            offset = chunk_end
 
         self.assertEqual(offset, len(data))
+        self.assertGreaterEqual(len(chunks), 2)
         self.assertEqual(chunks[0][0], b"IHDR")
         self.assertEqual(chunks[-1][0], b"IEND")
+        self.assertEqual(len(chunks[0][1]), 13)
+        self.assertEqual(chunks[-1][1], b"")
         self.assertTrue(all(kind in {b"IHDR", b"IDAT", b"IEND"} for kind, _ in chunks))
         width, height, depth, colour, compression, filtering, interlace = struct.unpack(
             ">IIBBBBB", chunks[0][1]

@@ -105,6 +105,7 @@ class PreviewRuntimeLockTests(unittest.TestCase):
         self.assertEqual(workflow.count("./scripts/build-preview-bundle.sh"), 2)
         self.assertEqual(workflow.count('--ref "$GITHUB_SHA"'), 2)
         self.assertIn('--source-ref "$GITHUB_SHA"', workflow)
+        self.assertIn("filecmp.cmp(", workflow)
         self.assertIn("repeated preview build is not byte-identical", workflow)
         self.assertIn("unexpected preview assets", workflow)
         self.assertIn("git diff --exit-code", workflow)

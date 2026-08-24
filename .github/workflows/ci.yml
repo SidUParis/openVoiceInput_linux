@@ -155,6 +155,7 @@ jobs:
               --ref "$GITHUB_SHA" \
               --output-dir "$REPRODUCIBILITY_DIR"
           .venv/bin/python -I - <<'PY'
+          import filecmp
           import os
           from pathlib import Path
 
@@ -175,7 +176,9 @@ jobs:
               assets.append((archives[0], checksums[0]))
 
           for first, repeated in zip(assets[0], assets[1], strict=True):
-              if first.name != repeated.name or first.read_bytes() != repeated.read_bytes():
+              if first.name != repeated.name or not filecmp.cmp(
+                  first, repeated, shallow=False
+              ):
                   raise SystemExit("repeated preview build is not byte-identical")
           PY
           git diff --exit-code
