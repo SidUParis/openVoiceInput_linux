@@ -79,7 +79,7 @@ must produce its own broader installation-level SBOM.
 - `pytest` 9.0.2, MIT metadata;
 - `ruff` 0.15.4 in CI, MIT metadata;
 - `setuptools>=77` for general source builds; the preview project wheel uses
-  the separately pinned and hashed `setuptools==82.0.1` build backend, MIT
+  the separately pinned and hashed `setuptools==83.0.0` build backend, MIT
   metadata. The build-backend wheel is not shipped in the runtime wheelhouse.
 
 CI builds the wheel, installs it into a fresh virtual environment, runs

@@ -52,8 +52,8 @@ class PreviewRuntimeLockTests(unittest.TestCase):
             [
                 (
                     "setuptools",
-                    "82.0.1",
-                    "a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb",
+                    "83.0.0",
+                    "29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3",
                 )
             ],
         )

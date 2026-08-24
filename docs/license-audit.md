@@ -52,7 +52,7 @@ CycloneDX SBOM reads licence metadata only after verifying every wheel's
 `RECORD` file and includes the whole-wheel hashes and dependency graph. The
 installer refuses any extra, missing, renamed, or changed wheel.
 
-`setuptools==82.0.1` is a pinned MIT build input. It is downloaded into an
+`setuptools==83.0.0` is a pinned MIT build input. It is downloaded into an
 ephemeral isolated build environment and is not shipped in the runtime
 wheelhouse.
 
