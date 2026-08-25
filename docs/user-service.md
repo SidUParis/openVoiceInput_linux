@@ -67,11 +67,15 @@ the resolved config, vocabulary, and correction paths, so a custom XDG config
 root is used consistently even if it is absent from the systemd manager's
 environment.
 
-The engine service starts after installation. The voice unit is installed but
-is enabled and started only when the key file, optional vocabulary, and
-optional corrections already pass the daemon's ownership, permission, schema,
-and content checks. Configure a missing or invalid key in the GTK4 settings
-window:
+The engine service starts after installation and is enabled for subsequent
+graphical logins. Its unit is attached to `graphical-session.target`, rather
+than the earlier user-manager `default.target`, so IBus and the graphical
+session environment are available first. A temporary IBus startup delay is
+retried every two seconds without exhausting the unit's start-rate limit. The
+voice unit is installed but is enabled and started only when the key file,
+optional vocabulary, and optional corrections already pass the daemon's
+ownership, permission, schema, and content checks. Configure a missing or
+invalid key in the GTK4 settings window:
 
 ```bash
 ~/.local/share/murmur-ime/open-voice-input-settings

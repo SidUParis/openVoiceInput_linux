@@ -63,6 +63,54 @@ jobs:
         run: |
           .venv/bin/python -I scripts/run_isolated_preedit_smoke.py \
             --output-dir "$RUNNER_TEMP/openvoice-isolated-preedit"
+      - name: Print isolated preedit text diagnostics
+        if: failure()
+        env:
+          DIAGNOSTICS_DIR: ${{ runner.temp }}/openvoice-isolated-preedit
+        run: |
+          python3 -I - <<'PY'
+          import os
+          import stat
+          from pathlib import Path
+
+          root = Path(os.environ["DIAGNOSTICS_DIR"])
+          names = (
+              "session.log",
+              "engine.log",
+              "select-engine.log",
+              "probe.log",
+              "sender.log",
+              "ibus.log",
+              "xvfb.log",
+          )
+          limit = 64 * 1024
+          for name in names:
+              print(f"--- {name} ---")
+              path = root / name
+              flags = os.O_RDONLY | os.O_CLOEXEC
+              if hasattr(os, "O_NOFOLLOW"):
+                  flags |= os.O_NOFOLLOW
+              try:
+                  descriptor = os.open(path, flags)
+              except FileNotFoundError:
+                  print("  [missing]")
+                  continue
+              except OSError as error:
+                  print(f"  [unavailable: {type(error).__name__}]")
+                  continue
+              with os.fdopen(descriptor, "rb") as stream:
+                  if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                      print("  [not a regular file]")
+                      continue
+                  data = stream.read(limit + 1)
+              truncated = len(data) > limit
+              text = data[:limit].decode("utf-8", errors="backslashreplace")
+              for line in text.splitlines():
+                  safe = line.encode("unicode_escape").decode("ascii")
+                  print(f"  {safe}")
+              if truncated:
+                  print("  [truncated after 65536 bytes]")
+          PY
       - name: Installer and user-unit tests
         run: |
           PYTHONDONTWRITEBYTECODE=1 \

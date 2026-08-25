@@ -57,6 +57,14 @@ class SystemdUnitTests(unittest.TestCase):
         )
 
         self.assertNotIn("ConditionPathExists=", voice_unit)
+        self.assertIn("After=graphical-session.target", engine_unit)
+        self.assertIn("PartOf=graphical-session.target", engine_unit)
+        self.assertIn("StartLimitIntervalSec=10", engine_unit)
+        self.assertIn("StartLimitBurst=10", engine_unit)
+        self.assertIn("Restart=always", engine_unit)
+        self.assertIn("RestartSec=2", engine_unit)
+        self.assertIn("WantedBy=graphical-session.target", engine_unit)
+        self.assertNotIn("WantedBy=default.target", engine_unit)
         self.assertIn(
             'ExecStart="/bin/true" run --config "/dev/null" '
             '--vocabulary "/tmp/vocabulary.json" '
