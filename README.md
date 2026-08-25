@@ -113,6 +113,9 @@ packages must not download code or data during installation.
 - Runtime IBus registration without root access or an IBus/desktop restart.
 - Self-contained microphone/Volcengine daemon with a 10-minute recording cap,
   a 10-second pending-audio cap, and generation-safe late callback rejection.
+- Fresh microphone selection on every recording, including exact per-stream
+  routing around a stale monitor default and conservative output-only profile
+  recovery after device disconnect.
 - A private mode-0600 Unix control socket with `toggle`, `start`, `stop`,
   `cancel`, and `status` commands.
 - Native GTK4 settings that never prefill the saved key and never restart a
@@ -206,6 +209,11 @@ and safe uninstall are documented in
 preview: there is not yet a distribution-native package or built-in global
 shortcut.
 
+IBus preedit is session-local and cannot be forwarded through an RDP canvas as
+ordinary keystrokes. Remmina microphone redirection, remote-session setup, and
+the explicit clipboard fallback are documented in
+[docs/remote-desktop.md](docs/remote-desktop.md).
+
 Run the current offline test suites with:
 
 ```bash
@@ -262,7 +270,8 @@ history, transcripts, documents, or the Rime database.
 
 ## Development targets
 
-- Ubuntu 24.04 and 26.04 with IBus
+- Validated preview and offline-bundle target: Ubuntu 24.04 x86_64 with IBus
+- Planned, currently unverified development target: Ubuntu 26.04 with IBus
 - X11 and Wayland applications that implement IBus preedit correctly
 - Debian package first; Arch packaging afterwards
 

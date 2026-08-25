@@ -31,9 +31,13 @@ integrity; it does not prove who published the file.
    Neither CI nor the release workflow may receive a provider key.
 2. Run the current-file, index, and reachable-history secret scan from a clean
    checkout and retain the CI result.
-3. Complete the fresh Ubuntu graphical-user matrix in
-   `docs/open-source-readiness.md` with a newly rotated key entered locally.
-   Record no key, dictated text, audio, or credential-bearing log.
+3. Record the fresh Ubuntu graphical-user matrix status in
+   `docs/open-source-readiness.md`. An explicitly labelled alpha may publish
+   with missing physical-microphone/provider/application-matrix evidence only
+   when the release notes disclose that validation gap. A supported or
+   distribution-native release must complete the matrix with a newly rotated
+   key entered locally. Record no key, dictated text, audio, or
+   credential-bearing log.
 4. Require all protected checks on the exact release commit. Build the archive
    from that trusted commit, verify it against the repository ref, and compare
    the independently built archive checksum when the supported build

@@ -1,9 +1,10 @@
 # Threat model for the 0.x preview
 
-Review basis: implementation commit `57181db` and the Ubuntu 24.04 offline
-preview built by CI on 2026-08-24. This document covers the current temporary
-IBus-engine switch and standalone voice daemon. It does not claim that the
-future combined librime engine has been implemented or reviewed.
+Review basis: the implementation and documentation prepared together for the
+`v0.1.0-alpha.1` preview, reviewed on 2026-08-26. This document covers the
+current temporary IBus-engine switch, standalone voice daemon, and bounded
+microphone-route recovery. It does not claim that the future combined librime
+engine has been implemented or reviewed.
 
 ## Security and privacy objectives
 
@@ -30,7 +31,8 @@ Open Voice Input Linux is designed to preserve these properties:
 
 Sensitive assets are the provider API key, microphone audio, live/final text,
 explicit vocabulary and correction pairs, the focused input context, the
-previous IBus engine, and the user's existing Rime data.
+previous IBus engine, the selected audio source/profile, and the user's
+existing Rime data.
 
 The current boundaries are:
 
@@ -38,6 +40,11 @@ The current boundaries are:
   work.
 - The voice daemon owns audio capture and the provider connection. It sends
   partial/final events to the engine over the user's session D-Bus.
+- PulseAudio/PipeWire and PortAudio are host trust boundaries. The daemon may
+  add input to one unambiguous output-only ALSA profile and bind its own stream
+  to one verified physical source. It never directly changes mute, volume, or
+  calls `set-default-source`; the host audio policy may nevertheless recompute
+  its global default when a card profile is activated.
 - The private Unix control socket and session D-Bus are boundaries between
   Unix users, not between applications running as the same user.
 - Volcengine is a remote processor selected by the user. Standard TLS protects
@@ -94,6 +101,30 @@ utterance.
 
 Evidence: `voice/murmur_voice/session.py`,
 `voice/murmur_voice/volcengine.py`, and their boundary tests.
+
+### Stale or ambiguous microphone routing
+
+Each explicit start re-enumerates the audio route before opening the provider
+connection. A real non-monitor default is kept. A monitor default is treated
+as stale; a real source is selected only when exactly one is available, or
+when exactly one ALSA card has exactly one same-output input-capable profile
+and exactly one source bound to that card. PulseAudio 15 and PipeWire expose
+different card identities, so
+numeric card IDs, exact device names, and exact ALSA-card/bus-path pairs are
+handled as separate strict schemas; conflicting, partial, or multiple matches
+are rejected.
+
+The selected source is applied only to the daemon's PortAudio `pulse` stream.
+`PULSE_SOURCE` is changed under a process-wide lock only while that stream is
+constructed and started, then its previous presence/value is restored even on
+failure. The provider is not contacted when preflight or focus validation
+fails; a later stream-open failure aborts and closes both boundaries. A failed
+profile transition is rolled back only while the live profile and previously
+observed default still match the transaction; unrecognised concurrent state is
+preserved rather than overwritten.
+
+Evidence: `voice/murmur_voice/audio.py`, `voice/murmur_voice/session.py`, and
+their audio-route, deadline, focus-loss, and failure-order tests.
 
 ### Crash or engine-restoration failure
 
@@ -159,13 +190,32 @@ fingerprint before and after install/upgrade/uninstall/reinstall.
 - System Python, distribution packages, IBus, GTK, PortAudio, systemd, and the
   kernel are trusted host components and are not covered by the wheelhouse
   SBOM.
+- Recovering an output-only ALSA card leaves the unique same-output duplex
+  profile active after success so the selected microphone continues to exist.
+  This is a global per-user audio-profile change. PulseAudio provides no
+  compare-and-swap operation, so failed recovery uses identity re-checks and
+  best-effort rollback; concurrent or unreadable state is deliberately left
+  unchanged. Activating that profile can also cause host policy modules to
+  recompute the global default even though the daemon never requests a default
+  change. The short process-environment window used to open the explicit Pulse
+  stream is serialized inside the daemon but is not an OS-level capability
+  boundary against hostile same-process code.
+- The Pulse transaction has bounded command and rollback budgets, but native
+  PortAudio device enumeration and stream opening do not expose a portable
+  cancellation API. A broken host audio driver can therefore delay a start
+  beyond the normal control-response window; restarting the user service is
+  the current recovery. The IBus engine remains a separate process and normal
+  keyboard input is unaffected.
 
 ## Review result and re-review triggers
 
 No unresolved issue found in this review justifies publishing a known unsafe
 default, but the accepted risks above keep the software explicitly labelled a
-developer preview. A fresh graphical VM with a newly rotated provider key and
-a signed public release remain mandatory gates.
+developer preview. A fresh graphical machine with physical-microphone,
+provider, and representative-application coverage remains an explicit alpha
+validation gap and must be disclosed in the release notes. Rotation of every
+development provider key plus a verified signed tag remain pre-publication
+gates; immutable release status must be verified immediately after publication.
 
 Re-review is required before adding a provider, changing D-Bus/control-socket
 ownership, reading application context or clipboard data, adding automatic

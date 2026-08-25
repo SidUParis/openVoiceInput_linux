@@ -1,9 +1,10 @@
 # Open-source readiness checklist
 
 This repository is a public early technical preview for community testing and
-feedback. The unchecked items below remain release or production-readiness
-gates; opening the source does not claim that the permanent combined librime
-engine or a supported distribution package is already finished.
+feedback. Unchecked items below are either explicit alpha validation gaps or
+production-readiness gates, as stated by each item. Publishing a labelled alpha
+does not claim that the permanent combined librime engine, a supported
+distribution package, or the missing graphical/provider matrix is finished.
 
 ## Public-preview readiness and remaining gates
 
@@ -18,11 +19,12 @@ engine or a supported distribution package is already finished.
       attribution for migrated Doubao Murmur files.
 - [x] Configuration requires only the user's own Volcengine API key after the user
       has enabled the matching service in their account.
-- [ ] Clean Ubuntu install, upgrade, and uninstall are reproducible. Offline
-      mock lifecycle coverage exists, but a fresh graphical-user smoke test is
-      still required.
-- [ ] No installer writes to or locks `~/.config/ibus/rime`. The mock contract
-      enforces this; retain the gate until the fresh-machine smoke test.
+- [ ] Alpha validation gap: install, upgrade, and uninstall have offline mock
+      lifecycle coverage and prior same-machine coverage, but no fresh
+      graphical-login lifecycle has been recorded for this release artifact.
+- [ ] Alpha validation gap: the mock contract proves that no installer path
+      writes to or locks `~/.config/ibus/rime`; a fresh graphical-machine
+      fingerprint check remains unperformed for this release artifact.
 - [x] Live partial, final-once, cancel, focus-loss, private-field, daemon-loss,
       and API failure paths have automated tests.
 - [x] A zero-download isolated smoke test exercises a real private IBus daemon,
@@ -44,13 +46,11 @@ engine or a supported distribution package is already finished.
       provider key.
 - [x] The settings window has a validated desktop-menu entry and local SVG
       icon covered by the transactional ownership manifest and uninstall.
-- [ ] A fresh-machine smoke test has been recorded without publishing secrets.
-      A same-machine Ubuntu 24.04 install/upgrade/uninstall/reinstall smoke is
-      recorded for the exact final artifact in
-      `docs/smoke-tests/2026-08-24-final-artifact.md`; a fresh graphical user/VM
-      remains required. The isolated real-IBus smoke closes the caret-rendering
-      gap but intentionally does not claim a fresh OS, logind/systemd user
-      session, microphone, provider or application-matrix result.
+- [ ] Alpha validation gap: a fresh graphical machine with a physical
+      microphone, provider account, logind/systemd user session, and
+      representative application matrix has not been tested. The prior
+      same-machine lifecycle record and isolated real-IBus smoke do not claim
+      that evidence; the alpha release notes must disclose this limitation.
 - [ ] All provider keys used during pre-release development have been rotated.
 - [x] `main` requires the `security`, `engine`, `voice`, and `preview-bundle`
       checks; Actions are limited to GitHub-owned, full-SHA-pinned actions.

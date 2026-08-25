@@ -503,7 +503,7 @@ class PreviewBundleTests(unittest.TestCase):
                     "scripts/uninstall-user.sh",
                     "scripts/verify_preview_bundle.py",
                     "voice/pyproject.toml",
-                    "wheelhouse/murmur_ime_voice-0.1.0-py3-none-any.whl",
+                    "wheelhouse/murmur_ime_voice-0.1.0a1-py3-none-any.whl",
                     forbidden,
                 ):
                     path = root / relative

@@ -5,6 +5,8 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.1] - 2026-08-26
+
 ### Added
 
 - Native caret-local IBus preedit for cumulative streaming hypotheses and one
@@ -19,6 +21,9 @@ here. The project has not published a stable release yet.
   IBus-engine restoration and no writes to the user's Rime database.
 - A clean Ubuntu 24.04 x86_64 / CPython 3.12 offline preview bundle with
   locked Python wheels, checksums, and a machine-readable CycloneDX SBOM.
+- Per-recording microphone re-enumeration with exact per-stream routing around
+  a stale monitor default and conservative output-only card-profile recovery
+  after device disconnect.
 
 ### Security and privacy
 
@@ -42,7 +47,13 @@ here. The project has not published a stable release yet.
   users must bind the documented control command in their desktop settings.
 - One dictation is capped at 10 minutes and waits up to 20 seconds for the
   provider's final two-pass result.
-- The preview target is Ubuntu 24.04 x86_64 with CPython 3.12. It is not yet a
-  distribution-native package, signed release, or general Wayland release.
+- The preview target is Ubuntu 24.04 x86_64 with CPython 3.12. It is not a
+  distribution-native package or a broadly qualified Wayland release.
+- A fresh graphical-login test with a physical microphone and provider account,
+  plus a broad application matrix, remains unperformed and is an explicit alpha
+  validation gap.
+- IBus preedit belongs to one desktop session and does not cross an RDP canvas;
+  remote use requires microphone redirection and installation in the remote
+  session, or an explicit clipboard fallback without live inline partials.
 - Uninstall deliberately retains private key, vocabulary, and correction
   files; the local key can be cleared from settings before uninstalling.

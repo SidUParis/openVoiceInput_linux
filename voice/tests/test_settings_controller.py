@@ -263,6 +263,22 @@ def test_status_start_and_stop_use_only_fixed_argv_without_a_shell(tmp_path):
         assert keywords["text"] is True
 
 
+def test_microphone_unavailable_status_is_allowlisted(tmp_path):
+    controller = _controller(
+        tmp_path,
+        RecordingRunner(active_state="active"),
+        lambda command: {
+            "ok": False,
+            "state": "idle",
+            "code": "microphone-unavailable",
+        },
+    )
+
+    assert controller.service_status() == ServiceSnapshot(
+        "active", "idle", "microphone-unavailable"
+    )
+
+
 def test_start_requires_safe_local_configuration_before_systemctl(tmp_path):
     runner = RecordingRunner()
     controller = _controller(tmp_path, runner)

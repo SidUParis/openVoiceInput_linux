@@ -2,6 +2,33 @@
 set -eEuo pipefail
 unset PYTHONHOME PYTHONPATH
 
+usage() {
+  cat <<'EOF'
+Usage: scripts/uninstall-user.sh
+
+Remove the managed Open Voice Input Linux user installation. Private API-key,
+vocabulary, and correction files are retained.
+EOF
+}
+
+if (($#)); then
+  case "$1" in
+    --help|-h)
+      if (($# != 1)); then
+        printf '%s\n' "--help does not accept additional arguments" >&2
+        exit 2
+      fi
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'Unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+fi
+
 die() {
   printf '%s\n' "$1" >&2
   exit "${2:-1}"

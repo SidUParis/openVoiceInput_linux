@@ -64,7 +64,7 @@ class InstallerHarness:
             self.wheelhouse / filename
             for filename in (
                 "cffi-2.1.1-py3-none-any.whl",
-                "murmur_ime_voice-0.1.0-py3-none-any.whl",
+                "murmur_ime_voice-0.1.0a1-py3-none-any.whl",
                 "pycparser-3.0-py3-none-any.whl",
                 "sounddevice-0.5.6-py3-none-any.whl",
                 "websockets-17.0.1-py3-none-any.whl",
@@ -344,7 +344,7 @@ class InstallerHarness:
               chmod 0755 "$launcher"
               site=$(dirname -- "$0")/../lib/python3.12/site-packages/murmur_voice
               mkdir -p "$site"
-              printf '%s\n' '__version__ = "0.1.0"' >"$site/__init__.py"
+              printf '%s\n' '__version__ = "0.1.0a1"' >"$site/__init__.py"
               touch "$(dirname -- "$0")/../.mock-local-wheels-installed"
               exit 0
             fi
@@ -533,6 +533,20 @@ class UserInstallTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.harness.close()
+
+    def test_uninstall_help_is_read_only(self) -> None:
+        result = self.harness.run(UNINSTALLER, "--help")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Usage: scripts/uninstall-user.sh", result.stdout)
+        self.assertEqual(self.harness.calls(), [])
+
+    def test_uninstall_rejects_unknown_arguments_before_any_action(self) -> None:
+        result = self.harness.run(UNINSTALLER, "--definitely-not-supported")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Unknown option", result.stderr)
+        self.assertEqual(self.harness.calls(), [])
 
     def test_system_python_and_installed_config_probes_are_isolated(self) -> None:
         for script in (INSTALLER, UNINSTALLER):

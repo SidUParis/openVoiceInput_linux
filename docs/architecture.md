@@ -55,7 +55,11 @@ not implemented yet.
 
 Responsibilities:
 
-- microphone capture and level/error reporting;
+- per-recording microphone re-enumeration, exact per-stream Pulse routing,
+  conservative profile recovery after disconnects, capture, and fixed-code
+  error reporting;
+- a bounded start deadline plus an invisible post-preflight focus heartbeat,
+  so delayed discovery cannot open capture for an invalidated input context;
 - provider authentication and WebSocket lifecycle;
 - Volcengine `bigmodel_async` request/response handling;
 - live partial, two-pass final, timeout, and cancellation events;
