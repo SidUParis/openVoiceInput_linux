@@ -303,7 +303,13 @@ def select_isolated_engine() -> None:
 
 def find_probe_window(environment: dict[str, str]) -> str | None:
     completed = subprocess.run(
-        [system_command("xdotool"), "search", "--name", "Isolated Preedit Probe"],
+        [
+            system_command("xdotool"),
+            "search",
+            "--onlyvisible",
+            "--name",
+            "Isolated Preedit Probe",
+        ],
         env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
