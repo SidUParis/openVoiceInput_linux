@@ -19,6 +19,7 @@ distribution and preserve their own licence files.
 | `cffi` | Preview lock `2.1.1` (transitive) | Native PortAudio binding used by sounddevice | MIT-0 metadata |
 | `pycparser` | Preview lock `3.0` (transitive) | cffi parser dependency on CPython | BSD-3-Clause metadata |
 | PortAudio | Distribution library | Native audio backend for sounddevice | External system package; not vendored |
+| `pactl` (`pulseaudio-utils` on Ubuntu) | Optional PulseAudio-compatible system command | Per-recording source discovery and conservative profile recovery; PortAudio fallback when absent | External system package; not vendored |
 
 The voice wheel is GPL-3.0-only and contains its `LICENSE` plus the complete
 Doubao Murmur MIT notice in `NOTICE.md`. Adapted source boundaries are listed
@@ -101,6 +102,8 @@ pip come from the build/target hosts and are not vendored or pinned by this
 archive.
 Debian/Ubuntu packaging must pin the distribution package versions it builds
 against, record all build inputs and hashes, and extend the wheelhouse SBOM to
-cover that system payload before the first signed release. Rime Ice remains
-external until a pinned version and checksum can be packaged without writing
-to the user's stock Rime database.
+cover that system payload before the first signed distribution-native package
+or system image. A signature on the source/offline alpha preview does not claim
+that broader operating-system reproducibility. Rime Ice remains external until
+a pinned version and checksum can be packaged without writing to the user's
+stock Rime database.

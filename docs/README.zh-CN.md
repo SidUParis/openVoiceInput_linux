@@ -37,7 +37,7 @@ PortAudio、`python3-venv` 或提供 `flock` 的 `util-linux`，通过 APT 补�
 sudo apt-get update
 sudo apt-get install --yes \
   ibus gir1.2-ibus-1.0 gir1.2-gtk-4.0 \
-  libportaudio2 python3-gi python3-venv util-linux
+  libportaudio2 pulseaudio-utils python3-gi python3-venv util-linux
 ```
 
 ## 安装经过 CI 校验的离线预览
@@ -129,6 +129,20 @@ GNOME/KDE 的键盘设置中自行把快捷键绑定到：
 `stop` 会正常结束音频并等待火山引擎的二遍最终结果；`cancel` 会清除
 本地 preedit 且不提交，但无法撤回已经上传到远端的音频。
 
+IBus preedit 只属于当前桌面会话，不能作为普通按键穿过 Remmina/RDP
+画布。远端麦克风重定向、在远端会话内运行本项目，以及不提供实时光标
+草稿的显式剪贴板备用方案，见[远程桌面说明](remote-desktop.md)。
+
+每次 `start` 或空闲状态下的 `toggle` 都会重新检查输入设备。蓝牙设备断开
+后，如果系统默认 source 已失效或变成以 `.monitor` 结尾的扬声器监听源，
+守护进程会重新枚举真实输入，并把选定的物理 source 只绑定到自己的
+PortAudio `pulse` 录音流，不会直接调用 `set-default-source`。若声卡只剩
+output-only profile，则只在存在唯一、安全且保留当前输出的 input+output
+profile 时自动恢复；激活 profile 仍可能触发系统音频策略重新计算全局默认
+source。它不会解除静音或改变音量。无法唯一、安全地选择时会返回
+`microphone-unavailable`；请在系统声音设置中选择或解除静音后直接再次
+听写，不需要重启服务。
+
 ## 隐私和 Key 清除
 
 只有用户主动开始听写后，16 kHz 单声道 PCM 才会发送到火山引擎。
@@ -154,9 +168,10 @@ GNOME/KDE 的键盘设置中自行把快捷键绑定到：
 
 ## 项目状态
 
-当前是面向社区测试与反馈的公开 early technical preview，不是已完成的
-发行版。`main` 已由四项 required checks 保护；GitHub private vulnerability
+当前是面向社区测试与反馈的公开 early technical preview，不是稳定或受支持
+的发行版。`main` 已由四项 required checks 保护；GitHub private vulnerability
 reporting、Secret Scanning 和 Push Protection 已启用。干净图形 Ubuntu 环境的
-真实麦克风／IBus 验收、预发布 Key 轮换和签名正式预览仍是未完成的
-发布门槛，不影响现在公开源码征集反馈。
+真实麦克风／provider／多应用验收仍未完成，会作为 alpha 的已知验证缺口明确
+披露；所有开发 Key 的轮换和签名 tag 是发布前门槛，发布后必须立即验证
+immutable 状态。
 完整状态见 [open-source readiness 清单](open-source-readiness.md)。

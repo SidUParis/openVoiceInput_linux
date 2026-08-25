@@ -11,7 +11,7 @@ does not use root, modify the IBus daemon, or read or write
 On Ubuntu, install the system runtime first:
 
 ```bash
-sudo apt install ibus gir1.2-ibus-1.0 gir1.2-gtk-4.0 python3-gi python3-venv libportaudio2 util-linux
+sudo apt install ibus gir1.2-ibus-1.0 gir1.2-gtk-4.0 python3-gi python3-venv libportaudio2 pulseaudio-utils util-linux
 ```
 
 The normal installer never silently downloads Python packages. A no-network
@@ -154,6 +154,46 @@ provider. The installed launcher disables Python's per-user site-packages so
 unrelated packages under `~/.local` cannot alter this managed runtime. Logs
 contain lifecycle/error classes, never keys, vocabulary, corrections, or
 dictated text.
+
+Each `start`/idle `toggle` rechecks the current microphone before provider
+connection. On a PulseAudio-compatible PipeWire desktop, the daemon uses the
+normally installed `pactl` command to reject monitor sources and route its own
+stream around a stale default after a device disconnect. It validates one exact
+PortAudio `pulse` endpoint up front, then binds that stream to the selected
+physical source without calling `set-default-source`. In the narrow case where
+no real source exists because one card retained an output-only profile, it can
+add the matching input only when the active output, sink count, availability,
+and a unique highest-priority candidate make that change unambiguous. Profile
+activation may still cause host audio policy to recompute the global default.
+The daemon does not unmute a source or change volume. The fixed status code
+`microphone-unavailable` means recovery was absent, ambiguous, or failed; use
+the desktop sound panel to select/unmute an input, reconnect the device if
+needed, and start dictation again. Restarting the daemon is not required.
+
+The `pactl` discovery/profile transaction is bounded to three forward seconds,
+with seven more seconds reserved for conservative rollback (ten seconds hard
+total). After discovery, the daemon sends one empty, invisible preedit
+heartbeat before provider connection;
+if focus moved meanwhile, start fails with `preedit-lost` and neither network
+audio nor microphone capture begins. A 35-second logical deadline gates
+provider/capture opening and is enforced at safe checkpoints; it is not a hard
+control-response ceiling. The local control client allows 50 seconds for the
+pessimistic 29-second acquisition, 10-second preflight, and 8-second cleanup
+path. Native PortAudio device discovery and stream-open calls have no portable
+cancellation API; the daemon checks at the next safe checkpoint and closes a
+late-opened stream, but a broken backend may delay the command response.
+
+Useful read-only diagnostics are:
+
+```bash
+pactl get-default-source
+pactl list short sources
+```
+
+A source ending in `.monitor` records speaker output, not a microphone. On a
+minimal system without `pactl`, automatic PulseAudio/PipeWire profile repair
+is unavailable and the daemon conservatively accepts only an inspectable
+PortAudio hardware input.
 
 Before a recording temporarily selects `murmur-voice`, the daemon atomically
 records the actual prior engine in that private runtime directory. Normal

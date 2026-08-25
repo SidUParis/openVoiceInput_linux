@@ -144,8 +144,41 @@ out-of-tree runtime paths. Signals provide the same minimum control surface:
 
 The microphone starts only after the focused engine accepts Acquire. Network
 work runs on a private asyncio thread in this separate daemon, never in the
-IBus engine. Revisions strictly increase, stale-session callbacks are ignored,
-and final, cancel, or error restores the previous IBus engine.
+IBus engine. Before that thread connects, every explicit start performs a
+fresh input-device preflight and sends one invisible empty preedit heartbeat;
+focus lost during discovery therefore fails with `preedit-lost` before network
+or capture starts. On PulseAudio/PipeWire systems with `pactl`, the daemon
+validates one exact `pulse` PortAudio endpoint and binds its own recording
+stream to an exact physical source; a stale monitor default is not used or
+directly replaced. If Bluetooth teardown left a card in an output-only profile
+with no real source, the daemon may activate the unique highest-priority
+profile that adds one input while preserving the active output profile and
+sink count, then bind the recovered source only to its own stream. Activating a
+card profile can still cause host PulseAudio/PipeWire policy to recompute the
+global default. The daemon never calls `set-default-source`, changes microphone
+mute, or changes volume. Ambiguous or failed preflight returns
+`microphone-unavailable` without contacting the ASR provider; reconnect/select
+an input and start again. The next start always enumerates again, so no daemon
+restart is required after a device change.
+
+The `pactl` discovery/profile transaction has a three-second forward bound and
+a seven-second reserved rollback window (a ten-second hard bound in total).
+The synchronous provider/capture gate has a 35-second logical deadline,
+enforced at safe checkpoints, rather than a hard control-response ceiling. The
+control client waits 50 seconds so bounded acquisition, preflight, and cleanup
+can return a specific error; 50 seconds exceeds the 29 + 10 + 8 second
+pessimistic budget. PortAudio does not expose a portable
+cancellation primitive for blocked native device discovery or stream
+construction/start: the daemon checks the deadline at the next safe checkpoint
+and closes a late-opened stream, but a defective native backend can still delay
+the control reply.
+
+Without `pactl`, the daemon makes no global audio-profile change and accepts
+only an inspectable PortAudio hardware input that supports the required
+format; otherwise it fails closed instead of trusting a generic default that
+could resolve to an output monitor. Revisions strictly increase, stale-session
+callbacks are ignored, and final, cancel, or error restores the previous IBus
+engine.
 
 The local single-recording limit is 600 seconds. Reaching it performs a safe
 stop and waits up to 20 seconds for Volcengine's explicit two-pass final. A

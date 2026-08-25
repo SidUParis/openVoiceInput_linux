@@ -387,3 +387,15 @@ def test_service_controls_are_explicit_and_offer_no_restart(window):
         settings_window.stop_service_button.get_label()
     )
     assert not hasattr(controller, "restart_service")
+
+
+def test_microphone_unavailable_status_has_actionable_label(window):
+    settings_window, _ = window
+
+    settings_window._set_service_snapshot(
+        ServiceSnapshot("active", "idle", "microphone-unavailable")
+    )
+
+    label = settings_window.service_status_label.get_text()
+    assert "no usable microphone" in label
+    assert "reconnect or select an input" in label

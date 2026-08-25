@@ -47,6 +47,7 @@ _STATUS_LABELS = {
     "audio-backpressure": "audio buffer is full",
     "capture-start-failed": "microphone could not start",
     "final-timeout": "final recognition timed out",
+    "microphone-unavailable": "no usable microphone; reconnect or select an input",
     "preedit-final-rejected": "focused input rejected the final text",
     "preedit-lost": "focused input was lost",
     "preedit-rejected": "focused input rejected dictation",
@@ -54,6 +55,7 @@ _STATUS_LABELS = {
     "provider-auth": "provider authentication failed",
     "provider-error": "provider connection failed",
     "recording-limit-warning": "recording limit is near",
+    "start-timeout": "microphone start timed out; try again",
 }
 
 

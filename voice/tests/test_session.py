@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from murmur_voice.audio import AudioDeviceError
 from murmur_voice.config import VoiceConfig
 from murmur_voice.preedit import AcquireResult
-from murmur_voice.session import VoiceSession
+from murmur_voice.session import VOICE_START_TIMEOUT_SECONDS, VoiceSession
 from murmur_voice.state import VoiceState
 
 
@@ -63,10 +64,13 @@ class FakePreedit:
         self.final_result = True
         self.calls = []
         self.closed = 0
+        self.acquire_hook = None
 
     def acquire_result(self, utterance_id):
         self.order.append("preedit-acquire")
         self.calls.append(("acquire", utterance_id))
+        if self.acquire_hook is not None:
+            self.acquire_hook()
         return self.acquisition
 
     def partial(self, utterance_id, revision, text):
@@ -103,7 +107,7 @@ class FakeTimer:
         self.callback()
 
 
-def _session(acquisition=AcquireResult.ACQUIRED):
+def _session(acquisition=AcquireResult.ACQUIRED, **session_options):
     order = []
     asr = FakeASR(order)
     audio = FakeAudio(order)
@@ -122,6 +126,7 @@ def _session(acquisition=AcquireResult.ACQUIRED):
         preedit_client=preedit,
         timer_factory=timer_factory,
         utterance_factory=lambda: "utterance-1",
+        **session_options,
     )
     return session, asr, audio, preedit, timers, order
 
@@ -135,6 +140,10 @@ def test_start_acquires_focus_before_provider_and_capture():
     assert reply.state is VoiceState.STARTING
     assert order[:3] == ["preedit-acquire", "asr-connect", "audio-start"]
     assert asr.connected == 1 and audio.started == 1
+    assert preedit.calls == [
+        ("acquire", "utterance-1"),
+        ("partial", "utterance-1", 1, ""),
+    ]
     assert timers[0].seconds == 600.0 and timers[0].started
     assert timers[1].seconds == 540.0 and timers[1].started
 
@@ -148,6 +157,119 @@ def test_rejected_preedit_never_starts_microphone_or_network():
     assert reply.code == "preedit-rejected"
     assert asr.connected == 0 and audio.started == 0
     assert order == ["preedit-acquire"]
+
+
+def test_microphone_preflight_failure_never_connects_provider():
+    session, asr, audio, preedit, timers, order = _session()
+
+    def fail_prepare():
+        order.append("audio-prepare")
+        raise AudioDeviceError("simulated device failure")
+
+    audio.prepare = fail_prepare
+    reply = session.start()
+
+    assert not reply.ok
+    assert reply.code == "microphone-unavailable"
+    assert reply.state is VoiceState.IDLE
+    assert asr.connected == 0 and audio.started == 0
+    assert order == [
+        "preedit-acquire",
+        "audio-prepare",
+        "audio-stop",
+        "asr-disconnect",
+    ]
+    assert session.status().code == "microphone-unavailable"
+
+
+def test_stream_open_failure_disconnects_provider_and_aborts_session():
+    session, asr, audio, preedit, timers, order = _session()
+
+    def fail_start(callback):
+        del callback
+        order.append("audio-start")
+        raise AudioDeviceError("simulated stream-open failure")
+
+    audio.start = fail_start
+    reply = session.start()
+
+    assert not reply.ok
+    assert reply.code == "microphone-unavailable"
+    assert reply.state is VoiceState.IDLE
+    assert asr.connected == 1
+    assert asr.disconnected == 1
+    assert order == [
+        "preedit-acquire",
+        "asr-connect",
+        "audio-start",
+        "audio-stop",
+        "asr-disconnect",
+    ]
+    assert [call[0] for call in preedit.calls] == ["acquire", "partial", "cancel"]
+
+
+def test_focus_lost_during_preflight_never_connects_or_opens_microphone():
+    session, asr, audio, preedit, timers, order = _session()
+
+    def lose_focus_during_prepare():
+        order.append("audio-prepare")
+        preedit.partial_result = False
+
+    audio.prepare = lose_focus_during_prepare
+
+    reply = session.start()
+
+    assert not reply.ok
+    assert reply.code == "preedit-lost"
+    assert reply.state is VoiceState.IDLE
+    assert asr.connected == 0 and audio.started == 0
+    assert preedit.calls == [
+        ("acquire", "utterance-1"),
+        ("partial", "utterance-1", 1, ""),
+        ("cancel", "utterance-1"),
+    ]
+    assert session.status().code == "preedit-lost"
+
+
+def test_expired_start_deadline_after_acquire_never_connects_or_opens():
+    now = [0.0]
+    session, asr, audio, preedit, timers, order = _session(
+        monotonic=lambda: now[0],
+        start_timeout_seconds=1.0,
+    )
+    preedit.acquire_hook = lambda: now.__setitem__(0, 1.0)
+
+    reply = session.start()
+
+    assert not reply.ok
+    assert reply.code == "start-timeout"
+    assert reply.state is VoiceState.IDLE
+    assert asr.connected == 0 and audio.started == 0
+    assert preedit.calls == [
+        ("acquire", "utterance-1"),
+        ("cancel", "utterance-1"),
+    ]
+    assert session.status().code == "start-timeout"
+
+
+def test_preflight_that_consumes_whole_start_budget_never_contacts_provider():
+    now = [0.0]
+    session, asr, audio, preedit, timers, order = _session(
+        monotonic=lambda: now[0],
+        start_timeout_seconds=VOICE_START_TIMEOUT_SECONDS,
+    )
+
+    def exhaust_deadline():
+        order.append("audio-prepare")
+        now[0] = VOICE_START_TIMEOUT_SECONDS
+
+    audio.prepare = exhaust_deadline
+
+    reply = session.start()
+
+    assert reply.code == "start-timeout"
+    assert asr.connected == 0 and audio.started == 0
+    assert not any(call[0] == "partial" for call in preedit.calls)
 
 
 def test_partials_and_authoritative_final_use_strict_revisions_once():
@@ -165,11 +287,13 @@ def test_partials_and_authoritative_final_use_strict_revisions_once():
         "acquire",
         "partial",
         "partial",
+        "partial",
         "final",
     ]
-    assert preedit.calls[1][2] == 1
+    assert preedit.calls[1][2:] == (1, "")
     assert preedit.calls[2][2] == 2
-    assert preedit.calls[3][2:] == (3, "第二版")
+    assert preedit.calls[3][2] == 3
+    assert preedit.calls[4][2:] == (4, "第二版")
 
 
 def test_stop_waits_for_final_but_timeout_cancels_without_commit():
@@ -201,6 +325,7 @@ def test_cancel_and_partial_rejection_never_fallback_or_double_commit():
     assert session.state is VoiceState.IDLE
     assert [call[0] for call in preedit.calls] == [
         "acquire",
+        "partial",
         "partial",
         "cancel",
     ]

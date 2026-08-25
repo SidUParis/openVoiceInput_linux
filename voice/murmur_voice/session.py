@@ -4,16 +4,40 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from typing import Any
 
-from .audio import AudioCapture
+from .audio import AudioCapture, AudioDeviceError
 from .config import VoiceConfig
 from .preedit import AcquireResult, PreeditClient
 from .state import CommandReply, VoiceState
 from .volcengine import AudioBackpressureError, VolcengineASRClient
 
 logger = logging.getLogger(__name__)
+
+# Production PreeditClient uses at most one direct/Flatpak-host ibus command.
+# Its pessimistic acquisition path is bounded by roughly 28.25 seconds:
+# saved-engine recovery (10 s), current-engine lookup (3 s), temporary switch
+# (7 s), D-Bus retry (1.25 s), and failure restoration (7 s).  Each switch
+# includes a 3 s command plus a 1 s verify window whose last 3 s query may
+# cross the window.  The larger
+# whole-start bound also contains the 3 s forward microphone preflight and scheduling
+# margin.  Checkpoints prevent a timed-out control request from later opening
+# the microphone.
+PREEDIT_ACQUIRE_TIMEOUT_UPPER_BOUND_SECONDS = 29.0
+VOICE_START_TIMEOUT_SECONDS = 35.0
+# A timed-out acquired session can spend one 250 ms D-Bus Cancel plus one
+# pessimistic 7 s IBus restore before replying to the control client.
+VOICE_START_CLEANUP_TIMEOUT_SECONDS = 8.0
+
+
+class _VoiceStartTimeout(RuntimeError):
+    pass
+
+
+class _PreeditHeartbeatRejected(RuntimeError):
+    pass
 
 
 class VoiceSession:
@@ -30,6 +54,8 @@ class VoiceSession:
         timer_factory: Any | None = None,
         utterance_factory: Any | None = None,
         max_recording_seconds: float = 600.0,
+        monotonic: Any | None = None,
+        start_timeout_seconds: float = VOICE_START_TIMEOUT_SECONDS,
     ) -> None:
         provider_settings = config.provider_settings()
         if asr_client_factory is not None:
@@ -44,6 +70,8 @@ class VoiceSession:
         self._timer_factory = timer_factory or threading.Timer
         self._utterance_factory = utterance_factory or (lambda: uuid.uuid4().hex)
         self._max_recording_seconds = max(1.0, min(600.0, float(max_recording_seconds)))
+        self._monotonic = monotonic or time.monotonic
+        self._start_timeout_seconds = max(1.0, float(start_timeout_seconds))
 
         self._lock = threading.RLock()
         self._state = VoiceState.IDLE
@@ -86,6 +114,7 @@ class VoiceSession:
                 return CommandReply(False, "session-active", self._state)
 
             utterance_id = str(self._utterance_factory())
+            start_deadline = self._monotonic() + self._start_timeout_seconds
             self._session_serial += 1
             session_serial = self._session_serial
             self._state = VoiceState.STARTING
@@ -105,6 +134,7 @@ class VoiceSession:
             self._revision = 0
             self._latest_text = ""
             try:
+                self._require_start_time(start_deadline)
                 asr = self._asr_factory()
                 self._asr = asr
                 asr.on_open = lambda: self._on_asr_open(session_serial, asr)
@@ -116,10 +146,28 @@ class VoiceSession:
                     session_serial, asr, error
                 )
                 asr.on_auth_error = lambda: self._on_asr_auth_error(session_serial, asr)
+                self._require_start_time(start_deadline)
+                prepare_audio = getattr(self._audio, "prepare", None)
+                if callable(prepare_audio):
+                    # Resolve/repair the input before the provider thread can
+                    # connect. This preflight opens no microphone and uploads
+                    # no audio.
+                    prepare_audio()
+                self._require_start_time(start_deadline)
+                # Acquire can be invalidated by a focus change while the
+                # bounded microphone preflight runs.  An empty Partial uses the
+                # existing ABI as a session/focus heartbeat without displaying
+                # text; only a still-focused engine can accept it.
+                if not self._preedit.partial(utterance_id, 1, ""):
+                    raise _PreeditHeartbeatRejected
+                self._revision = 1
+                self._require_start_time(start_deadline)
                 # The provider immediately returns after creating its private
                 # event-loop thread. Network work never runs in the IBus engine.
                 asr.connect()
+                self._require_start_time(start_deadline)
                 self._audio.start(asr.send_audio)
+                self._require_start_time(start_deadline)
                 timer = self._timer_factory(
                     self._max_recording_seconds,
                     lambda: self._on_recording_timeout(session_serial),
@@ -138,11 +186,27 @@ class VoiceSession:
                         warning_timer.daemon = True
                     self._warning_timer = warning_timer
                     warning_timer.start()
+            except _VoiceStartTimeout:
+                logger.error("Voice session start exceeded its safe deadline")
+                self._abort_locked("start-timeout")
+                return CommandReply(False, "start-timeout", self._state)
+            except _PreeditHeartbeatRejected:
+                logger.warning("Focused preedit was lost during microphone preflight")
+                self._abort_locked("preedit-lost")
+                return CommandReply(False, "preedit-lost", self._state)
+            except AudioDeviceError:
+                logger.error("No usable microphone is available")
+                self._abort_locked("microphone-unavailable")
+                return CommandReply(False, "microphone-unavailable", self._state)
             except Exception:
                 logger.error("Voice session failed to start")
                 self._abort_locked("capture-start-failed")
                 return CommandReply(False, "capture-start-failed", self._state)
             return CommandReply(True, "started", self._state)
+
+    def _require_start_time(self, deadline: float) -> None:
+        if self._monotonic() >= deadline:
+            raise _VoiceStartTimeout
 
     def stop(self) -> CommandReply:
         with self._lock:

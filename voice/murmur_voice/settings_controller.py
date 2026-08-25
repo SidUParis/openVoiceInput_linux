@@ -52,6 +52,7 @@ _STATUS_CODES = frozenset(
         "daemon-closed",
         "daemon-shutdown",
         "final-timeout",
+        "microphone-unavailable",
         "none",
         "preedit-final-rejected",
         "preedit-lost",
@@ -60,6 +61,7 @@ _STATUS_CODES = frozenset(
         "provider-auth",
         "provider-error",
         "recording-limit-warning",
+        "start-timeout",
         "status",
     }
 )

@@ -17,6 +17,12 @@ if TYPE_CHECKING:
 
 MAX_COMMAND_BYTES = 256
 MAX_RESPONSE_BYTES = 4096
+# Production Preedit acquisition is bounded to 29 s, failed microphone recovery
+# (including conservative rollback) to 10 s, and Preedit cleanup to 8 s. Keep the
+# client beyond their 47 s sum so it receives the real failure reply instead of
+# reporting a false daemon outage. VoiceSession separately gates provider/capture
+# opening with a 35 s total-start deadline.
+CONTROL_RESPONSE_TIMEOUT_SECONDS = 50.0
 KNOWN_COMMANDS = frozenset({"start", "stop", "toggle", "cancel", "status", "shutdown"})
 
 
@@ -199,7 +205,7 @@ def request_command(
     path = runtime_socket_path(socket_path)
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        client.settimeout(3.0)
+        client.settimeout(CONTROL_RESPONSE_TIMEOUT_SECONDS)
         client.connect(str(path))
         client.sendall((command + "\n").encode("ascii"))
         response = _receive_bounded(client, MAX_RESPONSE_BYTES)
