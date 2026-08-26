@@ -63,6 +63,9 @@ class SystemdUnitTests(unittest.TestCase):
         self.assertIn("StartLimitBurst=10", engine_unit)
         self.assertIn("Restart=always", engine_unit)
         self.assertIn("RestartSec=2", engine_unit)
+        self.assertIn("UMask=0077", engine_unit)
+        self.assertIn("Environment=PYTHONDONTWRITEBYTECODE=1", engine_unit)
+        self.assertIn("Environment=PYTHONNOUSERSITE=1", engine_unit)
         self.assertIn("WantedBy=graphical-session.target", engine_unit)
         self.assertNotIn("WantedBy=default.target", engine_unit)
         self.assertIn(

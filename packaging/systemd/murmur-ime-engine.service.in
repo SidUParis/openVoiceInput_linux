@@ -10,6 +10,10 @@ Type=simple
 ExecStart=@ENGINE_EXEC@
 Restart=always
 RestartSec=2
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONNOUSERSITE=1
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=graphical-session.target
