@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -eEuo pipefail
 unset PYTHONHOME PYTHONPATH
+umask 077
 
 usage() {
   cat <<'EOF'

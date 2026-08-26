@@ -35,6 +35,9 @@ here. The project has not published a stable release yet.
   acquisition; late results are not redirected to a clipboard fallback.
 - The preview build backend is pinned to security-fixed `setuptools` 83.0.0;
   the final dependency graph has no open Dependabot alert.
+- Managed launchers suppress runtime bytecode writes, and the installer plus
+  both user services enforce a private file-creation mask so permissive login
+  defaults cannot invalidate the ownership manifest.
 
 ### Known preview limitations
 

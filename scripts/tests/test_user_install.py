@@ -59,7 +59,7 @@ class InstallerHarness:
             self.runtime,
         ):
             directory.mkdir(parents=True)
-        self.runtime.chmod(0o700)
+            directory.chmod(0o700)
         self.wheels = tuple(
             self.wheelhouse / filename
             for filename in (
@@ -534,6 +534,48 @@ class UserInstallTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.harness.close()
 
+    def test_harness_is_hermetic_under_group_writable_umask(self) -> None:
+        previous_umask = os.umask(0o002)
+        permissive_harness = None
+        try:
+            permissive_harness = InstallerHarness()
+            result = permissive_harness.run(
+                INSTALLER, "--wheelhouse", str(permissive_harness.wheelhouse)
+            )
+        finally:
+            os.umask(previous_umask)
+
+        assert permissive_harness is not None
+        try:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for directory in (
+                permissive_harness.home,
+                permissive_harness.data,
+                permissive_harness.config,
+                permissive_harness.fake_bin,
+                permissive_harness.wheelhouse,
+                permissive_harness.runtime,
+            ):
+                with self.subTest(directory=directory.name):
+                    self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+            install_root = permissive_harness.data / "murmur-ime"
+            managed_package = (
+                install_root / "voice-venv/lib/python3.12/site-packages/murmur_voice"
+            )
+            for directory in (
+                install_root / "voice-venv",
+                install_root / "voice-venv/bin",
+                managed_package,
+            ):
+                with self.subTest(managed_directory=directory.name):
+                    self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+            self.assertEqual(
+                stat.S_IMODE((managed_package / "__init__.py").stat().st_mode),
+                0o600,
+            )
+        finally:
+            permissive_harness.close()
+
     def test_uninstall_help_is_read_only(self) -> None:
         result = self.harness.run(UNINSTALLER, "--help")
 
@@ -819,16 +861,25 @@ class UserInstallTests(unittest.TestCase):
         self.assertIn(str(self.harness.config / "murmur-ime/vocabulary.json"), unit)
         self.assertIn("--corrections", unit)
         self.assertIn(str(self.harness.config / "murmur-ime/corrections.json"), unit)
+        engine_unit = (
+            self.harness.config / "systemd/user/murmur-ime-engine.service"
+        ).read_text(encoding="utf-8")
+        self.assertIn("UMask=0077", engine_unit)
+        self.assertIn("Environment=PYTHONDONTWRITEBYTECODE=1", engine_unit)
+        engine_launcher = (install_root / "murmur-ime-engine").read_text(
+            encoding="utf-8"
+        )
+        self.assertTrue(engine_launcher.startswith("#!/usr/bin/python3 -B\n"))
         self.assertTrue(config.exists())
         self.assertFalse((self.harness.config / "ibus/rime").exists())
         launcher = (install_root / "murmur-voice-daemon").read_text(encoding="utf-8")
         self.assertIn("PYTHONNOUSERSITE=1", launcher)
-        self.assertIn(' -I -m murmur_voice "$@"', launcher)
+        self.assertIn(' -I -B -m murmur_voice "$@"', launcher)
         settings_launcher = (install_root / "open-voice-input-settings").read_text(
             encoding="utf-8"
         )
         self.assertIn("PYTHONNOUSERSITE=1", settings_launcher)
-        self.assertIn(" -I -m murmur_voice.settings_app", settings_launcher)
+        self.assertIn(" -I -B -m murmur_voice.settings_app", settings_launcher)
 
     def test_satisfying_preinstalled_runtime_cannot_bypass_wheelhouse(self) -> None:
         self.harness.environment["MOCK_PREINSTALLED_RUNTIME"] = "1"
@@ -982,7 +1033,7 @@ class UserInstallTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(launched.returncode, 0, launched.stderr)
-            self.assertIn(f"venv-python -I -m {module} --help", self.harness.calls())
+            self.assertIn(f"venv-python -I -B -m {module} --help", self.harness.calls())
 
     def test_uninstall_ignores_a_hostile_python_environment(self) -> None:
         installed = self.harness.run(
@@ -1062,7 +1113,7 @@ class UserInstallTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(socket_path.exists())
         self.assertIn(
-            f"venv-python -I -m murmur_voice shutdown --socket {socket_path}",
+            f"venv-python -I -B -m murmur_voice shutdown --socket {socket_path}",
             self.harness.calls(),
         )
 

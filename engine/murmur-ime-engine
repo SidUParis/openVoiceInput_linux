@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -B
 """Repository and user-install launcher for Open Voice Input Linux."""
 
 from murmur_ime_engine.main import main
