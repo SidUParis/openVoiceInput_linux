@@ -51,7 +51,8 @@ distribution package, or the missing graphical/provider matrix is finished.
       representative application matrix has not been tested. The prior
       same-machine lifecycle record and isolated real-IBus smoke do not claim
       that evidence; the alpha release notes must disclose this limitation.
-- [ ] All provider keys used during pre-release development have been rotated.
+- [x] All provider keys used during pre-release development were disabled after
+      a fresh replacement key was installed and validated on 2026-08-26.
 - [x] `main` requires the `security`, `engine`, `voice`, and `preview-bundle`
       checks; Actions are limited to GitHub-owned, full-SHA-pinned actions.
 - [x] A private security and conduct-reporting route is documented
