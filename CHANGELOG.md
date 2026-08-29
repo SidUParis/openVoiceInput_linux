@@ -5,6 +5,41 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+### Added
+
+- Default-on, event-driven adaptive correction after an authoritative final:
+  for at most five seconds, one same-focus replacement inside the committed
+  span may be retained as a private wrong-to-canonical pair for future
+  provider requests.
+- A bounded private adaptive ledger with conflict, overlap, cascade, cycle,
+  capacity, and unsafe-file suppression. Manual corrections remain
+  authoritative and the combined provider view remains capped at 50 pairs.
+- A real isolated IBus smoke that edits one committed result and consumes the
+  observation exactly once without microphone, provider, key, or network use.
+- A future-only personal ASR data plan that keeps provider output,
+  `spoken_verbatim`, and `preferred_output` separate and does not retain audio
+  in the current implementation.
+
+### Changed
+
+- Key, vocabulary, manual corrections, and adaptive memory are loaded for each
+  new dictation, so idle configuration changes no longer require a daemon
+  restart.
+- The temporary `murmur-voice` engine remains selected during the bounded
+  observation. Direct keys pass through, but the previous Rime/IBus engine is
+  restored only when the lease finishes or is ended early by toggle, cancel,
+  or failure. Focus loss prevents learning immediately but may wait for the
+  remaining lease before restoration.
+
+### Known limitations
+
+- Adaptive observation is enabled by default in this development branch and
+  currently has no settings-window switch. It only works in applications that
+  provide trustworthy IBus surrounding text; unsupported or ambiguous cases
+  learn nothing.
+- The legacy Doubao Murmur Flatpak right-Alt controller still uses its own ASR
+  path and is not yet wired to this daemon feature.
+
 ## [0.1.0-alpha.1] - 2026-08-26
 
 ### Added

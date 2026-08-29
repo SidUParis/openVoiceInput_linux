@@ -24,8 +24,12 @@ email or otherwise invent content.
 > **Current status:** the Python IBus inline-preedit prototype and a
 > self-contained Volcengine voice daemon are implemented. During one recording
 > they temporarily switch `current IBus engine → murmur-voice`, stream
-> partial/final text over D-Bus, and restore that exact previous engine on
-> final, cancel, or failure. The
+> partial/final text over D-Bus, and, after an authoritative final, keep the
+> same focused input context for a bounded five-second correction observation.
+> They then restore the exact previous engine. Cancel, failure, or the next
+> toggle ends the observation early; focus loss immediately invalidates
+> learning. The daemon requests restoration before the evidence deadline;
+> IBus command verification may finish shortly afterward. The
 > optional per-user systemd installation now covers both processes. The
 > permanent combined Rime + voice engine and a distribution-native package are
 > the next milestones.
@@ -104,10 +108,15 @@ packages must not download code or data during installation.
 
 - Native cumulative preedit at the active application caret.
 - One authoritative `Final` committed exactly once, without clipboard paste.
+- Bounded adaptive correction learning: after that commit, one strict
+  replacement inside the committed span may become a private correction pair.
+  Insertions, deletions, multiple edits, broad polishing, focus changes, and
+  clients without IBus surrounding-text support do not learn.
 - Focus token, D-Bus sender, utterance ID, and strictly increasing revision
   checks; stale results are rejected.
-- Cancellation on focus loss, input-context reset, engine disable, or sidecar
-  disappearance.
+- Cancellation on focus loss, engine disable, or sidecar disappearance; an
+  input-context reset also cancels before Final, while GTK's ordinary
+  same-focus edit reset is tolerated during the bounded observation.
 - Voice acquisition disabled for password, PIN, private, fake, and clients
   without preedit support.
 - Runtime IBus registration without root access or an IBus/desktop restart.
@@ -123,8 +132,17 @@ packages must not download code or data during installation.
 
 The temporary switch is a development bridge. While `murmur-voice` is active,
 ordinary keys pass through and stock `ibus-rime` is not providing Chinese
-keyboard composition. A true single input method still requires the planned
-engine derived from `ibus-rime` and linked to librime.
+keyboard composition. This includes the correction-observation window, which
+ends after at most five seconds or on the next toggle. Ordinary direct key input
+can still be handled by the application, but the previous Rime/IBus engine is
+not available until it is restored. A true single input method still requires
+the planned engine derived from `ibus-rime` and linked to librime.
+
+Adaptive observation is enabled by default in this development branch after a
+nonempty authoritative final. It is event-driven rather than a polling or
+keyboard-monitoring loop, but the settings window does not yet provide a
+disable switch. Applications without trustworthy IBus surrounding text simply
+produce no learned pair.
 
 ## Try the prototype
 
@@ -235,7 +253,12 @@ index, or cloud account.
 4. See live hypotheses at the current caret as IBus preedit.
 5. Stop recording; the two-pass, smoothed result replaces the hypothesis and
    is committed exactly once.
-6. Press `Esc` or change focus to cancel without committing late results.
+6. For at most five seconds, correct one wrong span in the same input field.
+   When IBus surrounding text is supported, that strict replacement can become
+   an adaptive correction for the next dictation. Another toggle ends this
+   observation early.
+7. Press `Esc` or change focus to cancel without committing late results;
+   losing focus during observation prevents learning.
 
 Voice input will be disabled for password/private input contexts. An active
 Rime composition must be committed or cancelled before voice recording starts.
@@ -263,10 +286,23 @@ The correction strategy is documented in
 [docs/recognition-accuracy.md](docs/recognition-accuracy.md): provider-side
 two-pass recognition first, then the explicit private vocabulary for names and
 specialist terms, with optional user-confirmed wrong-to-canonical mappings sent
-through Volcengine's documented `context.correct_words`. There is no local
-post-hoc text replacement. A provider-managed hotword table remains a later
-advanced option. The daemon never learns silently from clipboard, typing
-history, transcripts, documents, or the Rime database.
+through Volcengine's documented `context.correct_words`. A bounded five-second
+IBus surrounding-text observation can also derive one strict replacement into
+the private `adaptive-corrections.json` ledger. It never rewrites the already
+committed text or reads the clipboard, AT-SPI, global keystrokes, or Rime
+database. The bounded current-field surrounding snapshot is used transiently
+and is not retained as a document or transcript record. Manual corrections take
+priority; conflicted, overlapping, or cyclic learned rules are suppressed, and
+the combined provider view remains at most 50 pairs. Configuration is reloaded
+for the next dictation without restarting the daemon. This is correction
+memory, not local model training.
+
+Retaining microphone audio for a personal ASR dataset is **not** implemented in
+this change. The opt-in future plan keeps `spoken_verbatim` separate from the
+user's `preferred_output`, targets a user-controlled Orange machine for the
+personal deployment, and postpones all training decisions until the collection
+and consent boundaries are implemented. See
+[docs/personal-asr-data-plan.md](docs/personal-asr-data-plan.md).
 
 ## Development targets
 

@@ -9,7 +9,6 @@ import logging
 import queue
 import signal
 import sys
-from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
@@ -17,12 +16,10 @@ from .config import (
     MAX_VOCABULARY_ENTRIES,
     MAX_VOCABULARY_TERM_CHARACTERS,
     ConfigError,
+    default_adaptive_corrections_path,
     default_config_path,
     default_corrections_path,
     default_vocabulary_path,
-    load_config,
-    load_corrections,
-    load_vocabulary,
     load_vocabulary_import,
     normalize_vocabulary_terms,
     save_api_key,
@@ -51,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--corrections", type=Path, default=default_corrections_path()
+    )
+    run_parser.add_argument(
+        "--adaptive-corrections",
+        type=Path,
+        default=default_adaptive_corrections_path(),
     )
     run_parser.add_argument("--socket", type=Path)
     run_parser.add_argument("--verbose", action="store_true")
@@ -106,6 +108,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             options.verbose,
             vocabulary_path=options.vocabulary,
             corrections_path=options.corrections,
+            adaptive_corrections_path=options.adaptive_corrections,
         )
     try:
         response = request_command(options.command, options.socket)
@@ -181,6 +184,7 @@ def _run(
     *,
     vocabulary_path: Path | None = None,
     corrections_path: Path | None = None,
+    adaptive_corrections_path: Path | None = None,
 ) -> int:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -193,16 +197,26 @@ def _run(
     if _restore_engine(None) != 0:
         return 1
     try:
-        config = replace(
-            load_config(config_path),
-            hotwords=load_vocabulary(vocabulary_path),
-            corrections=load_corrections(corrections_path),
+        from .adaptive_runtime import AdaptiveCorrectionRuntime
+
+        runtime = AdaptiveCorrectionRuntime(
+            config_path=config_path,
+            vocabulary_path=vocabulary_path or default_vocabulary_path(),
+            corrections_path=corrections_path or default_corrections_path(),
+            adaptive_path=(
+                adaptive_corrections_path or default_adaptive_corrections_path()
+            ),
         )
+        config = runtime.validate()
         # Delay GI, sounddevice, and provider imports until run. Status and
         # configure remain useful on systems missing optional runtime pieces.
         from .session import VoiceSession
 
-        session = VoiceSession(config)
+        session = VoiceSession(
+            config,
+            asr_client_factory=runtime.create_asr_client,
+            observation_handler=runtime.observe,
+        )
         server = ControlServer(session, socket_path)
     except (ConfigError, ControlError, ImportError, RuntimeError) as error:
         # Configuration/control errors are authored locally and contain no key.

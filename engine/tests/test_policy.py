@@ -8,6 +8,7 @@ from murmur_ime_engine.policy import (
     is_private_input,
     is_real_input_client,
     valid_preedit_text,
+    valid_surrounding_text,
     valid_utterance_id,
 )
 
@@ -41,6 +42,16 @@ class PolicyTests(unittest.TestCase):
         # Exercise the byte guard independently of the normal codepoint cap.
         with patch("murmur_ime_engine.policy.MAX_TEXT_CODEPOINTS", 10_000):
             self.assertFalse(valid_preedit_text("😀" * 4097))
+
+    def test_surrounding_text_requires_bounded_character_offsets(self) -> None:
+        self.assertTrue(valid_surrounding_text("前文final", 7, 7))
+        self.assertTrue(valid_surrounding_text("选区", 1, 2))
+        self.assertFalse(valid_surrounding_text("text", -1, 0))
+        self.assertFalse(valid_surrounding_text("text", 5, 4))
+        self.assertFalse(valid_surrounding_text("text", 4, 5))
+        self.assertFalse(valid_surrounding_text("\x00", 0, 0))
+        self.assertFalse(valid_surrounding_text(123, 0, 0))
+        self.assertFalse(valid_surrounding_text("text", True, 0))
 
 
 if __name__ == "__main__":

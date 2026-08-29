@@ -12,9 +12,12 @@ names as 0.x compatibility ABI.
 It is implemented and has offline coverage with the self-contained voice
 daemon in this repository. The daemon bridge records the previous engine,
 temporarily selects `murmur-voice`, acquires the focused preedit session,
-forwards cumulative ASR partials and the final result, then restores the
-previous engine on final, cancel, or error. It does not require a separate
-Doubao Murmur checkout.
+forwards cumulative ASR partials and the final result, keeps at most a
+five-second same-focus correction-observation lease, then restores the previous
+engine. The next toggle, cancel, or error ends that lease early. Focus loss
+invalidates learning immediately, but restoration may wait for the remaining
+lease because this prototype has no reverse focus-loss signal. It does not
+require a separate Doubao Murmur checkout.
 
 ## Run from the repository
 
@@ -69,15 +72,26 @@ Interface: org.murmur.IME.Preedit1
 Acquire(utterance_id: s) -> accepted: b
 Partial(utterance_id: s, revision: t, text: s) -> accepted: b
 Final(utterance_id: s, revision: t, text: s) -> accepted: b
+FinishObservation(utterance_id: s)
+  -> (accepted: b, baseline_text: s, committed_start: u, committed_end: u,
+      current_text: s, cursor: u, anchor: u)
 Cancel(utterance_id: s) -> accepted: b
 ```
 
 `Acquire` internally captures the active engine's monotonically increasing
 focus token and the caller's unique D-Bus name. Every later call must match the
 caller, utterance, and focus token. Text revisions must strictly increase.
-Focus loss, input-context reset, engine disable, caller disappearance, and a
-switch to a private field all clear preedit and invalidate the session. `Final`
-is accepted once, clears preedit, and calls `commit_text()` once.
+Focus loss, engine disable, caller disappearance, and a switch to a private
+field all clear preedit/observation and invalidate the session. An input-context
+reset before Final also invalidates preedit; during the post-Final observation,
+GTK's ordinary same-focus edit reset instead requests a fresh surrounding
+snapshot while the focus token remains authoritative. `Final` is accepted once,
+clears preedit, and calls `commit_text()` once. It then waits for a newer IBus
+surrounding-text revision to anchor the committed span. `FinishObservation`
+consumes one bounded snapshot only for the same sender, utterance, and focus.
+Missing surrounding-text support or an untrustworthy baseline returns no
+observation without undoing the commit. See [dbus-api.md](dbus-api.md) for the
+complete contract.
 
 IBus's global placeholder context identifies itself as client `fake`. It is
 never considered an editable focus and cannot acquire a voice session; this
@@ -91,9 +105,10 @@ IDs are size-bounded, and transcript content is never logged.
 
 IBus assigns only one engine to an input context. While `murmur-voice` is
 selected, ordinary keys pass through but stock `ibus-rime` is not processing
-them. While `rime` is selected, the prototype cannot own its preedit. This is
-therefore a real inline-preedit demonstration, not yet the combined Chinese
-keyboard.
+them. This includes the post-final observation window of at most five seconds;
+the next toggle can end it early. While `rime` is selected, the prototype
+cannot own its preedit. This is therefore a real inline-preedit demonstration,
+not yet the combined Chinese keyboard.
 
 The production implementation must move the same focus/session rules into a
 librime-capable engine derived from ibus-rime. It will then provide Rime Ice
@@ -108,6 +123,10 @@ typing and voice preedit in the same engine.
 3. Send duplicate or decreasing revisions. They must return `false`.
 4. Send an improved final after a partial. The preedit must be replaced by
    ordinary committed text exactly once.
+5. After final, make one replacement in the same field and finish observation.
+   A bounded snapshot must be returned once. Repeat with focus loss, private
+   input, or unsupported surrounding text; no snapshot may be returned and the
+   committed final must remain untouched.
 
 Run the dependency-free state and contract tests with:
 
@@ -115,4 +134,5 @@ Run the dependency-free state and contract tests with:
 PYTHONPATH=engine python3 -m unittest discover -s engine/tests -v
 ```
 
-The current suite contains 13 tests.
+The suite covers the state and contract boundaries without a provider key or
+microphone.

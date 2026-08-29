@@ -14,9 +14,10 @@ streamed to the Volcengine BigModel ASR service configured by the user.
 - Provider-side storage, retention, regional processing, and account policy
   are governed by the user's Volcengine agreement and configuration.
 - The current standalone daemon sends audio and reviewed ASR options. Its
-  optional personal vocabulary and recognition corrections send only values
-  the user explicitly adds; they never read the clipboard, typing history,
-  document, transcript history, or Rime user database automatically.
+  optional personal vocabulary and manual/adaptive recognition corrections
+  send only bounded values kept in the user's private configuration. They never
+  read the clipboard, AT-SPI accessibility tree, global keyboard events,
+  document or Rime user database.
 
 ## Local secrets and text
 
@@ -36,17 +37,52 @@ streamed to the Volcengine BigModel ASR service configured by the user.
 - Optional recognition corrections are stored separately as
   `corrections.json` with the same checks. They are sent provider-side only;
   no local global replacement is applied to committed text.
-- API keys, transcripts, vocabulary, corrections, and remote payloads are not
-  written to logs. Status and errors use fixed codes.
+- Adaptive correction memory is stored separately as
+  `adaptive-corrections.json` with private ownership and permission checks.
+  Each retained entry contains only a wrong/canonical pair of at most 64
+  Unicode characters on either side, its state, and a support count. It is not
+  a transcript history and stores no separate utterance/surrounding snapshot,
+  timestamp, document context, edit stream, or audio.
+- API keys, transcripts, vocabulary, manual/adaptive corrections, and remote
+  payloads are not written to logs. Status and errors use fixed codes.
 - Live text travels over the user's session D-Bus to the focused IBus engine.
   It does not use clipboard paste in the primary path.
+
+## Five-second correction observation
+
+This observation is enabled by default in the current development branch after
+a nonempty authoritative final; the settings window does not yet expose a
+disable switch. It is event-driven and does not poll application text.
+
+After one authoritative final commit, the engine can keep the same focused
+input context for at most five seconds. When that application supports IBus
+surrounding text, it anchors the committed span and later accepts only one
+strict replacement inside it. Pure insertion/deletion, multiple edits, broad
+polishing, text outside the span, focus/private-context changes, timeout, and
+missing surrounding-text support produce no learned entry. Another dictation
+toggle may finish the observation early.
+
+The changed block is bounded to three lexical tokens per side and must meet a
+conservative similarity floor. A one-character source is learned only when it
+can be expanded through an unchanged adjacent lexical token; case-only spelling
+corrections remain allowed.
+
+The observer does not open the microphone again and does not inspect the
+clipboard, AT-SPI, a global keyboard hook, or other windows. It temporarily
+processes only the bounded IBus surrounding snapshot for the current field and
+does not persist that snapshot. Manual corrections take priority; conflicted,
+overlapping, cascading, or cyclic adaptive rules are suppressed. The combined
+manual/adaptive provider view is still capped at 50 pairs and is reloaded at the
+next dictation without a daemon restart.
 
 ## Input-context safety
 
 The engine refuses acquisition for password, PIN, private, fake, unfocused,
 and non-preedit contexts. Focus loss clears preedit. Sender identity,
 utterance ID, focus state, and strictly increasing revision protect the rest
-of the session; late callbacks from an earlier recording are discarded.
+of the session; late callbacks from an earlier recording are discarded. The
+same focus and utterance binding continues through correction observation, and
+any private-purpose or focus transition fails closed without learning.
 
 The session bus and private control socket are per-user boundaries, not a
 sandbox between applications owned by the same Unix account. The first D-Bus
@@ -62,3 +98,15 @@ the provider's authoritative two-pass final. Pending unsent PCM is bounded to
 10 seconds. An exceeded network queue cancels the session rather than growing
 memory indefinitely; compressed provider responses also have a decoded-size
 limit.
+
+## Recording retention is future work
+
+The current daemon streams microphone audio to the configured provider but
+does not retain a local recording or copy it to another machine. A future
+personal-ASR collection mode is planned as explicit opt-in only. Its proposed
+record separates the audio, `spoken_verbatim` (what was actually said), and
+`preferred_output` (what the user wants inserted); provider text is not treated
+as unquestioned ground truth. The user's Orange machine is the intended
+user-controlled storage target for that personal deployment. Model training is
+not part of this feature and remains postponed. See
+[personal-asr-data-plan.md](personal-asr-data-plan.md).

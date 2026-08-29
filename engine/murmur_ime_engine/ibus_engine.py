@@ -9,17 +9,22 @@ import logging
 import gi
 
 gi.require_version("IBus", "1.0")
-from gi.repository import IBus  # noqa: E402
+from gi.repository import GLib, IBus  # noqa: E402
 
 from .constants import ENGINE_NAME
 from .policy import (
     is_private_input,
     is_real_input_client,
     valid_preedit_text,
+    valid_surrounding_text,
     valid_utterance_id,
 )
 from .registry import EngineRegistry
-from .session import SessionGuard
+from .session import (
+    OBSERVATION_TIMEOUT_SECONDS,
+    ObservationResult,
+    SessionGuard,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +43,7 @@ class MurmurEngine(IBus.Engine):
             object_path=object_path,
             engine_name=ENGINE_NAME,
             has_focus_id=True,
+            active_surrounding_text=True,
         )
         self._registry = registry
         self._sessions = SessionGuard()
@@ -49,6 +55,8 @@ class MurmurEngine(IBus.Engine):
         self._capabilities = 0
         self._purpose = int(IBus.InputPurpose.FREE_FORM)
         self._hints = int(IBus.InputHints.NONE)
+        self._surrounding_revision = 0
+        self._observation_timeout_source_id = 0
         registry.register(self)
 
     @property
@@ -118,21 +126,53 @@ class MurmurEngine(IBus.Engine):
             final=True,
         ):
             return False
+        if not self._sessions.begin_observation(
+            owner,
+            utterance_id,
+            self._focus_token,
+            surrounding_revision=self._surrounding_revision,
+            final_text=text,
+            supported=bool(self._capabilities & int(IBus.Capabilite.SURROUNDING_TEXT)),
+        ):
+            self._sessions.finish()
+            self._registry.invalidated(self)
+            return False
+        self._arm_observation_timeout(owner, utterance_id, self._focus_token)
         self._clear_preedit()
         if text:
             self.commit_text(IBus.Text.new_from_string(text))
-        self._sessions.finish()
-        self._registry.invalidated(self)
         logger.info(
-            "Committed voice final revision=%d characters=%d",
+            "Committed voice final revision=%d characters=%d; observation pending",
             revision,
             len(text),
         )
         return True
 
+    def finish_observation(
+        self,
+        owner: str,
+        utterance_id: str,
+    ) -> ObservationResult:
+        result = self._sessions.finish_observation(
+            owner,
+            utterance_id,
+            self._focus_token,
+        )
+        if result.consumed:
+            self._cancel_observation_timeout()
+            self._clear_surrounding_cache()
+            self._registry.invalidated(self)
+            logger.info(
+                "Finished post-commit observation (available=%s)",
+                result.accepted,
+            )
+        return result
+
     def cancel(self, owner: str, utterance_id: str) -> bool:
         if not self._sessions.cancel(owner, utterance_id):
             return False
+        self._cancel_observation_timeout()
+        self._clear_surrounding_cache()
         self._clear_preedit()
         self._registry.invalidated(self)
         logger.info("Cancelled voice preedit")
@@ -142,7 +182,9 @@ class MurmurEngine(IBus.Engine):
         session = self._sessions.active
         if session is None or session.owner != owner:
             return False
+        self._cancel_observation_timeout()
         self._sessions.invalidate()
+        self._clear_surrounding_cache()
         self._clear_preedit()
         self._registry.invalidated(self)
         logger.info("Cancelled voice preedit after D-Bus owner disappeared")
@@ -165,11 +207,86 @@ class MurmurEngine(IBus.Engine):
         )
 
     def _invalidate_voice(self, reason: str) -> None:
+        self._cancel_observation_timeout()
         had_session = self._sessions.invalidate()
+        self._clear_surrounding_cache()
         self._clear_preedit()
         self._registry.invalidated(self)
         if had_session:
             logger.info("Invalidated voice preedit: %s", reason)
+
+    def _clear_surrounding_cache(self) -> None:
+        self._surrounding_revision += 1
+        if isinstance(self, IBus.Engine):
+            try:
+                IBus.Engine.do_set_surrounding_text(
+                    self,
+                    IBus.Text.new_from_string(""),
+                    0,
+                    0,
+                )
+            except Exception:
+                logger.warning("Could not clear IBus surrounding-text cache")
+
+    def _cancel_observation_timeout(self) -> None:
+        source_id = getattr(self, "_observation_timeout_source_id", 0)
+        if source_id:
+            GLib.source_remove(source_id)
+            self._observation_timeout_source_id = 0
+
+    def _arm_observation_timeout(
+        self,
+        owner: str,
+        utterance_id: str,
+        focus_token: int,
+    ) -> None:
+        self._cancel_observation_timeout()
+        delay_ms = int(OBSERVATION_TIMEOUT_SECONDS * 1_000) + 1
+        self._observation_timeout_source_id = GLib.timeout_add(
+            delay_ms,
+            self._on_observation_timeout,
+            owner,
+            utterance_id,
+            focus_token,
+        )
+
+    def _on_observation_timeout(
+        self,
+        owner: str,
+        utterance_id: str,
+        focus_token: int,
+    ) -> bool:
+        self._observation_timeout_source_id = 0
+        if self._sessions.expire_observation(owner, utterance_id, focus_token):
+            self._clear_surrounding_cache()
+            self._registry.invalidated(self)
+            logger.info("Expired post-commit observation")
+        return GLib.SOURCE_REMOVE
+
+    def _cache_surrounding_text(
+        self,
+        text: object,
+        cursor: int,
+        anchor: int,
+    ) -> bool:
+        """Cache one bounded update and offer it to the active observation."""
+
+        self._surrounding_revision += 1
+        if not valid_surrounding_text(text, cursor, anchor):
+            self._sessions.update_surrounding(
+                self._focus_token,
+                self._surrounding_revision,
+                None,
+            )
+            return False
+        self._sessions.update_surrounding(
+            self._focus_token,
+            self._surrounding_revision,
+            text,
+            cursor,
+            anchor,
+        )
+        return True
 
     # IBus virtual methods -------------------------------------------------
 
@@ -188,6 +305,7 @@ class MurmurEngine(IBus.Engine):
         if self.has_active_session:
             self._invalidate_voice("focus changed")
         self._focus_token += 1
+        self._clear_surrounding_cache()
         self._focus_context = object_path
         self._focus_client = client
         self._focused = is_real_input_client(client)
@@ -206,17 +324,30 @@ class MurmurEngine(IBus.Engine):
         self._focus_context = ""
         self._focus_client = ""
         self._focus_token += 1
+        self._clear_surrounding_cache()
         self._invalidate_voice("focus lost")
 
     def do_enable(self) -> None:
         self._enabled = True
+        # Besides returning the current cache, this call tells older IBus
+        # clients that this engine requires future surrounding-text updates.
+        self.get_surrounding_text()
 
     def do_disable(self) -> None:
         self._enabled = False
         self._focus_token += 1
+        self._clear_surrounding_cache()
         self._invalidate_voice("engine disabled")
 
     def do_reset(self) -> None:
+        if self._sessions.observing:
+            # GTK resets the active IM context before ordinary Backspace/type
+            # edits. The focus token and conservative surrounding-span checks
+            # remain the authority during the short post-commit lease.
+            getter = getattr(self, "get_surrounding_text", None)
+            if callable(getter):
+                getter()
+            return
         self._focus_token += 1
         self._invalidate_voice("input context reset")
 
@@ -225,17 +356,43 @@ class MurmurEngine(IBus.Engine):
         if not self._capabilities & int(IBus.Capabilite.PREEDIT_TEXT):
             self._invalidate_voice("client has no preedit capability")
 
+    def do_set_surrounding_text(
+        self,
+        text: IBus.Text,
+        cursor_pos: int,
+        anchor_pos: int,
+    ) -> None:
+        if is_private_input(self._purpose, self._hints):
+            self._clear_surrounding_cache()
+            return
+        # The parent cache is useful only for the short active observation and
+        # is cleared at every completion/invalidation boundary.
+        if self._sessions.observing:
+            IBus.Engine.do_set_surrounding_text(self, text, cursor_pos, anchor_pos)
+        try:
+            value: object = text.get_text()
+        except Exception:
+            value = None
+        self._cache_surrounding_text(value, int(cursor_pos), int(anchor_pos))
+
     def do_set_content_type(self, purpose: int, hints: int) -> None:
         self._purpose = int(purpose)
         self._hints = int(hints)
         if is_private_input(self._purpose, self._hints):
+            self._clear_surrounding_cache()
             self._invalidate_voice("private input field")
 
     def do_destroy(self) -> None:
         self._enabled = False
         self._focused = False
-        self._invalidate_voice("engine destroyed")
-        self._registry.unregister(self)
+        # PyGObject may invoke destroy on an object whose constructor failed
+        # before our Python fields were installed (for example, a missing IBus
+        # property on an unsupported runtime). Teardown must remain harmless.
+        if hasattr(self, "_sessions"):
+            self._invalidate_voice("engine destroyed")
+        registry = getattr(self, "_registry", None)
+        if registry is not None:
+            registry.unregister(self)
         super().destroy()
 
 

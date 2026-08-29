@@ -32,12 +32,15 @@ class FakeProxy:
         self.responses = {}
         self.fail_methods = set()
         self.name_owner = ":1.50"
+        self.observation = (False, "", 0, 0, "", 0, 0)
 
     def call_sync(self, method, parameters, *args):
         del args
         self.calls.append((method, parameters.unpack()))
         if method in self.fail_methods:
             raise RuntimeError("remote error containing TOP-SECRET-TEXT")
+        if method == "FinishObservation":
+            return GLib.Variant("(bsuusuu)", self.observation)
         return GLib.Variant("(b)", (self.responses.get(method, True),))
 
     def get_name_owner(self):
@@ -64,9 +67,18 @@ def _restore_state(tmp_path):
     return EngineRestoreState(parent / "previous-ibus-engine")
 
 
-def test_acquire_partial_final_reuses_proxy_and_restores_rime(tmp_path):
+def test_acquire_partial_final_observation_reuses_proxy_and_restores_rime(tmp_path):
     state = _restore_state(tmp_path)
     client, runner, proxy = _client(restore_state=state)
+    proxy.observation = (
+        True,
+        "prefix 最终",
+        7,
+        9,
+        "prefix 修正",
+        9,
+        9,
+    )
 
     assert client.acquire_result("utterance-1") is AcquireResult.ACQUIRED
     assert runner.engine == PREEDIT_ENGINE
@@ -75,14 +87,67 @@ def test_acquire_partial_final_reuses_proxy_and_restores_rime(tmp_path):
     assert not client.partial("utterance-1", 1, "重复")
     assert client.final("utterance-1", 2, "最终")
 
+    assert runner.engine == PREEDIT_ENGINE
+    assert client.active
+    snapshot = client.finish_observation("utterance-1")
+
+    assert snapshot is not None
+    assert snapshot.baseline_text == "prefix 最终"
+    assert snapshot.current_text == "prefix 修正"
+    assert (snapshot.committed_start, snapshot.committed_end) == (7, 9)
     assert runner.engine == "rime"
     assert [method for method, _ in proxy.calls] == [
         "Acquire",
         "Partial",
         "Final",
+        "FinishObservation",
     ]
     assert not client.active
     assert state.load() is None
+
+
+def test_unavailable_observation_still_restores_rime(tmp_path):
+    state = _restore_state(tmp_path)
+    client, runner, _ = _client(restore_state=state)
+    assert client.acquire("utterance-1")
+    assert client.final("utterance-1", 1, "final")
+
+    assert client.finish_observation("utterance-1") is None
+
+    assert runner.engine == "rime"
+    assert not client.active
+    assert state.load() is None
+
+
+def test_finish_preserves_newer_user_engine_choice_during_observation(tmp_path):
+    state = _restore_state(tmp_path)
+    client, runner, _ = _client(restore_state=state)
+    assert client.acquire("utterance-1")
+    assert client.final("utterance-1", 1, "final")
+    runner.engine = "libpinyin"
+
+    assert client.finish_observation("utterance-1") is None
+
+    assert runner.engine == "libpinyin"
+    assert state.load() is None
+    assert ["ibus", "engine", "rime"] not in runner.calls
+
+
+def test_malformed_observation_never_exposes_text_and_restores(tmp_path, caplog):
+    proxy = FakeProxy()
+    proxy.observation = (True, "TOP-SECRET-TEXT", 0, 999, "changed", 0, 0)
+    client, runner, _ = _client(
+        proxy=proxy,
+        restore_state=_restore_state(tmp_path),
+    )
+    assert client.acquire("utterance-1")
+    assert client.final("utterance-1", 1, "final")
+
+    with caplog.at_level(logging.WARNING):
+        assert client.finish_observation("utterance-1") is None
+
+    assert "TOP-SECRET-TEXT" not in caplog.text
+    assert runner.engine == "rime"
 
 
 def test_missing_service_is_unavailable_and_restores_engine(tmp_path):
@@ -153,3 +218,16 @@ def test_transcript_and_remote_exception_are_not_logged(tmp_path, caplog):
     assert "TOP-SECRET-TEXT" not in caplog.text
     client.cancel("utterance-1")
     assert runner.engine == "rime"
+
+
+def test_ambiguous_final_failure_sends_best_effort_cancel_before_clearing():
+    proxy = FakeProxy()
+    proxy.fail_methods.add("Final")
+    runner = FakeRunner(engine=PREEDIT_ENGINE)
+    client, _runner, _ = _client(proxy=proxy, runner=runner)
+    assert client.acquire("utterance-1")
+
+    assert not client.final("utterance-1", 1, "private-final")
+
+    assert [method for method, _ in proxy.calls] == ["Acquire", "Final", "Cancel"]
+    assert not client.active

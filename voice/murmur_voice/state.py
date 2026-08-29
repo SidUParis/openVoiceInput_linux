@@ -11,6 +11,7 @@ class VoiceState(str, Enum):
     STARTING = "starting"
     RECORDING = "recording"
     STOPPING = "stopping"
+    OBSERVING = "observing"
 
 
 @dataclass(frozen=True, slots=True)

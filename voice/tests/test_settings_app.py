@@ -367,14 +367,15 @@ def test_correction_validation_and_save_errors_never_echo_content(window):
     assert controller.service_actions == []
 
 
-def test_correction_explanation_names_provider_request_scope_and_no_learning(window):
+def test_correction_explanation_names_provider_scope_and_bounded_learning(window):
     settings_window, _ = window
 
     explanation = settings_window.corrections_help_label.get_text()
 
     assert "Volcengine" in explanation
     assert "each dictation request" in explanation
-    assert "does not learn" in explanation
+    assert "five-second" in explanation
+    assert "ambiguous or conflicting" in explanation
 
 
 def test_service_controls_are_explicit_and_offer_no_restart(window):

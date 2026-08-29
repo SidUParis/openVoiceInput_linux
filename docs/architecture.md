@@ -15,15 +15,21 @@ final commit with this transition flow:
 
 ```text
 current IBus engine -> murmur-voice -> Acquire/Partial/Final over D-Bus
+                    -> <=5 s same-focus correction observation
                     -> exact previous IBus engine
 ```
 
-The previous engine is restored on final, cancellation, or failure. This
-removes the black transcription box during dictation, but it is not the final
-combined input method: IBus assigns one engine per input context, so stock
-Rime cannot provide Chinese keyboard composition while the voice-only engine
-is selected. The production work is to move the proven session/preedit rules
-into an engine derived from `ibus-rime` and linked to librime.
+After final commit, the previous engine is restored when bounded correction
+observation finishes; the next toggle, cancellation, or daemon failure can
+finish it early. Focus loss invalidates learning immediately, but the daemon
+does not receive an engine-to-daemon focus signal, so restoration may wait for
+the remainder of the five-second lease. This removes the black transcription
+box during dictation, but it is not the final combined input method: IBus
+assigns one engine per input context, so stock Rime cannot provide Chinese
+keyboard composition while the voice-only engine is selected, including this
+short observation lease. The production work is to move the proven
+session/preedit rules into an engine derived from `ibus-rime` and linked to
+librime.
 
 ## Components
 
@@ -40,9 +46,13 @@ Responsibilities:
 - a monotonically increasing focus token;
 - voice command initiation and cancellation;
 - replacing the complete voice preedit with each cumulative ASR hypothesis;
-- committing one final result only when session and focus tokens still match.
+- committing one final result only when session and focus tokens still match;
+- anchoring that committed span from IBus surrounding text and returning one
+  same-focus observation snapshot at the end of a bounded lease.
 
 The engine never opens a microphone, reads secrets, or performs network I/O.
+It does not inspect clipboard, AT-SPI, global keyboard events, or stock Rime
+data.
 
 ### Voice daemon
 
@@ -63,6 +73,10 @@ Responsibilities:
 - provider authentication and WebSocket lifecycle;
 - Volcengine `bigmodel_async` request/response handling;
 - live partial, two-pass final, timeout, and cancellation events;
+- deterministic extraction and private persistence of at most one strict
+  replacement from the bounded post-final snapshot;
+- per-dictation reload and conflict-safe compilation of manual/adaptive
+  correction pairs into a provider view of at most 50 entries;
 - zero transcription text or secret content in logs.
 
 The daemon never commits text and cannot choose a target application.
@@ -71,7 +85,9 @@ The daemon never commits text and cannot choose a target application.
 
 A bounded GTK4 settings application now manages the private key-only fallback,
 explicit vocabulary, optional explicit recognition corrections, and service
-controls. The masked interactive `configure`
+controls. Adaptive correction memory is maintained automatically in a separate
+private ledger and does not require a settings round trip. The masked
+interactive `configure`
 command remains available. Secret Service storage and its migration lifecycle
 remain target features rather than part of this transition prototype.
 
@@ -90,10 +106,10 @@ It must not take focus. Inline transcription belongs to IBus preedit.
 ## Session state
 
 ```text
-IDLE -> STARTING -> RECORDING -> FINALIZING -> IDLE
-  ^          |           |            |
-  +----------+-----------+------------+
-             cancel / focus loss / error
+IDLE -> STARTING -> RECORDING -> FINALIZING -> OBSERVING -> IDLE
+  ^          |           |            |             |
+  +----------+-----------+------------+-------------+
+             cancel / error / next toggle; focus loss invalidates learning
 ```
 
 Each start request carries `{engine_id, focus_token, utterance_id}`. Every
@@ -105,12 +121,26 @@ increasing `revision`. The engine ignores any mismatched, stale, or late event.
 1. A streaming hypothesis replaces the entire voice preedit.
 2. A `definite` two-pass sentence replaces the corresponding hypothesis.
 3. The connection-level final event permits a single `commit_text` call.
-4. Focus loss clears preedit and cancels the utterance.
-5. The implemented safety timeout cancels preedit when an authoritative final
+4. A newer IBus surrounding-text revision anchors the exact committed span.
+   If unsupported or ambiguous, commit still succeeds but learning is disabled.
+5. For at most five seconds the same focus may produce one observation
+   snapshot. Only a single replacement inside the anchored span is eligible;
+   insertion, deletion, multiple edits, polishing, a final active selection,
+   focus/private
+   changes, or timeout learns nothing.
+6. Finish restores the exact previous IBus engine. A next toggle may finish
+   observation early before starting another dictation.
+7. Focus loss clears preedit or invalidates observation immediately. After a
+   committed final, the daemon restores the previous engine when the remaining
+   lease expires because this prototype has no reverse focus-loss signal.
+8. The implemented safety timeout cancels preedit when an authoritative final
    is missing. Any future manual recovery must remain explicit and must never
    silently commit into a different application.
 
 Clipboard injection and synthetic `Ctrl+V` are not part of the primary path.
+The observer also avoids clipboard, AT-SPI, and global keyboard monitoring. It
+retains only a bounded pair/state/support ledger, never a separate surrounding
+snapshot or transcript record.
 
 ## Rime composition boundary
 
@@ -133,6 +163,15 @@ Open Voice Input Linux will keep packaged Rime data in
 `$XDG_DATA_HOME/murmur-ime/rime`. It must never concurrently open the stock
 ibus-rime database under `~/.config/ibus/rime`. Importing existing preferences
 or user data is an explicit, one-time migration operation.
+
+## Future personal ASR data path
+
+No recording is retained by the adaptive-correction implementation. A future
+opt-in collector may transfer consented audio to a user-controlled Orange
+machine, but its schema must keep `spoken_verbatim` distinct from the user's
+`preferred_output`; provider text is a draft/pseudo-label rather than automatic
+ground truth. Collection policy and evaluation come before any model fine-tune
+or distillation. See [personal-asr-data-plan.md](personal-asr-data-plan.md).
 
 The `murmur-ime` paths above, along with the 0.x IBus, D-Bus, executable, and
 systemd names, remain historical compatibility ABI. The public product and

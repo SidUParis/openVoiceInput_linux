@@ -59,13 +59,15 @@ Installed files use these XDG-relative locations:
 - user units: `$XDG_CONFIG_HOME/systemd/user/`;
 - API key: `$XDG_CONFIG_HOME/murmur-ime/voice.json`;
 - optional vocabulary: `$XDG_CONFIG_HOME/murmur-ime/vocabulary.json`;
-- optional corrections: `$XDG_CONFIG_HOME/murmur-ime/corrections.json`.
+- optional manual corrections: `$XDG_CONFIG_HOME/murmur-ime/corrections.json`;
+- automatically maintained adaptive correction memory:
+  `$XDG_CONFIG_HOME/murmur-ime/adaptive-corrections.json`.
 
 If `XDG_DATA_HOME` or `XDG_CONFIG_HOME` is unset, the standard
 `~/.local/share` and `~/.config` defaults apply. The generated service records
-the resolved config, vocabulary, and correction paths, so a custom XDG config
-root is used consistently even if it is absent from the systemd manager's
-environment.
+the resolved config, vocabulary, manual-correction, and adaptive-correction
+paths, so a custom XDG config root is used consistently even if it is absent
+from the systemd manager's environment.
 
 The engine service starts after installation and is enabled for subsequent
 graphical logins. Its unit is attached to `graphical-session.target`, rather
@@ -73,9 +75,9 @@ than the earlier user-manager `default.target`, so IBus and the graphical
 session environment are available first. A temporary IBus startup delay is
 retried every two seconds without exhausting the unit's start-rate limit. The
 voice unit is installed but is enabled and started only when the key file,
-optional vocabulary, and optional corrections already pass the daemon's
-ownership, permission, schema, and content checks. Configure a missing or
-invalid key in the GTK4 settings window:
+optional vocabulary, manual corrections, and an existing adaptive ledger
+already pass the daemon's ownership, permission, schema, and content checks.
+Configure a missing or invalid key in the GTK4 settings window:
 
 ```bash
 ~/.local/share/murmur-ime/open-voice-input-settings
@@ -107,28 +109,57 @@ does not enable the voice unit until the config validates, and exit status 2
 is excluded from restart, so a later configuration error cannot create a
 restart loop.
 
-After replacing an existing key, restart the idle service so the new in-memory
-configuration is used:
-
-```bash
-systemctl --user restart murmur-ime-voice.service
-```
-
 Optional user-confirmed recognition corrections are edited in the native
-settings window. They are private `recognized as` to `correct to` pairs, loaded
-once at service start, and sent in Volcengine's documented provider-side
-`context.correct_words` map. They are not learned from transcripts and are not
-applied as a local string replacement. Saving either vocabulary or corrections
-does not restart the service automatically.
+settings window. They are private `recognized as` to `correct to` pairs and are
+sent in Volcengine's documented provider-side `context.correct_words` map.
+They are not applied as a local string replacement.
 
-The optional explicit vocabulary can be edited separately and then loaded by
-restarting the idle daemon:
+The optional explicit vocabulary can be edited separately:
 
 ```bash
 ~/.local/share/murmur-ime/murmur-voice-daemon vocabulary \
   --vocabulary ~/.config/murmur-ime/vocabulary.json
-systemctl --user restart murmur-ime-voice.service
 ```
+
+The key, vocabulary, manual corrections, and adaptive ledger are reloaded
+before every new dictation. Saving a change never mutates an active recording;
+the next start/idle toggle uses it without a daemon restart. A newly invalid or
+unsafe file fails that start before microphone/provider use rather than falling
+back to stale in-memory values.
+
+### Adaptive correction observation
+
+This observation is enabled by default in the current development branch after
+a nonempty authoritative final; the settings window does not yet provide a
+disable switch. It is event-driven and does not poll application text.
+
+After an authoritative final is committed, the daemon enters a bounded
+observation state for at most five seconds. If the same focused application
+supports IBus surrounding text and the user makes exactly one replacement
+inside the committed span, the daemon can append a bounded learned pair to
+`adaptive-corrections.json`. It rejects insertions, deletions, multiple edits,
+sentence polishing, changes outside the original span, focus/private-context
+changes, timeout, and unsupported surrounding text. The next `toggle` finishes
+observation early and proceeds to the next dictation.
+
+The changed block is limited to three lexical tokens on each side and must
+meet a conservative similarity floor. A one-character source must expand
+through an unchanged adjacent lexical token; case-only spelling corrections
+remain eligible.
+
+The ledger stores only wrong/canonical strings of at most 64 Unicode characters
+per side, state, and support count. It stores no separate transcript or
+surrounding snapshot, audio, timestamp, or document context, and the observer
+does not use clipboard, AT-SPI, or global keyboard monitoring. Manual
+`corrections.json` entries take priority. Conflicted, overlapping, and cyclic
+adaptive entries, including source/canonical cascades, are suppressed; the
+combined provider request is still capped at 50 correction pairs.
+
+During this five-second transition window `murmur-voice` remains the selected
+IBus engine. Ordinary direct key events pass through to the application, but
+the previous Rime/IBus engine is unavailable until observation completes or is
+ended early. This limitation goes away only with the planned combined librime
+engine.
 
 The service may run at login, but it is idle: it does not open the microphone
 or connect to Volcengine until an explicit `start` or `toggle` request. Bind a
@@ -229,5 +260,6 @@ files while any managed daemon remains. Only if the current engine is exactly
 `murmur-voice` does it restore and verify the recorded engine; failure is a hard
 stop, never a warning followed by deletion. The managed runtime and units move
 to same-filesystem quarantine before final deletion so an interrupted
-uninstall can roll back. The private API-key, vocabulary, and correction files
-are retained, and no Rime program or user database is touched.
+uninstall can roll back. The private API-key, vocabulary, manual-correction,
+and adaptive-correction files are retained, and no Rime program or user
+database is touched.

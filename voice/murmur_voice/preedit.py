@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -53,6 +54,22 @@ class AcquireResult(Enum):
     ACQUIRED = "acquired"
     UNAVAILABLE = "unavailable"
     REJECTED = "rejected"
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ObservationSnapshot:
+    """One bounded post-commit surrounding-text observation.
+
+    Text is deliberately hidden from reprs and must never be logged. Offsets
+    are Unicode code-point positions in ``baseline_text``/``current_text``.
+    """
+
+    baseline_text: str
+    committed_start: int
+    committed_end: int
+    current_text: str
+    cursor: int
+    anchor: int
 
 
 def _default_proxy_factory() -> Gio.DBusProxy:
@@ -240,14 +257,69 @@ class PreeditClient:
         with self._lock:
             if not self._valid_event(utterance_id, revision, text):
                 return False
+            accepted = self._call_bool(
+                "Final",
+                GLib.Variant("(sts)", (utterance_id, revision, text)),
+            )
+            if accepted:
+                self._last_revision = revision
+                # Keep murmur-voice selected for the short observation lease.
+                # finish_observation(), cancel(), or close() always restores it.
+                return True
+            # A timeout can hide a Final that the engine already accepted.
+            # Best-effort Cancel before dropping the utterance releases that
+            # possible observation lease; it is harmless after an explicit
+            # rejection and never attempts to undo already committed text.
+            self._call_optional_bool(
+                "Cancel",
+                GLib.Variant("(s)", (utterance_id,)),
+                log_failure=False,
+            )
+            self._restore_original_engine()
+            self._clear_session_state()
+            return False
+
+    def finish_observation(self, utterance_id: str) -> ObservationSnapshot | None:
+        """Consume one engine observation and always restore the prior engine."""
+
+        with self._lock:
+            if utterance_id != self._utterance_id:
+                return None
             try:
-                accepted = self._call_bool(
-                    "Final",
-                    GLib.Variant("(sts)", (utterance_id, revision, text)),
+                unpacked = self._call_unpacked(
+                    "FinishObservation",
+                    GLib.Variant("(s)", (utterance_id,)),
                 )
-                if accepted:
-                    self._last_revision = revision
-                return accepted
+                if (
+                    not isinstance(unpacked, tuple)
+                    or len(unpacked) != 7
+                    or type(unpacked[0]) is not bool
+                    or not isinstance(unpacked[1], str)
+                    or type(unpacked[2]) is not int
+                    or type(unpacked[3]) is not int
+                    or not isinstance(unpacked[4], str)
+                    or type(unpacked[5]) is not int
+                    or type(unpacked[6]) is not int
+                    or not unpacked[0]
+                ):
+                    return None
+                baseline, start, end, current, cursor, anchor = unpacked[1:]
+                if (
+                    not self._valid_text(baseline)
+                    or not self._valid_text(current)
+                    or not (0 <= start <= end <= len(baseline))
+                    or not (0 <= cursor <= len(current))
+                    or not (0 <= anchor <= len(current))
+                ):
+                    return None
+                return ObservationSnapshot(
+                    baseline_text=baseline,
+                    committed_start=start,
+                    committed_end=end,
+                    current_text=current,
+                    cursor=cursor,
+                    anchor=anchor,
+                )
             finally:
                 self._restore_original_engine()
                 self._clear_session_state()
@@ -288,6 +360,22 @@ class PreeditClient:
         *,
         log_failure: bool = True,
     ) -> bool | None:
+        unpacked = self._call_unpacked(method, parameters, log_failure=log_failure)
+        if (
+            not isinstance(unpacked, tuple)
+            or len(unpacked) != 1
+            or type(unpacked[0]) is not bool
+        ):
+            return None
+        return unpacked[0]
+
+    def _call_unpacked(
+        self,
+        method: str,
+        parameters: GLib.Variant,
+        *,
+        log_failure: bool = True,
+    ) -> object | None:
         try:
             if self._proxy is None:
                 self._proxy = self._proxy_factory()
@@ -298,20 +386,13 @@ class PreeditClient:
                 self._dbus_timeout_ms,
                 None,
             )
-            unpacked = result.unpack()
+            return result.unpack()
         except Exception:
             # Remote exceptions may reflect method parameters, so never log
             # their string form.
             if log_failure:
                 logger.warning("Murmur preedit D-Bus call failed (%s)", method)
             return None
-        if (
-            not isinstance(unpacked, tuple)
-            or len(unpacked) != 1
-            or type(unpacked[0]) is not bool
-        ):
-            return None
-        return unpacked[0]
 
     def _proxy_has_owner(self) -> bool | None:
         try:
@@ -326,9 +407,7 @@ class PreeditClient:
         original_engine = self._original_engine or self._pending_restore_engine
         if not self._switched_engine or original_engine is None:
             return True
-        restored = self._set_engine(original_engine)
-        if restored:
-            restored = self._clear_restore_state(original_engine)
+        restored = self._restore_engine_preserving_user_choice(original_engine)
         if restored:
             self._pending_restore_engine = None
         else:
@@ -340,12 +419,21 @@ class PreeditClient:
         engine = self._pending_restore_engine
         if engine is None:
             return True
-        if not self._set_engine(engine):
-            return False
-        if not self._clear_restore_state(engine):
+        if not self._restore_engine_preserving_user_choice(engine):
             return False
         self._pending_restore_engine = None
         return True
+
+    def _restore_engine_preserving_user_choice(self, engine: str) -> bool:
+        current = self.current_engine()
+        if current is None:
+            return False
+        if current == PREEDIT_ENGINE and not self._set_engine(engine):
+            return False
+        # If current is neither murmur nor the saved engine, the user selected
+        # a newer real engine during the observation. Preserve that choice and
+        # retire only our stale crash-recovery record.
+        return self._clear_restore_state(engine)
 
     def _recover_saved_engine(self) -> bool:
         state = self._state()

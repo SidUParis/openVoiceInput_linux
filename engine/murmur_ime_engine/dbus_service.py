@@ -15,6 +15,7 @@ from gi.repository import Gio, GLib  # noqa: E402
 from .constants import DBUS_INTERFACE, DBUS_NAME, DBUS_PATH
 from .policy import valid_preedit_text, valid_utterance_id
 from .registry import EngineRegistry
+from .session import ObservationResult
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,16 @@ INTROSPECTION_XML = f"""
       <arg name="revision" type="t" direction="in"/>
       <arg name="text" type="s" direction="in"/>
       <arg name="accepted" type="b" direction="out"/>
+    </method>
+    <method name="FinishObservation">
+      <arg name="utterance_id" type="s" direction="in"/>
+      <arg name="accepted" type="b" direction="out"/>
+      <arg name="baseline_text" type="s" direction="out"/>
+      <arg name="committed_start" type="u" direction="out"/>
+      <arg name="committed_end" type="u" direction="out"/>
+      <arg name="current_text" type="s" direction="out"/>
+      <arg name="cursor" type="u" direction="out"/>
+      <arg name="anchor" type="u" direction="out"/>
     </method>
     <method name="Cancel">
       <arg name="utterance_id" type="s" direction="in"/>
@@ -164,6 +175,26 @@ class PreeditDBusService:
     def _return_bool(invocation: Gio.DBusMethodInvocation, accepted: bool) -> None:
         invocation.return_value(GLib.Variant("(b)", (accepted,)))
 
+    @staticmethod
+    def _return_observation(
+        invocation: Gio.DBusMethodInvocation,
+        result: ObservationResult,
+    ) -> None:
+        invocation.return_value(
+            GLib.Variant(
+                "(bsuusuu)",
+                (
+                    result.accepted,
+                    result.baseline_text,
+                    result.committed_start,
+                    result.committed_end,
+                    result.current_text,
+                    result.cursor,
+                    result.anchor,
+                ),
+            )
+        )
+
     def _on_method_call(
         self,
         connection: Gio.DBusConnection,
@@ -174,6 +205,20 @@ class PreeditDBusService:
         parameters: GLib.Variant,
         invocation: Gio.DBusMethodInvocation,
     ) -> None:
+        if method_name == "FinishObservation":
+            try:
+                (utterance_id,) = parameters.unpack()
+                result = (
+                    self._registry.finish_observation(sender, utterance_id)
+                    if valid_utterance_id(utterance_id)
+                    else ObservationResult()
+                )
+            except Exception:
+                logger.error("Preedit D-Bus method failed")
+                result = ObservationResult()
+            self._return_observation(invocation, result)
+            return
+
         try:
             if method_name == "Acquire":
                 (utterance_id,) = parameters.unpack()

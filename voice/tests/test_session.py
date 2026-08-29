@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import pytest
+
 from murmur_voice.audio import AudioDeviceError
 from murmur_voice.config import VoiceConfig
-from murmur_voice.preedit import AcquireResult
-from murmur_voice.session import VOICE_START_TIMEOUT_SECONDS, VoiceSession
+from murmur_voice.config import ConfigError
+from murmur_voice.preedit import AcquireResult, ObservationSnapshot
+from murmur_voice.session import (
+    ADAPTIVE_OBSERVATION_FINISH_MARGIN_SECONDS,
+    ADAPTIVE_OBSERVATION_SECONDS,
+    VOICE_START_TIMEOUT_SECONDS,
+    VoiceSession,
+)
 from murmur_voice.state import VoiceState
 
 
@@ -65,6 +73,8 @@ class FakePreedit:
         self.calls = []
         self.closed = 0
         self.acquire_hook = None
+        self.final_hook = None
+        self.observation_result = None
 
     def acquire_result(self, utterance_id):
         self.order.append("preedit-acquire")
@@ -79,11 +89,17 @@ class FakePreedit:
 
     def final(self, utterance_id, revision, text):
         self.calls.append(("final", utterance_id, revision, text))
+        if self.final_hook is not None:
+            self.final_hook()
         return self.final_result
 
     def cancel(self, utterance_id):
         self.calls.append(("cancel", utterance_id))
         return True
+
+    def finish_observation(self, utterance_id):
+        self.calls.append(("finish-observation", utterance_id))
+        return self.observation_result
 
     def close(self):
         self.closed += 1
@@ -282,6 +298,14 @@ def test_partials_and_authoritative_final_use_strict_revisions_once():
     asr.on_finish()
     asr.on_finish()
 
+    assert session.state is VoiceState.OBSERVING
+    assert asr.disconnected == 1
+    assert timers[2].seconds == pytest.approx(
+        ADAPTIVE_OBSERVATION_SECONDS - ADAPTIVE_OBSERVATION_FINISH_MARGIN_SECONDS,
+        abs=0.01,
+    )
+    timers[2].fire()
+
     assert session.state is VoiceState.IDLE
     assert [call[0] for call in preedit.calls] == [
         "acquire",
@@ -289,11 +313,47 @@ def test_partials_and_authoritative_final_use_strict_revisions_once():
         "partial",
         "partial",
         "final",
+        "finish-observation",
     ]
     assert preedit.calls[1][2:] == (1, "")
     assert preedit.calls[2][2] == 2
     assert preedit.calls[3][2] == 3
     assert preedit.calls[4][2:] == (4, "第二版")
+
+
+@pytest.mark.parametrize("failure", ("factory", "start"))
+def test_observation_timer_failure_cancels_and_restores_immediately(failure):
+    order = []
+    asr = FakeASR(order)
+    audio = FakeAudio(order)
+    preedit = FakePreedit(order)
+    timers = []
+
+    def timer_factory(seconds, callback):
+        if len(timers) == 2 and failure == "factory":
+            raise RuntimeError("no timer")
+        timer = FakeTimer(seconds, callback)
+        timers.append(timer)
+        if len(timers) == 3 and failure == "start":
+            timer.start = lambda: (_ for _ in ()).throw(RuntimeError("no thread"))
+        return timer
+
+    session = VoiceSession(
+        VoiceConfig("test-key"),
+        asr_client=asr,
+        audio_capture=audio,
+        preedit_client=preedit,
+        timer_factory=timer_factory,
+        utterance_factory=lambda: "utterance-1",
+    )
+    session.start()
+    asr.on_result("final")
+
+    asr.on_finish()
+
+    assert session.state is VoiceState.IDLE
+    assert session.status().code == "adaptive-correction-failed"
+    assert [call[0] for call in preedit.calls][-2:] == ["final", "cancel"]
 
 
 def test_stop_waits_for_final_but_timeout_cancels_without_commit():
@@ -357,9 +417,148 @@ def test_ten_minute_limit_auto_stops_then_accepts_only_provider_final():
     assert timers[2].seconds == 7.0
     asr.on_result("authoritative")
     asr.on_finish()
+    assert session.state is VoiceState.OBSERVING
+    timers[3].fire()
     assert session.state is VoiceState.IDLE
     assert [call[0] for call in preedit.calls].count("final") == 1
-    assert preedit.calls[-1][-1] == "authoritative"
+    final_call = next(call for call in preedit.calls if call[0] == "final")
+    assert final_call[-1] == "authoritative"
+
+
+def test_observation_learns_once_after_provider_and_capture_are_closed():
+    learned = []
+    session, asr, audio, preedit, timers, order = _session(
+        observation_handler=lambda snapshot: learned.append(snapshot) or True,
+    )
+    preedit.observation_result = ObservationSnapshot(
+        baseline_text="奔驰 mark",
+        committed_start=0,
+        committed_end=7,
+        current_text="bench mark",
+        cursor=10,
+        anchor=10,
+    )
+    session.start()
+    asr.on_result("奔驰 mark")
+
+    asr.on_finish()
+
+    assert session.state is VoiceState.OBSERVING
+    assert audio.callback is None
+    assert asr.disconnected == 1
+    assert timers[2].seconds == pytest.approx(4.5, abs=0.01)
+    assert learned == []
+
+    timers[2].fire()
+    timers[2].fire()
+
+    assert session.state is VoiceState.IDLE
+    assert learned == [preedit.observation_result]
+    assert session.status().code == "adaptive-correction-learned"
+    assert [call[0] for call in preedit.calls].count("finish-observation") == 1
+
+
+def test_observation_timer_accounts_for_the_final_dbus_round_trip():
+    now = [10.0]
+    session, asr, audio, preedit, timers, order = _session(
+        monotonic=lambda: now[0],
+        observation_handler=lambda snapshot: False,
+    )
+    preedit.final_hook = lambda: now.__setitem__(0, 10.25)
+    session.start()
+    asr.on_result("Ostro")
+
+    asr.on_finish()
+
+    assert session.state is VoiceState.OBSERVING
+    assert timers[2].seconds == (
+        ADAPTIVE_OBSERVATION_SECONDS - ADAPTIVE_OBSERVATION_FINISH_MARGIN_SECONDS - 0.25
+    )
+
+
+def test_cancel_during_observation_discards_and_restores_without_learning():
+    learned = []
+    session, asr, audio, preedit, timers, order = _session(
+        observation_handler=lambda snapshot: learned.append(snapshot) or True,
+    )
+    session.start()
+    asr.on_result("private final")
+    asr.on_finish()
+
+    reply = session.cancel()
+    timers[2].fire()
+
+    assert reply.code == "cancelled"
+    assert session.state is VoiceState.IDLE
+    assert learned == []
+    assert [call[0] for call in preedit.calls].count("cancel") == 1
+    assert [call[0] for call in preedit.calls].count("finish-observation") == 0
+
+
+def test_delayed_observation_timer_restores_but_does_not_learn_after_deadline():
+    now = [0.0]
+    learned = []
+    session, asr, audio, preedit, timers, order = _session(
+        monotonic=lambda: now[0],
+        observation_handler=lambda snapshot: learned.append(snapshot) or True,
+    )
+    preedit.observation_result = ObservationSnapshot(
+        baseline_text="Ostro",
+        committed_start=0,
+        committed_end=5,
+        current_text="Austral",
+        cursor=7,
+        anchor=7,
+    )
+    session.start()
+    asr.on_result("Ostro")
+    asr.on_finish()
+    now[0] = ADAPTIVE_OBSERVATION_SECONDS + 0.001
+
+    timers[2].fire()
+
+    assert session.state is VoiceState.IDLE
+    assert learned == []
+    assert [call[0] for call in preedit.calls].count("finish-observation") == 1
+
+
+def test_toggle_during_observation_finishes_then_starts_next_utterance():
+    session, asr, audio, preedit, timers, order = _session()
+    session.start()
+    asr.on_result("first")
+    asr.on_finish()
+
+    reply = session.toggle()
+
+    assert reply.code == "started"
+    assert session.state is VoiceState.STARTING
+    assert [call[0] for call in preedit.calls].count("finish-observation") == 1
+    assert [call[0] for call in preedit.calls].count("acquire") == 2
+
+
+def test_invalid_hot_reload_context_never_opens_microphone_or_network():
+    order = []
+    audio = FakeAudio(order)
+    preedit = FakePreedit(order)
+
+    def fail_factory():
+        raise ConfigError("private value must not be logged")
+
+    session = VoiceSession(
+        VoiceConfig("test-key"),
+        asr_client_factory=fail_factory,
+        audio_capture=audio,
+        preedit_client=preedit,
+        utterance_factory=lambda: "utterance-1",
+    )
+
+    reply = session.start()
+
+    assert reply.code == "recognition-context-invalid"
+    assert reply.state is VoiceState.IDLE
+    assert audio.started == 0
+    assert order == ["preedit-acquire", "audio-stop"]
+    assert [call[0] for call in preedit.calls] == ["acquire", "cancel"]
 
 
 def test_cancelled_old_duration_timer_cannot_stop_a_new_session():

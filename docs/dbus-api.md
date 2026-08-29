@@ -11,6 +11,44 @@ The currently implemented transition prototype uses the smaller
 target contract after the voice daemon and librime-capable engine are combined;
 it is not yet implemented.
 
+## Implemented transition bridge
+
+The current `org.murmur.IME.Preedit1` interface at
+`/org/murmur/IME/Preedit1` implements:
+
+```text
+Acquire(utterance_id: s) -> (accepted: b)
+Partial(utterance_id: s, revision: t, text: s) -> (accepted: b)
+Final(utterance_id: s, revision: t, text: s) -> (accepted: b)
+FinishObservation(utterance_id: s)
+  -> (accepted: b,
+      baseline_text: s,
+      committed_start: u,
+      committed_end: u,
+      current_text: s,
+      cursor: u,
+      anchor: u)
+Cancel(utterance_id: s) -> (accepted: b)
+```
+
+An accepted `Final` commits exactly once and leaves the sender-, utterance-,
+and focus-bound session in a post-commit observation state. The first newer
+IBus surrounding-text update becomes the baseline only when it has no selection
+and the committed final appears exactly before its cursor. Later bounded
+updates replace the current snapshot. `FinishObservation` consumes that state
+once; `accepted=false` with empty strings and zero offsets means that the
+client did not support surrounding text or no trustworthy baseline arrived.
+This does not roll back or otherwise change the already accepted final commit.
+
+Focus loss, engine disable, cancellation, and disappearance of the D-Bus sender
+discard the observation. GTK may issue an input-context reset as part of an
+ordinary same-focus edit; during observation this only requests a fresh
+surrounding snapshot, while a reset before Final still invalidates preedit. A
+mismatched sender or utterance cannot read or consume the observation. Both
+returned texts use the same 4,096-codepoint and 16-KiB UTF-8 bounds as preedit
+text, and all offsets are Unicode character indices into their associated
+strings.
+
 ## Service
 
 ```text

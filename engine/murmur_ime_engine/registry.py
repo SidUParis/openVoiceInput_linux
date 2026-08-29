@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from .session import ObservationResult
+
 
 class EngineTarget(Protocol):
     @property
@@ -23,6 +25,10 @@ class EngineTarget(Protocol):
     def final(
         self, owner: str, utterance_id: str, revision: int, text: str
     ) -> bool: ...
+
+    def finish_observation(
+        self, owner: str, utterance_id: str
+    ) -> ObservationResult: ...
 
     def cancel(self, owner: str, utterance_id: str) -> bool: ...
 
@@ -87,9 +93,22 @@ class EngineRegistry:
         if target is None:
             return False
         accepted = target.final(owner, utterance_id, revision, text)
-        if accepted or not target.has_active_session:
+        if not target.has_active_session:
             self._target = None
         return accepted
+
+    def finish_observation(
+        self,
+        owner: str,
+        utterance_id: str,
+    ) -> ObservationResult:
+        target = self._target
+        if target is None:
+            return ObservationResult()
+        result = target.finish_observation(owner, utterance_id)
+        if result.consumed or not target.has_active_session:
+            self._target = None
+        return result
 
     def cancel(self, owner: str, utterance_id: str) -> bool:
         target = self._target

@@ -3,8 +3,10 @@
 Review basis: the implementation and documentation prepared together for the
 `v0.1.0-alpha.1` preview, reviewed on 2026-08-26. This document covers the
 current temporary IBus-engine switch, standalone voice daemon, and bounded
-microphone-route recovery. It does not claim that the future combined librime
-engine has been implemented or reviewed.
+microphone-route recovery. The five-second adaptive-correction boundary was
+added for the post-alpha feature branch on 2026-08-29. It does not claim that
+the future combined librime engine, recording retention, or local model
+training has been implemented or reviewed.
 
 ## Security and privacy objectives
 
@@ -16,28 +18,32 @@ Open Voice Input Linux is designed to preserve these properties:
    acquire voice input.
 3. Cancelling, changing focus, losing the daemon, or receiving a stale result
    never redirects text through a clipboard fallback.
-4. The provider key, vocabulary, corrections, audio, and recognised text are
-   not bundled or written to logs.
+4. The provider key, vocabulary, manual/adaptive corrections, audio, and
+   recognised text are not bundled or written to logs.
 5. Network delay or failure cannot block ordinary keyboard input, grow an
    unbounded audio queue, or leave the machine permanently on the temporary
    voice-only engine.
 6. Installation, upgrade, and uninstall modify only project-owned paths and
    never read, write, lock, or remove the user's stock Rime database.
-7. An offline preview accepted by the verifier contains the exact committed
+7. Adaptive correction observes only one bounded post-commit replacement in
+   the same focused context; ambiguous edits and context changes fail closed.
+8. An offline preview accepted by the verifier contains the exact committed
    source payload and the exact locked wheelhouse described by its manifest
    and SBOM.
 
 ## Assets and trust boundaries
 
 Sensitive assets are the provider API key, microphone audio, live/final text,
-explicit vocabulary and correction pairs, the focused input context, the
-previous IBus engine, the selected audio source/profile, and the user's
-existing Rime data.
+explicit vocabulary, manual/adaptive correction pairs, the focused input
+context and its bounded surrounding-text snapshot, the previous IBus engine,
+the selected audio source/profile, and the user's existing Rime data.
 
 The current boundaries are:
 
 - The IBus engine is keyboard-critical and performs no microphone or network
-  work.
+  work. For adaptive correction it consumes only IBus surrounding text from
+  the already acquired, focused input context; it does not use clipboard,
+  AT-SPI, or global keyboard monitoring.
 - The voice daemon owns audio capture and the provider connection. It sends
   partial/final events to the engine over the user's session D-Bus.
 - PulseAudio/PipeWire and PortAudio are host trust boundaries. The daemon may
@@ -77,15 +83,54 @@ Text is bounded by Unicode code points and encoded byte size before display.
 Evidence: `engine/murmur_ime_engine/policy.py` and
 `engine/tests/test_policy.py`.
 
+### Adaptive-correction pollution or contextual overreach
+
+The observation lease begins only after one authoritative final commit and
+lasts at most five seconds. The engine first anchors that committed span from a
+newer IBus surrounding-text revision. Finish is accepted only from the same
+D-Bus sender and utterance while the same input context remains focused and
+non-private. Focus-out, disable, owner disappearance, timeout, missing
+surrounding-text support, or failure to anchor the span yields no learned pair.
+GTK can reset the input context as part of an ordinary same-focus edit, so an
+observation-time reset only requests a fresh surrounding snapshot; the focus
+token and anchored-span checks remain authoritative. A reset before Final still
+invalidates the voice preedit session.
+
+The daemon accepts exactly one replacement inside the anchored span. Pure
+insertions/deletions, multiple edits, broad polishing, outside-span changes,
+a selection still active at Finish, unchanged values, invalid controls, and either side over 64
+Unicode characters are rejected. The changed block is additionally limited to
+three lexical tokens per side and a conservative similarity floor. A
+one-character source must expand through unchanged adjacent lexical context;
+case-only spelling corrections are permitted. The persisted adaptive ledger
+contains only the bounded pair, state, and support count, not a separate transcript,
+surrounding snapshot, or edit stream. Manual corrections take priority.
+Normalized source conflicts, source/canonical overlaps, provider cascades, and
+cycles are suppressed; the combined provider view remains capped at 50 pairs. This constrains
+accidental fact pollution and prevents the ledger from silently overriding an
+explicit user mapping.
+
+The observation path does not read clipboard contents, AT-SPI, global keyboard
+events, microphone audio, other windows, or the Rime database. It transiently
+processes the bounded current-field IBus snapshot and does not persist it. It
+does not apply a local rewrite to text already committed by IBus. The next
+toggle can finish the lease early; configuration is loaded only for the next
+provider request.
+
+Evidence: `engine/murmur_ime_engine/ibus_engine.py`,
+`voice/murmur_voice/adaptive_correction.py`,
+`voice/murmur_voice/adaptive_store.py`, and their boundary tests.
+
 ### Credential disclosure or unsafe local files
 
 The CLI uses a masked prompt and never accepts a key in argv. The GTK window
 does not preload the stored key and clears the entry after a save attempt.
-Key, vocabulary, and correction files use a private `0700` directory and
-`0600` regular files, reject links/foreign ownership/public modes/oversize or
-unknown fields, and are replaced atomically. Key removal requires the managed
-voice service to be explicitly inactive. Logs contain fixed status/error
-classes rather than secret or dictated values.
+Key, vocabulary, manual-correction, and adaptive-correction files use a private
+`0700` directory and `0600` regular files, reject links/foreign
+ownership/public modes/oversize or unknown fields, and are replaced
+atomically. Key removal requires the managed voice service to be explicitly
+inactive. Logs contain fixed status/error classes rather than secret or
+dictated values.
 
 Evidence: `voice/murmur_voice/config.py`,
 `voice/murmur_voice/settings_controller.py`, and their tests.
@@ -129,11 +174,14 @@ their audio-route, deadline, focus-loss, and failure-order tests.
 ### Crash or engine-restoration failure
 
 The previous IBus engine is recorded in a private, validated runtime state
-before switching. Normal final/cancel restores it. Startup and systemd
-`ExecStopPost` retry residual restoration after a crash. A stale state is
-cleared without overriding a different real engine that the user selected.
-Install and uninstall retain recovery material and keep services stopped when
-restoration cannot be proven.
+before switching. Normal final starts a correction-observation lease of at most
+five seconds; its completion, the next toggle, cancel, or failure restores the
+exact previous engine. Focus loss invalidates the observation immediately, but
+without a reverse focus signal the daemon may restore only at the lease
+deadline. Startup and systemd `ExecStopPost` retry residual restoration after a
+crash. A stale state is cleared without overriding a different real engine that
+the user selected. Install and uninstall retain recovery material and keep
+services stopped when restoration cannot be proven.
 
 Evidence: `voice/murmur_voice/engine_restore.py`, the engine-restore tests,
 and installer rollback/process-race tests.
@@ -187,6 +235,12 @@ fingerprint before and after install/upgrade/uninstall/reinstall.
   commit or cancel the visible composition. Automatic refusal requires the
   future combined librime-capable engine. A desktop-global shortcut/indicator
   and broad Wayland/application matrix also remain future work.
+- After final commit, the voice-only engine remains selected during the
+  adaptive observation for at most five seconds. Direct keys pass through to
+  the application, but stock Rime or another previous IBus engine cannot
+  compose until restoration. The next toggle shortens this interval. This is a
+  usability limitation of the transition architecture, not a permanent
+  combined-engine design.
 - System Python, distribution packages, IBus, GTK, PortAudio, systemd, and the
   kernel are trusted host components and are not covered by the wheelhouse
   SBOM.
@@ -219,6 +273,7 @@ gates; immutable release status must be verified immediately after publication.
 
 Re-review is required before adding a provider, changing D-Bus/control-socket
 ownership, reading application context or clipboard data, adding automatic
-learning, changing secret storage, vendoring Rime data, installing with
-privileges, or replacing the temporary engine with the combined librime
-engine.
+audio retention or model training, broadening adaptive observation beyond the
+anchored IBus span, changing conflict/overlap/cycle policy, changing secret
+storage, vendoring Rime data, installing with privileges, or replacing the
+temporary engine with the combined librime engine.

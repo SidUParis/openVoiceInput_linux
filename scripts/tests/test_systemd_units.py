@@ -53,6 +53,7 @@ class SystemdUnitTests(unittest.TestCase):
                 "VOICE_CONFIG": "/dev/null",
                 "VOICE_VOCABULARY": "/tmp/vocabulary.json",
                 "VOICE_CORRECTIONS": "/tmp/corrections.json",
+                "VOICE_ADAPTIVE_CORRECTIONS": "/tmp/adaptive-corrections.json",
             },
         )
 
