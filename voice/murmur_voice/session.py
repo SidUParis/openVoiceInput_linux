@@ -9,7 +9,7 @@ import uuid
 from typing import Any
 
 from .audio import AudioCapture, AudioDeviceError
-from .config import VoiceConfig
+from .config import ConfigError, VoiceConfig
 from .preedit import AcquireResult, PreeditClient
 from .state import CommandReply, VoiceState
 from .volcengine import AudioBackpressureError, VolcengineASRClient
@@ -30,6 +30,8 @@ VOICE_START_TIMEOUT_SECONDS = 35.0
 # A timed-out acquired session can spend one 250 ms D-Bus Cancel plus one
 # pessimistic 7 s IBus restore before replying to the control client.
 VOICE_START_CLEANUP_TIMEOUT_SECONDS = 8.0
+ADAPTIVE_OBSERVATION_SECONDS = 5.0
+ADAPTIVE_OBSERVATION_FINISH_MARGIN_SECONDS = 0.5
 
 
 class _VoiceStartTimeout(RuntimeError):
@@ -56,13 +58,15 @@ class VoiceSession:
         max_recording_seconds: float = 600.0,
         monotonic: Any | None = None,
         start_timeout_seconds: float = VOICE_START_TIMEOUT_SECONDS,
+        observation_handler: Any | None = None,
+        observation_seconds: float = ADAPTIVE_OBSERVATION_SECONDS,
     ) -> None:
-        provider_settings = config.provider_settings()
         if asr_client_factory is not None:
             self._asr_factory = asr_client_factory
         elif asr_client is not None:
             self._asr_factory = lambda: asr_client
         else:
+            provider_settings = config.provider_settings()
             self._asr_factory = lambda: VolcengineASRClient(provider_settings)
         self._asr: Any | None = None
         self._audio = audio_capture or AudioCapture()
@@ -72,6 +76,8 @@ class VoiceSession:
         self._max_recording_seconds = max(1.0, min(600.0, float(max_recording_seconds)))
         self._monotonic = monotonic or time.monotonic
         self._start_timeout_seconds = max(1.0, float(start_timeout_seconds))
+        self._observation_handler = observation_handler
+        self._observation_seconds = max(0.1, min(30.0, float(observation_seconds)))
 
         self._lock = threading.RLock()
         self._state = VoiceState.IDLE
@@ -82,6 +88,8 @@ class VoiceSession:
         self._warning_timer: Any | None = None
         self._duration_warning = False
         self._final_timer: Any | None = None
+        self._observation_timer: Any | None = None
+        self._observation_deadline: float | None = None
         self._last_error_code = "none"
         self._closed = False
         self._session_serial = 0
@@ -194,6 +202,10 @@ class VoiceSession:
                 logger.warning("Focused preedit was lost during microphone preflight")
                 self._abort_locked("preedit-lost")
                 return CommandReply(False, "preedit-lost", self._state)
+            except ConfigError:
+                logger.error("Recognition context could not be loaded safely")
+                self._abort_locked("recognition-context-invalid")
+                return CommandReply(False, "recognition-context-invalid", self._state)
             except AudioDeviceError:
                 logger.error("No usable microphone is available")
                 self._abort_locked("microphone-unavailable")
@@ -240,6 +252,9 @@ class VoiceSession:
     def toggle(self) -> CommandReply:
         with self._lock:
             state = self._state
+            if state is VoiceState.OBSERVING:
+                self._finish_observation_locked(self._session_serial)
+                state = self._state
         if state is VoiceState.IDLE:
             return self.start()
         if state in (VoiceState.STARTING, VoiceState.RECORDING):
@@ -299,7 +314,12 @@ class VoiceSession:
             self._cancel_final_timer_locked()
             utterance_id = self._utterance_id
             accepted = False
+            observation_deadline = None
             if self._latest_text:
+                # Start the window before the synchronous Final D-Bus call.
+                # The engine starts its own bound while handling that call, so
+                # this side will finish first even after round-trip latency.
+                observation_deadline = self._monotonic() + self._observation_seconds
                 accepted = self._preedit.final(
                     utterance_id,
                     self._revision + 1,
@@ -313,9 +333,43 @@ class VoiceSession:
                 # harmless if final() already cleared the client session.
                 self._preedit.cancel(utterance_id)
                 self._last_error_code = "preedit-final-rejected"
-            else:
+                self._reset_provider_locked()
+                return
+            if not self._latest_text:
                 self._last_error_code = "none"
-            self._reset_provider_locked()
+                self._reset_provider_locked()
+                return
+
+            self._last_error_code = "none"
+            self._disconnect_provider_locked()
+            self._revision = 0
+            self._latest_text = ""
+            self._duration_warning = False
+            self._state = VoiceState.OBSERVING
+            assert observation_deadline is not None
+            self._observation_deadline = observation_deadline
+            remaining = max(
+                0.0,
+                observation_deadline
+                - self._monotonic()
+                - ADAPTIVE_OBSERVATION_FINISH_MARGIN_SECONDS,
+            )
+            try:
+                timer = self._timer_factory(
+                    remaining,
+                    lambda: self._on_observation_timeout(session_serial),
+                )
+                if hasattr(timer, "daemon"):
+                    timer.daemon = True
+                self._observation_timer = timer
+                timer.start()
+            except Exception:
+                # If a thread/timer cannot be armed, immediately cancel the
+                # just-committed observation so murmur-voice cannot remain the
+                # selected IBus engine indefinitely.
+                self._observation_timer = None
+                logger.error("Adaptive observation timer could not be armed")
+                self._abort_locked("adaptive-correction-failed")
 
     def _on_asr_error(
         self, session_serial: int, source: Any, error: BaseException
@@ -382,10 +436,50 @@ class VoiceSession:
             self._duration_warning = True
             logger.info("Voice recording will stop in 60 seconds")
 
+    def _on_observation_timeout(self, session_serial: int) -> None:
+        with self._lock:
+            if (
+                session_serial != self._session_serial
+                or self._state is not VoiceState.OBSERVING
+            ):
+                return
+            self._observation_timer = None
+            self._finish_observation_locked(session_serial)
+
+    def _finish_observation_locked(self, session_serial: int) -> None:
+        if (
+            session_serial != self._session_serial
+            or self._state is not VoiceState.OBSERVING
+        ):
+            return
+        self._cancel_observation_timer_locked()
+        utterance_id = self._utterance_id
+        deadline = self._observation_deadline
+        within_deadline = deadline is not None and self._monotonic() <= deadline
+        snapshot = None
+        if utterance_id is not None:
+            snapshot = self._preedit.finish_observation(utterance_id)
+        learned = False
+        if (
+            within_deadline
+            and snapshot is not None
+            and self._observation_handler is not None
+        ):
+            try:
+                learned = self._observation_handler(snapshot) is True
+            except Exception:
+                # Never include a transcript or pair in the diagnostic.
+                logger.error("Adaptive correction update failed")
+                self._last_error_code = "adaptive-correction-failed"
+        if learned:
+            self._last_error_code = "adaptive-correction-learned"
+        self._clear_sensitive_state_locked()
+
     def _abort_locked(self, code: str) -> None:
         self._cancel_warning_timer_locked()
         self._cancel_recording_timer_locked()
         self._cancel_final_timer_locked()
+        self._cancel_observation_timer_locked()
         utterance_id = self._utterance_id
         try:
             self._audio.stop()
@@ -401,8 +495,13 @@ class VoiceSession:
         self._last_error_code = code
 
     def _reset_provider_locked(self) -> None:
+        self._disconnect_provider_locked()
+        self._clear_sensitive_state_locked()
+
+    def _disconnect_provider_locked(self) -> None:
         self._cancel_warning_timer_locked()
         self._cancel_recording_timer_locked()
+        self._cancel_final_timer_locked()
         try:
             self._audio.stop()
         except Exception:
@@ -411,7 +510,6 @@ class VoiceSession:
         self._asr = None
         if asr is not None:
             asr.disconnect()
-        self._clear_sensitive_state_locked()
 
     def _clear_sensitive_state_locked(self) -> None:
         self._state = VoiceState.IDLE
@@ -419,10 +517,17 @@ class VoiceSession:
         self._revision = 0
         self._latest_text = ""
         self._duration_warning = False
+        self._observation_deadline = None
 
     def _cancel_final_timer_locked(self) -> None:
         timer = self._final_timer
         self._final_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _cancel_observation_timer_locked(self) -> None:
+        timer = self._observation_timer
+        self._observation_timer = None
         if timer is not None:
             timer.cancel()
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 import uuid
@@ -97,6 +98,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="clear the last partial with Cancel instead of committing Final",
     )
+    parser.add_argument("--no-partials", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--observation-trigger", type=str, default=None, help=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--observation-output", type=str, default=None, help=argparse.SUPPRESS
+    )
     args = parser.parse_args()
     if args.delay < 0:
         parser.error("--delay must be zero or greater")
@@ -112,7 +120,8 @@ def run_demo(args: argparse.Namespace) -> None:
 
     revision = 0
     try:
-        for revision, text in enumerate(DEFAULT_PARTIALS, start=1):
+        partials = () if args.no_partials else DEFAULT_PARTIALS
+        for revision, text in enumerate(partials, start=1):
             call_accepted(
                 proxy,
                 "Partial",
@@ -132,6 +141,37 @@ def run_demo(args: argparse.Namespace) -> None:
                 GLib.Variant("(sts)", (utterance_id, revision, args.final_text)),
             )
             print(f"Final {revision}: {args.final_text}")
+            if args.observation_trigger is not None:
+                deadline = time.monotonic() + 8.0
+                while not os.path.exists(args.observation_trigger):
+                    if time.monotonic() >= deadline:
+                        raise DemoRejected("observation edit trigger timed out")
+                    time.sleep(0.05)
+                reply = proxy.call_sync(
+                    "FinishObservation",
+                    GLib.Variant("(s)", (utterance_id,)),
+                    Gio.DBusCallFlags.NONE,
+                    CALL_TIMEOUT_MS,
+                    None,
+                )
+                accepted, baseline, start, end, current, cursor, anchor = reply.unpack()
+                if (
+                    not accepted
+                    or baseline[start:end] != args.final_text
+                    or current == baseline
+                    or not (0 <= cursor <= len(current))
+                    or not (0 <= anchor <= len(current))
+                ):
+                    raise DemoRejected("post-commit observation was unavailable")
+                if args.observation_output is not None:
+                    with open(
+                        args.observation_output,
+                        "x",
+                        encoding="ascii",
+                        opener=lambda path, flags: os.open(path, flags, 0o600),
+                    ) as handle:
+                        handle.write("accepted\n")
+                print("FinishObservation: accepted")
     except BaseException:
         # Make a best-effort cleanup if the demo is interrupted after Acquire.
         try:

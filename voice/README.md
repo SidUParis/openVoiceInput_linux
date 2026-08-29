@@ -4,8 +4,8 @@ This directory contains the first self-contained voice-daemon MVP. It no
 longer imports or runs a separate Doubao Murmur checkout. The foreground
 daemon captures 16 kHz mono PCM, streams it to Volcengine bigmodel_async,
 sends cumulative hypotheses and one authoritative final to the existing
-org.murmur.IME.Preedit1 engine, and restores the previously selected IBus
-engine.
+org.murmur.IME.Preedit1 engine, briefly observes one same-focus correction,
+and then restores the previously selected IBus engine.
 
 There is no transcription window and no clipboard/paste fallback. Transcript
 text appears only as native IBus preedit at the focused caret and is never
@@ -84,10 +84,9 @@ case-insensitive deduplication while retaining the first spelling. NUL, CR,
 LF inside a term, unsafe permissions, symlinks, foreign ownership, invalid
 UTF-8, and unexpected JSON fields are rejected.
 
-The daemon loads the file once when `run` starts. Restart a foreground process,
-or restart an installed user service after changing the list:
-
-    systemctl --user restart murmur-ime-voice.service
+The daemon safely reloads the file before every new dictation. A change affects
+the next dictation without restarting the foreground process or installed user
+service; an invalid replacement fails closed before microphone/provider use.
 
 Each ASR request then sends only those explicit terms to Volcengine using the
 provider's documented `request.context` hotwords JSON string; empty lists omit
@@ -108,14 +107,19 @@ vocabulary. Missing or empty corrections are valid defaults.
 
 The daemon accepts at most 50 pairs, with at most 64 Unicode characters on
 each side. It rejects empty values, control characters, unexpected fields,
-and conflicting duplicate sources. Corrections are loaded once when `run`
-starts, so changing them requires the same explicit service restart as the
-vocabulary.
+and conflicting duplicate sources. Corrections are safely reloaded before each
+new dictation, so changing them does not require a service restart.
 
 Each saved pair is sent with every new dictation in Volcengine's documented
-`request.context.correct_words` map. Nothing is learned automatically, the
-application never reads a previous transcript to create a pair, and the client
-does not run a second local string replacement after ASR. Because Volcengine
+`request.context.correct_words` map. After a nonempty authoritative final, the
+current development branch enables a bounded five-second adaptive observation
+by default. If the same focused field supplies trustworthy IBus surrounding
+text and the user makes one conservative replacement, only that bounded pair,
+state, and support count may be saved in private
+`adaptive-corrections.json`. It does not retain a separate transcript,
+surrounding snapshot, edit stream, or audio. The settings window does not yet
+offer an adaptive disable/manage control. The client never runs a second local
+string replacement after ASR. Because Volcengine
 does not publish request-level pair limits or matching-boundary guarantees,
 this feature is labelled experimental and uses conservative local limits.
 

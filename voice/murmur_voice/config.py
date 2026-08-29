@@ -96,6 +96,14 @@ def default_corrections_path() -> Path:
     return root / "murmur-ime" / "corrections.json"
 
 
+def default_adaptive_corrections_path() -> Path:
+    """Return the private learned-correction ledger path."""
+
+    config_home = os.environ.get("XDG_CONFIG_HOME")
+    root = Path(config_home) if config_home else Path.home() / ".config"
+    return root / "murmur-ime" / "adaptive-corrections.json"
+
+
 def load_config(path: str | os.PathLike[str] | None = None) -> VoiceConfig:
     """Load a regular, user-owned, permission-0600 key-only JSON file."""
 

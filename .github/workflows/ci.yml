@@ -80,6 +80,7 @@ jobs:
               "select-engine.log",
               "probe.log",
               "sender.log",
+              "observation-sender.log",
               "ibus.log",
               "xvfb.log",
           )

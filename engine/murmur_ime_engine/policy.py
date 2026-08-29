@@ -51,3 +51,18 @@ def valid_preedit_text(value: str) -> bool:
     if len(value) > MAX_TEXT_CODEPOINTS or "\x00" in value:
         return False
     return len(value.encode("utf-8")) <= MAX_TEXT_UTF8_BYTES
+
+
+def valid_surrounding_text(value: object, cursor: int, anchor: int) -> bool:
+    """Bound one IBus surrounding snapshot and its character offsets."""
+
+    return (
+        isinstance(value, str)
+        and isinstance(cursor, int)
+        and not isinstance(cursor, bool)
+        and isinstance(anchor, int)
+        and not isinstance(anchor, bool)
+        and 0 <= cursor <= len(value)
+        and 0 <= anchor <= len(value)
+        and valid_preedit_text(value)
+    )

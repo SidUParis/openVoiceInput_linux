@@ -21,10 +21,7 @@ from .settings_controller import (  # noqa: E402
 )
 
 APPLICATION_ID = "io.github.SidUParis.OpenVoiceInputLinux.Settings"
-APPLY_NOTICE = (
-    "Saved locally. The service was not restarted; disable/stop and then "
-    "enable/start it manually to apply the new settings."
-)
+APPLY_NOTICE = "Saved locally. The next dictation loads the new settings."
 
 _SERVICE_LABELS = {
     "active": "running",
@@ -37,6 +34,7 @@ _SERVICE_LABELS = {
 }
 _SESSION_LABELS = {
     "idle": "idle",
+    "observing": "watching for a local correction",
     "recording": "recording",
     "starting": "opening microphone",
     "stopping": "finalizing",
@@ -48,6 +46,9 @@ _STATUS_LABELS = {
     "capture-start-failed": "microphone could not start",
     "final-timeout": "final recognition timed out",
     "microphone-unavailable": "no usable microphone; reconnect or select an input",
+    "adaptive-correction-failed": "adaptive correction could not be saved",
+    "adaptive-correction-learned": "adaptive correction learned for future dictation",
+    "recognition-context-invalid": "recognition context files are invalid or unsafe",
     "preedit-final-rejected": "focused input rejected the final text",
     "preedit-lost": "focused input was lost",
     "preedit-rejected": "focused input rejected dictation",
@@ -166,8 +167,9 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.corrections_help_label = Gtk.Label(
             label=(
                 "Every saved pair is sent to Volcengine with each dictation "
-                "request. Corrections are explicit: this application does not "
-                "learn them automatically."
+                "request. Strict single replacements made during the five-second "
+                "post-dictation window are learned separately for future requests; "
+                "ambiguous or conflicting edits are not activated."
             ),
             xalign=0,
             wrap=True,

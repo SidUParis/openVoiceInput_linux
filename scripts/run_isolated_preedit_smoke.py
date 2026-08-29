@@ -19,6 +19,9 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 SCRIPT = Path(__file__).resolve()
 WINDOW_TITLE = "Open Voice Input Linux Isolated Preedit Probe"
 FINAL_TEXT = "这是一个在光标处实时显示并最终提交的语音输入演示。"
+OBSERVATION_WRONG = "Ostro"
+OBSERVATION_CANONICAL = "Austral"
+EXPECTED_COMMITTED_TEXT = FINAL_TEXT + OBSERVATION_CANONICAL
 PARTIAL_COUNT = 6
 SYSTEM_PATH = "/usr/bin:/bin"
 MINIMUM_RENDERED_PIXEL_CHANGE = 500
@@ -220,10 +223,14 @@ def run_parent(args: argparse.Namespace) -> int:
         engine_log = (output / "engine.log").read_text(encoding="utf-8")
         if engine_log.count("Accepted voice partial revision=") != PARTIAL_COUNT:
             raise SmokeFailure("engine did not accept the exact partial sequence")
-        if engine_log.count("Committed voice final revision=") != 1:
-            raise SmokeFailure("engine did not commit exactly one final result")
-        if (output / "committed.txt").read_text(encoding="utf-8") != FINAL_TEXT:
-            raise SmokeFailure("probe did not receive the exact final text")
+        if engine_log.count("Committed voice final revision=") != 2:
+            raise SmokeFailure("engine did not commit the two exact final results")
+        if (output / "committed.txt").read_text(encoding="utf-8") != (
+            EXPECTED_COMMITTED_TEXT
+        ):
+            raise SmokeFailure("probe did not receive the corrected final text")
+        if (output / "observation.txt").read_text(encoding="ascii") != "accepted\n":
+            raise SmokeFailure("engine did not return a post-commit observation")
         for screenshot in (
             output / "baseline.png",
             output / "partial.png",
@@ -236,7 +243,8 @@ def run_parent(args: argparse.Namespace) -> int:
         print(f"partial screenshot: {output / 'partial.png'}")
         print(f"final screenshot:   {output / 'final.png'}")
         print("partial text was visible while committed state remained empty")
-        print("final text was committed exactly once")
+        print("the visual preedit sequence committed its final exactly once")
+        print("one same-focus post-commit edit was observed exactly once")
         print("microphone/provider/key/network service: not used")
         return 0
     except (OSError, subprocess.SubprocessError, SmokeFailure) as error:
@@ -372,6 +380,7 @@ def run_session_child(args: argparse.Namespace) -> int:
     engine: subprocess.Popen[bytes] | None = None
     probe: subprocess.Popen[bytes] | None = None
     sender: subprocess.Popen[bytes] | None = None
+    observation_sender: subprocess.Popen[bytes] | None = None
 
     try:
         with (output / "ibus.log").open("wb") as ibus_log:
@@ -540,12 +549,87 @@ def run_session_child(args: argparse.Namespace) -> int:
             < MINIMUM_RENDERED_PIXEL_CHANGE
         ):
             raise SmokeFailure("final commit did not visibly change the GTK entry")
+
+        observation_trigger = output / "observation-trigger"
+        with (output / "observation-sender.log").open("wb") as sender_log:
+            observation_sender = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-I",
+                    str(REPOSITORY / "scripts/send_preedit_demo.py"),
+                    "--no-partials",
+                    "--delay",
+                    "0",
+                    "--utterance-id",
+                    "isolated-observation-smoke",
+                    "--final-text",
+                    OBSERVATION_WRONG,
+                    "--observation-trigger",
+                    str(observation_trigger),
+                    "--observation-output",
+                    str(output / "observation.txt"),
+                ],
+                cwd=REPOSITORY,
+                env=environment,
+                stdout=sender_log,
+                stderr=subprocess.STDOUT,
+            )
+        wait_for(
+            lambda: (
+                state.exists()
+                and state.read_text(encoding="utf-8") == FINAL_TEXT + OBSERVATION_WRONG
+            ),
+            description="second synthetic final commit",
+        )
+        subprocess.run(
+            [
+                system_command("xdotool"),
+                "key",
+                "--window",
+                window,
+                "BackSpace",
+                "BackSpace",
+                "BackSpace",
+                "BackSpace",
+                "BackSpace",
+            ],
+            env=environment,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            check=True,
+        )
+        subprocess.run(
+            [
+                system_command("xdotool"),
+                "type",
+                "--window",
+                window,
+                "--delay",
+                "20",
+                OBSERVATION_CANONICAL,
+            ],
+            env=environment,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            check=True,
+        )
+        wait_for(
+            lambda: state.read_text(encoding="utf-8") == EXPECTED_COMMITTED_TEXT,
+            description="same-focus corrected text",
+        )
+        observation_trigger.write_text("ready\n", encoding="ascii")
+        observation_trigger.chmod(0o600)
+        if observation_sender.wait(timeout=10) != 0:
+            raise SmokeFailure("post-commit observation sender was rejected")
+        observation_sender = None
+        wait_for(
+            lambda: (output / "observation.txt").is_file(),
+            description="accepted post-commit observation",
+        )
         return 0
     except (OSError, subprocess.SubprocessError, SmokeFailure) as error:
         print(f"session child failed: {error}", file=sys.stderr)
         return 1
     finally:
-        for process in (sender, probe, engine, ibus):
+        for process in (observation_sender, sender, probe, engine, ibus):
             terminate(process)
 
 

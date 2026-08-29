@@ -358,6 +358,8 @@ class InstallerHarness:
                 config=${!#}
                 if [[ $code == *load_vocabulary* ]]; then
                   [[ ${MOCK_VOCABULARY_INVALID:-0} != 1 ]] || exit 1
+                elif [[ $code == *load_adaptive_ledger* ]]; then
+                  [[ ${MOCK_ADAPTIVE_CORRECTIONS_INVALID:-0} != 1 ]] || exit 1
                 elif [[ $code == *load_corrections* ]]; then
                   [[ ${MOCK_CORRECTIONS_INVALID:-0} != 1 ]] || exit 1
                 else
@@ -605,7 +607,7 @@ class UserInstallTests(unittest.TestCase):
         install_text = INSTALLER.read_text(encoding="utf-8")
         self.assertEqual(
             install_text.count('"$install_root/voice-venv/bin/python" -I -c'),
-            3,
+            4,
         )
 
     def test_no_clobber_helper_commits_a_directory_atomically(self) -> None:
@@ -651,7 +653,12 @@ class UserInstallTests(unittest.TestCase):
         test_module.mkdir()
         (test_module / "__init__.py").write_text("", encoding="utf-8")
         (test_module / "__main__.py").write_text(
-            "import time\ntime.sleep(30)\n", encoding="utf-8"
+            "import os\n"
+            "import pathlib\n"
+            "import time\n"
+            'pathlib.Path(os.environ["MOCK_VOICE_READY"]).touch()\n'
+            "time.sleep(30)\n",
+            encoding="utf-8",
         )
 
         def spawn(flag: str) -> subprocess.Popen[bytes]:
@@ -710,7 +717,12 @@ class UserInstallTests(unittest.TestCase):
         test_module.mkdir()
         (test_module / "__init__.py").write_text("", encoding="utf-8")
         (test_module / "__main__.py").write_text(
-            "import time\ntime.sleep(30)\n", encoding="utf-8"
+            "import os\n"
+            "import pathlib\n"
+            "import time\n"
+            'pathlib.Path(os.environ["MOCK_VOICE_READY"]).touch()\n'
+            "time.sleep(30)\n",
+            encoding="utf-8",
         )
         # Resolve the symlinked ancestor but deliberately preserve the final
         # venv interpreter component, just as an absolute canonical launcher
@@ -718,8 +730,12 @@ class UserInstallTests(unittest.TestCase):
         canonical_python = (
             published_python.parent.resolve(strict=True) / published_python.name
         )
+        ready = self.harness.root / "canonical-process-ready"
+        process_environment = os.environ.copy()
+        process_environment["MOCK_VOICE_READY"] = str(ready)
         process = subprocess.Popen(
             [str(canonical_python), "-I", "-m", "murmur_voice", "run"],
+            env=process_environment,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -727,9 +743,10 @@ class UserInstallTests(unittest.TestCase):
         try:
             deadline = time.monotonic() + 2
             while time.monotonic() < deadline:
-                if managed_voice_process_count(published_root) == 1:
+                if ready.exists():
                     break
                 time.sleep(0.01)
+            self.assertTrue(ready.exists())
             self.assertEqual(managed_voice_process_count(published_root), 1)
             published_root.rename(quarantine)
             self.assertFalse(published_root.exists())
@@ -861,6 +878,11 @@ class UserInstallTests(unittest.TestCase):
         self.assertIn(str(self.harness.config / "murmur-ime/vocabulary.json"), unit)
         self.assertIn("--corrections", unit)
         self.assertIn(str(self.harness.config / "murmur-ime/corrections.json"), unit)
+        self.assertIn("--adaptive-corrections", unit)
+        self.assertIn(
+            str(self.harness.config / "murmur-ime/adaptive-corrections.json"),
+            unit,
+        )
         engine_unit = (
             self.harness.config / "systemd/user/murmur-ime-engine.service"
         ).read_text(encoding="utf-8")
@@ -1846,6 +1868,22 @@ class UserInstallTests(unittest.TestCase):
         self.assertIn("recognition corrections", result.stdout)
         self.assertIn("enable --now murmur-ime-voice.service", result.stdout)
 
+    def test_invalid_adaptive_corrections_do_not_enable_or_start_voice(self) -> None:
+        self.harness.configure_key_placeholder()
+        self.harness.environment["MOCK_ADAPTIVE_CORRECTIONS_INVALID"] = "1"
+
+        result = self.harness.run(
+            INSTALLER, "--wheelhouse", str(self.harness.wheelhouse)
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.harness.calls()
+        self.assertIn("systemctl --user disable murmur-ime-voice.service", calls)
+        self.assertNotIn("systemctl --user enable murmur-ime-voice.service", calls)
+        self.assertNotIn("systemctl --user start murmur-ime-voice.service", calls)
+        self.assertIn("adaptive correction ledger", result.stdout)
+        self.assertIn("enable --now murmur-ime-voice.service", result.stdout)
+
     def test_uninstall_restores_only_recorded_engine_and_retains_key(self) -> None:
         config = self.harness.configure_key_placeholder()
         corrections = config.parent / "corrections.json"
@@ -1854,6 +1892,13 @@ class UserInstallTests(unittest.TestCase):
             encoding="utf-8",
         )
         corrections.chmod(0o600)
+        adaptive_corrections = config.parent / "adaptive-corrections.json"
+        adaptive_payload = (
+            '{"version":1,"entries":[{"wrong":"bench mark",'
+            '"canonical":"benchmark","state":"active","support":1}]}\n'
+        )
+        adaptive_corrections.write_text(adaptive_payload, encoding="utf-8")
+        adaptive_corrections.chmod(0o600)
         install_result = self.harness.run(
             INSTALLER, "--wheelhouse", str(self.harness.wheelhouse)
         )
@@ -1884,6 +1929,10 @@ class UserInstallTests(unittest.TestCase):
         self.assertLess(voice_stop, engine_stop)
         self.assertTrue(config.exists())
         self.assertTrue(corrections.exists())
+        self.assertEqual(
+            adaptive_corrections.read_text(encoding="utf-8"), adaptive_payload
+        )
+        self.assertEqual(adaptive_corrections.stat().st_mode & 0o777, 0o600)
         self.assertFalse((self.harness.data / "murmur-ime/voice-venv").exists())
         self.assertFalse(self.harness.desktop_entry().exists())
         self.assertFalse(self.harness.settings_icon().exists())

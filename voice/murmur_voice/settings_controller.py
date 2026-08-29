@@ -8,6 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from .adaptive_runtime import load_adaptive_ledger
 from .config import (
     ConfigError,
     MAX_CORRECTION_PAIRS,
@@ -15,6 +16,7 @@ from .config import (
     default_corrections_path,
     default_config_path,
     default_vocabulary_path,
+    default_adaptive_corrections_path,
     delete_api_key,
     load_config,
     load_corrections as load_corrections_file,
@@ -43,9 +45,11 @@ _ACTIVE_STATES = frozenset(
         "reloading",
     }
 )
-_SESSION_STATES = frozenset({"idle", "starting", "recording", "stopping"})
+_SESSION_STATES = frozenset({"idle", "starting", "recording", "stopping", "observing"})
 _STATUS_CODES = frozenset(
     {
+        "adaptive-correction-failed",
+        "adaptive-correction-learned",
         "audio-backpressure",
         "capture-start-failed",
         "cancelled",
@@ -61,6 +65,7 @@ _STATUS_CODES = frozenset(
         "provider-auth",
         "provider-error",
         "recording-limit-warning",
+        "recognition-context-invalid",
         "start-timeout",
         "status",
     }
@@ -106,6 +111,7 @@ class SettingsController:
         config_path: str | Path | None = None,
         vocabulary_path: str | Path | None = None,
         corrections_path: str | Path | None = None,
+        adaptive_corrections_path: str | Path | None = None,
         runner: Runner = subprocess.run,
         status_reader: StatusReader = request_command,
     ) -> None:
@@ -121,6 +127,11 @@ class SettingsController:
             Path(corrections_path)
             if corrections_path is not None
             else default_corrections_path()
+        )
+        self._adaptive_corrections_path = (
+            Path(adaptive_corrections_path)
+            if adaptive_corrections_path is not None
+            else default_adaptive_corrections_path()
         )
         self._runner = runner
         self._status_reader = status_reader
@@ -264,6 +275,12 @@ class SettingsController:
         except ConfigError as error:
             raise SettingsError(
                 "Valid explicit corrections are required to start the service."
+            ) from error
+        try:
+            load_adaptive_ledger(self._adaptive_corrections_path)
+        except ConfigError as error:
+            raise SettingsError(
+                "Valid adaptive corrections are required to start the service."
             ) from error
         result = self._run_systemctl("start")
         if result.returncode != 0:

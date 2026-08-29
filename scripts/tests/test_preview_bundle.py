@@ -482,7 +482,12 @@ class PreviewBundleTests(unittest.TestCase):
                 extract_archive(archive, base / "extract")
 
     def test_bundle_shape_rejects_local_configuration(self) -> None:
-        for forbidden in ("voice.json", "vocabulary.json", "corrections.json"):
+        for forbidden in (
+            "voice.json",
+            "vocabulary.json",
+            "corrections.json",
+            "adaptive-corrections.json",
+        ):
             with (
                 self.subTest(forbidden=forbidden),
                 tempfile.TemporaryDirectory() as temporary,

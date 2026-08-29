@@ -19,8 +19,12 @@ reuse the daemon's validated atomic private-file APIs.
 
 GTK service operations use fixed `systemctl --user` argument vectors without a
 shell. Disabling/stopping the service is an explicit action and may cancel an
-active dictation. Saved settings take effect after the user manually disables
-and stops, then enables and starts the service.
+active dictation. Saved vocabulary and correction settings are reloaded before
+the next dictation and do not require a service restart. Service enable/disable
+controls remain explicit lifecycle actions. The current development branch
+also has a default-on, event-driven five-second adaptive-correction observation,
+but this settings MVP does not yet provide a switch or ledger-management UI for
+it.
 
 This MVP deliberately does not configure Rime data, global hotkeys, ASR
 advanced options, a tray indicator, or Secret Service. Those integrations need

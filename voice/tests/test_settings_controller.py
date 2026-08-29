@@ -54,6 +54,9 @@ def _controller(tmp_path, runner=None, status_reader=None):
         "config_path": tmp_path / "private" / "voice.json",
         "vocabulary_path": tmp_path / "private" / "vocabulary.json",
         "corrections_path": tmp_path / "private" / "corrections.json",
+        "adaptive_corrections_path": (
+            tmp_path / "private" / "adaptive-corrections.json"
+        ),
         "runner": runner or RecordingRunner(),
     }
     if status_reader is not None:
@@ -279,6 +282,22 @@ def test_microphone_unavailable_status_is_allowlisted(tmp_path):
     )
 
 
+def test_observing_and_adaptive_status_are_allowlisted(tmp_path):
+    controller = _controller(
+        tmp_path,
+        RecordingRunner(active_state="active"),
+        lambda command: {
+            "ok": True,
+            "state": "observing",
+            "code": "adaptive-correction-learned",
+        },
+    )
+
+    assert controller.service_status() == ServiceSnapshot(
+        "active", "observing", "adaptive-correction-learned"
+    )
+
+
 def test_start_requires_safe_local_configuration_before_systemctl(tmp_path):
     runner = RecordingRunner()
     controller = _controller(tmp_path, runner)
@@ -301,6 +320,23 @@ def test_start_validates_corrections_before_systemctl(tmp_path):
     corrections_path.chmod(0o644)
 
     with pytest.raises(SettingsError, match="Valid explicit corrections"):
+        controller.start_service()
+
+    assert runner.calls == []
+
+
+def test_start_validates_adaptive_corrections_before_systemctl(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+    controller.save_key("test-key")
+    adaptive_path = tmp_path / "private" / "adaptive-corrections.json"
+    adaptive_path.write_text(
+        '{"version":1,"entries":[]}',
+        encoding="utf-8",
+    )
+    adaptive_path.chmod(0o644)
+
+    with pytest.raises(SettingsError, match="Valid adaptive corrections"):
         controller.start_service()
 
     assert runner.calls == []

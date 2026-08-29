@@ -61,8 +61,8 @@ distribution package, or the missing graphical/provider matrix is finished.
       explicit prohibition on sending keys, recordings, or raw dictated text.
 - [x] GitHub private vulnerability reporting is enabled and verified for the
       public repository; Secret Scanning and Push Protection are also enabled.
-- [ ] The release procedure in `docs/release-process.md` has been completed
-      with a verified signing identity and an immutable signed preview.
+- [x] The `v0.1.0-alpha.1` procedure in `docs/release-process.md` completed on
+      2026-08-26 with a GitHub-verified signed tag and an immutable prerelease.
 
 ## Release gates
 

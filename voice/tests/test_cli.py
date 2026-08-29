@@ -7,9 +7,9 @@ import stat
 import pytest
 
 from murmur_voice import cli
+from murmur_voice import adaptive_runtime as adaptive_runtime_module
 from murmur_voice import session as session_module
 from murmur_voice.config import (
-    CorrectionPair,
     VoiceConfig,
     load_config,
     load_vocabulary,
@@ -52,9 +52,18 @@ def test_configure_prompts_twice_without_echoing_or_accepting_key_on_argv(
 
 def test_verbose_daemon_keeps_websocket_header_logging_disabled(tmp_path, monkeypatch):
     configured = []
+
+    class FailingRuntime:
+        def __init__(self, **kwargs):
+            del kwargs
+
+        @staticmethod
+        def validate():
+            raise cli.ConfigError("stop")
+
     monkeypatch.setattr(cli.logging, "basicConfig", lambda **kwargs: None)
     monkeypatch.setattr(
-        cli, "load_config", lambda path: (_ for _ in ()).throw(cli.ConfigError("stop"))
+        adaptive_runtime_module, "AdaptiveCorrectionRuntime", FailingRuntime
     )
     monkeypatch.setattr(cli, "_restore_engine", lambda path: 0)
     websocket_logger = logging.getLogger("websockets")
@@ -86,17 +95,25 @@ def test_restore_engine_subcommand_uses_only_private_state_path(
 
 def test_run_restores_crash_state_before_loading_configuration(tmp_path, monkeypatch):
     order = []
+
+    class FailingRuntime:
+        def __init__(self, **kwargs):
+            del kwargs
+
+        @staticmethod
+        def validate():
+            order.append("config")
+            raise cli.ConfigError("stop")
+
     monkeypatch.setattr(
         cli,
         "_restore_engine",
         lambda path: order.append("restore") or 0,
     )
     monkeypatch.setattr(
-        cli,
-        "load_config",
-        lambda path: (
-            order.append("config") or (_ for _ in ()).throw(cli.ConfigError("stop"))
-        ),
+        adaptive_runtime_module,
+        "AdaptiveCorrectionRuntime",
+        FailingRuntime,
     )
 
     assert cli._run(tmp_path / "voice.json", None, False) == 2
@@ -160,29 +177,56 @@ def test_vocabulary_terms_cannot_be_passed_on_command_line():
 
 def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_path):
     corrections_path = tmp_path / "corrections.json"
+    adaptive_path = tmp_path / "adaptive-corrections.json"
     parser = cli.build_parser()
 
-    options = parser.parse_args(["run", "--corrections", str(corrections_path)])
+    options = parser.parse_args(
+        [
+            "run",
+            "--corrections",
+            str(corrections_path),
+            "--adaptive-corrections",
+            str(adaptive_path),
+        ]
+    )
 
     assert options.corrections == corrections_path
+    assert options.adaptive_corrections == adaptive_path
     with pytest.raises(SystemExit):
         parser.parse_args(["run", "--wrong", "private wrong form"])
     with pytest.raises(SystemExit):
         parser.parse_args(["run", "--canonical", "private canonical form"])
 
 
-def test_run_loads_vocabulary_and_corrections_once_when_daemon_starts(
+def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
     tmp_path, monkeypatch
 ):
     vocabulary_path = tmp_path / "vocabulary.json"
     corrections_path = tmp_path / "corrections.json"
+    adaptive_path = tmp_path / "adaptive-corrections.json"
     captured = []
-    correction_loads = []
-    correction = CorrectionPair("deep seek", "DeepSeek")
+    runtime_arguments = []
+
+    class FakeRuntime:
+        def __init__(self, **kwargs):
+            runtime_arguments.append(kwargs)
+
+        @staticmethod
+        def validate():
+            return VoiceConfig("test-key")
+
+        @staticmethod
+        def create_asr_client():
+            return object()
+
+        @staticmethod
+        def observe(snapshot):
+            del snapshot
+            return False
 
     class FakeSession:
-        def __init__(self, config):
-            captured.append(config)
+        def __init__(self, config, **kwargs):
+            captured.append((config, kwargs))
 
     class FakeServer:
         def __init__(self, session, socket_path):
@@ -193,13 +237,11 @@ def test_run_loads_vocabulary_and_corrections_once_when_daemon_starts(
             del signal_commands
 
     monkeypatch.setattr(cli.logging, "basicConfig", lambda **kwargs: None)
-    monkeypatch.setattr(cli, "load_config", lambda path: VoiceConfig("test-key"))
     monkeypatch.setattr(cli, "_restore_engine", lambda path: 0)
-    monkeypatch.setattr(cli, "load_vocabulary", lambda path: ("PrivateName", "专业词"))
     monkeypatch.setattr(
-        cli,
-        "load_corrections",
-        lambda path: correction_loads.append(path) or (correction,),
+        adaptive_runtime_module,
+        "AdaptiveCorrectionRuntime",
+        FakeRuntime,
     )
     monkeypatch.setattr(session_module, "VoiceSession", FakeSession)
     monkeypatch.setattr(cli, "ControlServer", FakeServer)
@@ -212,16 +254,21 @@ def test_run_loads_vocabulary_and_corrections_once_when_daemon_starts(
             False,
             vocabulary_path=vocabulary_path,
             corrections_path=corrections_path,
+            adaptive_corrections_path=adaptive_path,
         )
         == 0
     )
 
+    assert runtime_arguments == [
+        {
+            "config_path": tmp_path / "voice.json",
+            "vocabulary_path": vocabulary_path,
+            "corrections_path": corrections_path,
+            "adaptive_path": adaptive_path,
+        }
+    ]
     assert len(captured) == 1
-    assert correction_loads == [corrections_path]
-    assert captured[0].hotwords == ("PrivateName", "专业词")
-    assert captured[0].corrections == (correction,)
-    assert captured[0].provider_settings()["hotwords"] == (
-        "PrivateName",
-        "专业词",
-    )
-    assert captured[0].provider_settings()["corrections"] == (correction,)
+    config, options = captured[0]
+    assert config.api_key == "test-key"
+    assert options["asr_client_factory"] is FakeRuntime.create_asr_client
+    assert options["observation_handler"] is FakeRuntime.observe

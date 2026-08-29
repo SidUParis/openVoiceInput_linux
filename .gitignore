@@ -35,4 +35,5 @@ __pycache__/
 /voice.json
 /vocabulary.json
 /corrections.json
+/adaptive-corrections.json
 /error.log

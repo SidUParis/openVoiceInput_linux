@@ -26,23 +26,32 @@
   uploaded audio cannot be withdrawn.
 - Never log dictated text. Length, timing, protocol status, and redacted request
   identifiers are sufficient for diagnostics.
-- Treat personal vocabulary and correction pairs as private text: load only
-  explicit user entries from private files, never infer them from transcripts,
-  and never apply an unbounded local string replacement.
+- Treat personal vocabulary and manual/adaptive correction pairs as private
+  text. Adaptive inference is limited to one strict replacement inside the
+  authoritative final's anchored IBus span during a five-second same-focus
+  lease. Never infer from partials, unrelated text, clipboard, AT-SPI, or global
+  key events, and never apply an unbounded local string replacement.
+- Persist only bounded adaptive pair/state/support records, not full
+  transcripts, edit streams, document context, or audio. Manual pairs take
+  priority; conflicts, unsafe overlaps, and cycles must be suppressed, and the
+  provider view remains capped at 50 pairs.
 
 ## Focus safety
 
 - Bind every dictation to the engine instance and focus token that started it.
 - On focus-out, engine switch, or application exit: clear preedit, cancel the
-  utterance ID, and ignore late responses.
+  utterance/observation ID, and ignore late responses.
 - Do not auto-commit a recovered/timeout result after focus changed.
 - Disable voice recording for password, PIN, and other private input purposes.
+- Treat private-purpose changes, missing surrounding text, and an untrusted
+  committed-span anchor as no-learning outcomes.
 
 ## Process isolation
 
 - The engine must remain functional if the daemon crashes or the network stalls.
 - The daemon runs without authority to synthesize keys or access arbitrary
-  application text.
+  application text; it receives only the bounded observation snapshot returned
+  by the focused IBus engine.
 - D-Bus methods validate caller identity, utterance ID, sizes, and state order.
 
 ## Non-goals for the MVP
