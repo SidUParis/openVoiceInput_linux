@@ -8,9 +8,11 @@ explicitly enables it and chooses an existing absolute local or mounted folder,
 the daemon can retain each accepted utterance as a versioned WAV/JSON pair
 under `openvoiceinput-dataset-v1`.
 
-This layer does not review labels, transfer to Orange, upload a dataset, train,
-fine-tune, or distil a model. In particular, an automatically paired provider
-result and recording are not a gold label or a distillation-ready example.
+This layer does not review labels, authenticate to or mount Orange, provide
+resumable transfer, upload to Google Drive, train, fine-tune, or distil a model.
+A compatible remote filesystem mounted separately by the user can still be the
+selected path. In particular, an automatically paired provider result and
+recording are not a gold label or a distillation-ready example.
 
 The eventual goal is a personal Chinese/English/French and code-switching ASR
 evaluation/training corpus for domain names, server names, acronyms, accents,
@@ -85,13 +87,21 @@ For the intended personal deployment, a user-controlled computer nicknamed
 **Orange** can be the storage destination. Both endpoints are treated as trusted
 local machines for this prototype. The implemented collector does not add
 application-level static encryption; the selected local or mounted filesystem
-determines effective visibility, sharing, backup, and at-rest protection. It
-also does not connect or copy anything to Orange. Repository code and
-documentation must never contain Orange credentials.
+determines effective visibility, sharing, backup, and at-rest protection. The
+user can already mount an Orange directory with SSHFS and select that local
+mount path. The application does not establish or authenticate that connection,
+and repository code/documentation must never contain Orange credentials.
 
-Transfer implementation is deferred. A future design can spool complete local
-records and move them to Orange through the user's existing authenticated SSH
-path, with atomic completion markers so a partial audio/manifest pair is never
+Direct mounted writes have no fallback spool, so a disconnect can lose an
+unpublished record without blocking ordinary dictation. Google Drive should be
+an asynchronous rclone backup of complete local/Orange records, not the live
+collection filesystem. SSHFS setup, remote-side permission verification,
+disconnect semantics, Google OAuth, and backup commands are in
+[remote-dataset-storage.md](remote-dataset-storage.md).
+
+First-party transfer remains deferred. A future design can spool complete local
+records and move them to Orange through an existing authenticated SSH path,
+with atomic completion markers so a partial audio/manifest pair is never
 presented as a usable training sample. Failure should retain a visible local
 pending item rather than drop valuable data silently.
 
@@ -102,8 +112,9 @@ pending item rather than drop valuable data silently.
    enable/disable/path reload, and no change to the provider stream.
 2. Stabilize schema-v1 migration/validation policy before declaring long-term
    corpus compatibility; add an explicit review/delete/keep interface.
-3. Implement resumable Orange transfer and verify record counts, hashes,
-   partial-transfer recovery, and delete behavior on both owned machines.
+3. Implement first-party resumable Orange transfer and verify record counts,
+   hashes, partial-transfer recovery, and delete behavior on both owned
+   machines.
 4. Build a lightweight review queue for `spoken_verbatim`; do not treat either
    cloud output or a quick preferred edit as a literal speech label. Review
    `preferred_output` independently.

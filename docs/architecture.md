@@ -199,12 +199,15 @@ user-selected existing local or mounted folder. It uses bounded memory and a
 background writer; disabling prevents unpublished queued/staged publication
 while already published records remain.
 
-The current collector does not transfer to Orange, upload a dataset, review
-labels, train a model, or add application-level encryption. Its schema keeps
+The current collector does not authenticate to or mount Orange, upload to
+Google Drive, review labels, train a model, or add application-level
+encryption. A compatible user-mounted remote filesystem is nevertheless an
+ordinary selected filesystem path. Its schema keeps
 the null `spoken_verbatim` and `preferred_output` fields distinct from the
 unreviewed `provider_final` pseudo-label. Filesystem policy determines actual
 visibility. Review, collection quality, and evaluation must precede any model
 fine-tune or distillation. See
+[remote-dataset-storage.md](remote-dataset-storage.md) and
 [personal-asr-data-plan.md](personal-asr-data-plan.md).
 
 The `murmur-ime` paths above, along with the 0.x IBus, D-Bus, executable, and

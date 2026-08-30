@@ -45,9 +45,11 @@
   use bounded memory and a bounded queue, and never block dictation. Disabling
   must prevent unpublished queued/staged publication while retaining already
   published records.
-- Do not upload the local dataset, transfer it to Orange, train a model, or
-  imply application-level encryption. The selected filesystem is the storage
-  visibility/at-rest boundary.
+- Do not add application-owned remote authentication, mounting, upload, or
+  Orange transfer to the collector, train a model, or imply application-level
+  encryption. A user-mounted remote filesystem is still part of the selected
+  filesystem visibility/at-rest boundary; separate backup tooling must keep
+  its own credentials outside the application and repository.
 
 ## Focus safety
 

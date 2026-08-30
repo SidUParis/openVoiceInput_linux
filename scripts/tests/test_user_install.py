@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import socket
@@ -452,6 +453,10 @@ class InstallerHarness:
               if ! grep -Fqx -- "$service" "$MOCK_ACTIVE_FILE"; then
                 printf '%s\n' "$service" >>"$MOCK_ACTIVE_FILE"
               fi
+              if [[ $service == murmur-ime-voice.service ]]; then
+                mkdir -p -- "$XDG_RUNTIME_DIR/murmur-ime"
+                chmod 0700 "$XDG_RUNTIME_DIR/murmur-ime"
+              fi
               if [[ $command == restart \
                 && $service == murmur-ime-engine.service \
                 && ${MOCK_CLEAR_IBUS_ON_ENGINE_RESTART:-0} == 1 ]]; then
@@ -472,6 +477,14 @@ class InstallerHarness:
                 && $was_active == true \
                 && ${MOCK_CLEAR_IBUS_ON_ENGINE_STOP:-0} == 1 ]]; then
                 : >"$MOCK_IBUS_STATE"
+              fi
+              if [[ $command == stop \
+                && $service == murmur-ime-voice.service ]]; then
+                voice_unit="$XDG_CONFIG_HOME/systemd/user/$service"
+                if [[ ! -f $voice_unit ]] \
+                  || ! grep -Fqx -- 'RuntimeDirectoryPreserve=yes' "$voice_unit"; then
+                  /usr/bin/rm -rf -- "$XDG_RUNTIME_DIR/murmur-ime"
+                fi
               fi
             fi
             if [[ $command == enable ]]; then
@@ -505,6 +518,21 @@ class InstallerHarness:
               touch "$MOCK_CLEANUP_REPLACED_FILE"
             fi
             exit 0
+            """,
+        )
+        self._write_executable(
+            "flatpak",
+            r"""
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf 'flatpak %s\n' "$*" >>"$MOCK_LOG"
+            if [[ ${1:-} == ps && ${2:-} == --columns=application ]]; then
+              if [[ ${MOCK_FLATPAK_CONTROLLER_RUNNING:-0} == 1 ]]; then
+                printf '%s\n' 'com.doubao.Murmur'
+              fi
+              exit 0
+            fi
+            exit 1
             """,
         )
         self._write_executable(
@@ -895,6 +923,8 @@ class UserInstallTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("UMask=0077", unit)
         self.assertNotIn("ConditionPathExists=", unit)
+        self.assertIn("RuntimeDirectoryPreserve=yes", unit)
+        self.assertNotIn("RuntimeDirectoryPreserve=restart", unit)
         self.assertIn("Environment=PYTHONNOUSERSITE=1", unit)
         self.assertIn("%%literal$$", unit)
         self.assertIn("--vocabulary", unit)
@@ -935,6 +965,93 @@ class UserInstallTests(unittest.TestCase):
         )
         self.assertIn("PYTHONNOUSERSITE=1", settings_launcher)
         self.assertIn(" -I -B -m murmur_voice.settings_app", settings_launcher)
+
+    def test_installed_voice_unit_preserves_runtime_inode_across_stop_start(
+        self,
+    ) -> None:
+        self.harness.configure_key_placeholder()
+        result = self.harness.run(
+            INSTALLER, "--wheelhouse", str(self.harness.wheelhouse)
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        runtime_dir = self.harness.runtime / "murmur-ime"
+        self.assertTrue(runtime_dir.is_dir())
+        original_inode = runtime_dir.stat().st_ino
+        controller_view = runtime_dir / "controller-bind-sentinel"
+        controller_view.write_text("same-runtime-directory\n", encoding="utf-8")
+
+        for command in ("stop", "start"):
+            with self.subTest(command=command):
+                service_result = subprocess.run(
+                    [
+                        str(self.harness.fake_bin / "systemctl"),
+                        "--user",
+                        command,
+                        "murmur-ime-voice.service",
+                    ],
+                    env=self.harness.environment,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(service_result.returncode, 0, service_result.stderr)
+                self.assertTrue(runtime_dir.is_dir())
+                self.assertEqual(runtime_dir.stat().st_ino, original_inode)
+                self.assertEqual(
+                    controller_view.read_text(encoding="utf-8"),
+                    "same-runtime-directory\n",
+                )
+
+    def test_legacy_runtime_policy_reports_one_time_controller_refresh(
+        self,
+    ) -> None:
+        self.harness.configure_key_placeholder()
+        first = self.harness.run(
+            INSTALLER, "--wheelhouse", str(self.harness.wheelhouse)
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        voice_unit = self.harness.config / "systemd/user/murmur-ime-voice.service"
+        legacy_unit = voice_unit.read_text(encoding="utf-8").replace(
+            "RuntimeDirectoryPreserve=yes",
+            "RuntimeDirectoryPreserve=restart",
+        )
+        self.assertIn("RuntimeDirectoryPreserve=restart", legacy_unit)
+        voice_unit.write_text(legacy_unit, encoding="utf-8")
+        manifest = self.harness.data / "murmur-ime/install-manifest.json"
+        manifest_document = json.loads(manifest.read_text(encoding="utf-8"))
+        manifest_document["digests"]["voice_unit"] = hashlib.sha256(
+            voice_unit.read_bytes()
+        ).hexdigest()
+        manifest.write_text(
+            json.dumps(manifest_document, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        old_controller_view = self.harness.runtime / "murmur-ime/old-controller-view"
+        old_controller_view.write_text("legacy-bind\n", encoding="utf-8")
+        self.harness.environment["MOCK_FLATPAK_CONTROLLER_RUNNING"] = "1"
+        self.harness.log.write_text("", encoding="utf-8")
+
+        result = self.harness.run(
+            INSTALLER, "--wheelhouse", str(self.harness.wheelhouse)
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(old_controller_view.exists())
+        self.assertIn(
+            "One-time controller refresh required after upgrading the "
+            "runtime-directory policy.",
+            result.stdout,
+        )
+        self.assertIn("flatpak kill com.doubao.Murmur", result.stdout)
+        self.assertIn("flatpak run com.doubao.Murmur", result.stdout)
+        self.assertIn("flatpak ps --columns=application", self.harness.calls())
+        installed_unit = voice_unit.read_text(encoding="utf-8")
+        self.assertIn("RuntimeDirectoryPreserve=yes", installed_unit)
+        self.assertNotIn("RuntimeDirectoryPreserve=restart", installed_unit)
 
     def test_satisfying_preinstalled_runtime_cannot_bypass_wheelhouse(self) -> None:
         self.harness.environment["MOCK_PREINSTALLED_RUNTIME"] = "1"
@@ -1986,7 +2103,7 @@ class UserInstallTests(unittest.TestCase):
         self.assertEqual(install_result.returncode, 0, install_result.stderr)
         self.harness.ibus_state.write_text("murmur-voice\n", encoding="utf-8")
         runtime_dir = self.harness.runtime / "murmur-ime"
-        runtime_dir.mkdir(mode=0o700)
+        runtime_dir.mkdir(mode=0o700, exist_ok=True)
         socket_path = runtime_dir / "voice.sock"
         control_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         control_socket.bind(str(socket_path))
@@ -2214,7 +2331,7 @@ class UserInstallTests(unittest.TestCase):
         )
         self.assertEqual(install_result.returncode, 0, install_result.stderr)
         runtime_dir = self.harness.runtime / "murmur-ime"
-        runtime_dir.mkdir(mode=0o700)
+        runtime_dir.mkdir(mode=0o700, exist_ok=True)
         socket_path = runtime_dir / "voice.sock"
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(socket_path))
@@ -2236,7 +2353,7 @@ class UserInstallTests(unittest.TestCase):
         )
         self.assertEqual(install_result.returncode, 0, install_result.stderr)
         runtime_dir = self.harness.runtime / "murmur-ime"
-        runtime_dir.mkdir(mode=0o700)
+        runtime_dir.mkdir(mode=0o700, exist_ok=True)
         socket_path = runtime_dir / "voice.sock"
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(socket_path))

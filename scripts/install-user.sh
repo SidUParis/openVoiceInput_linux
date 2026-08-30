@@ -175,6 +175,8 @@ voice_was_enabled=false
 exact_engine=""
 existing_manifest_version=0
 desktop_assets_were_managed=false
+legacy_runtime_directory_policy=false
+controller_flatpak_id=com.doubao.Murmur
 
 remove_private_tree() {
   local path=${1:-}
@@ -579,6 +581,9 @@ if [[ $root_present == true || $engine_unit_present == true || $voice_unit_prese
     die "The trusted ownership manifest has an unsupported version" 2
   fi
   existing_install=true
+  if ! grep -Fqx -- 'RuntimeDirectoryPreserve=yes' "$voice_unit_path"; then
+    legacy_runtime_directory_policy=true
+  fi
 else
   if [[ $desktop_entry_present == true || $settings_icon_present == true ]]; then
     die "Refusing to replace same-name desktop assets without a trusted ownership manifest" 2
@@ -1036,3 +1041,13 @@ printf '%s\n' \
   "Open the native settings window with: $install_root/open-voice-input-settings" \
   "Bind a desktop shortcut to: $install_root/murmur-voice-daemon toggle" \
   "Inspect service state with: systemctl --user status murmur-ime-voice.service"
+if [[ $legacy_runtime_directory_policy == true ]] \
+  && command -v flatpak >/dev/null 2>&1 \
+  && flatpak ps --columns=application 2>/dev/null \
+    | grep -Fqx -- "$controller_flatpak_id"; then
+  printf '%s\n' \
+    "One-time controller refresh required after upgrading the runtime-directory policy." \
+    "Close and reopen Open Voice Input Linux, or run:" \
+    "  flatpak kill $controller_flatpak_id" \
+    "  flatpak run $controller_flatpak_id >/dev/null 2>&1 &"
+fi

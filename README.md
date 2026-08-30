@@ -63,7 +63,7 @@ flowchart LR
     M["Microphone"] --> V["Voice daemon"]
     S["Settings UI + private config"] --> V
     V -->|"partial / final over D-Bus"| E
-    V -.->|"explicit opt-in WAV + JSON"| D["User-selected local dataset"]
+    V -.->|"explicit opt-in WAV + JSON"| D["Local or mounted dataset folder"]
     E -->|"preedit / commit"| F["Focused input field"]
     V --> I["Small recording indicator"]
 ```
@@ -136,7 +136,7 @@ packages must not download code or data during installation.
   monitor default and can conservatively recover an output-only built-in card.
   This selection does not change playback or request a system-wide default
   change.
-- Optional local dataset collection, disabled by default: an accepted
+- Optional filesystem dataset collection, disabled by default: an accepted
   authoritative provider final can publish the exact 16 kHz mono signed
   16-bit utterance as one WAV plus a versioned JSON record below a folder the
   user selected. Local writing is bounded and runs in the background.
@@ -349,11 +349,15 @@ It writes directly to that folder with no fallback spool; service shutdown
 allows a bounded 10-second drain, so a stalled or unmounted destination can
 lose an unpublished staged record while published records remain.
 
-This feature does not upload the local dataset, transfer it to Orange, train or
-fine-tune a model, or add application-level encryption. The selected
-filesystem determines the effective visibility and at-rest protection.
+The application does not authenticate to Orange, mount a remote host, or upload
+to Google Drive. An existing compatible SSHFS mount can be selected directly;
+for Drive, collect complete records locally or on Orange and back them up
+asynchronously with rclone. The selected filesystem determines effective
+visibility and at-rest protection. Direct remote writes still have no fallback
+spool, so a disconnect can lose an unpublished record.
 Disabling collection prevents queued unpublished records from becoming
 visible; records already published remain until the user removes them. See
+[the remote-storage guide](docs/remote-dataset-storage.md) and
 [docs/personal-asr-data-plan.md](docs/personal-asr-data-plan.md).
 
 ## Development targets

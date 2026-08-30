@@ -187,11 +187,14 @@ cleaned up and that unpublished record may be lost. Normal daemon shutdown
 gives accepted queued records up to 10 seconds to drain inside systemd's
 30-second total stop budget; it does not wait indefinitely.
 
-The collector does not make an extra cloud upload, transfer to Orange, train,
-fine-tune, or distil a model, implement review/deletion tooling, or add
-application-level encryption. The selected filesystem determines effective
-visibility and at-rest protection. Uninstall preserves the private setting and
-every dataset below a user-selected folder.
+The collector does not authenticate to or mount Orange, upload to Google Drive,
+train, fine-tune, or distil a model, implement review/deletion tooling, or add
+application-level encryption. A compatible user-mounted Orange/SSHFS path is
+still a selectable filesystem folder; complete records can be backed up to
+Drive separately. The selected filesystem determines effective visibility and
+at-rest protection. See
+[the remote-storage guide](../docs/remote-dataset-storage.md). Uninstall
+preserves the private setting and every dataset below a user-selected folder.
 
 ## Run and control
 
@@ -306,6 +309,8 @@ dataset, or IBus engine.
 - The optional user installer manages a foreground-style systemd user service,
   but desktop D-Bus activation and a distribution-native package remain later
   milestones.
-- Local collection has no Orange transport, review/delete interface, automatic
-  label validation, fallback spool, or model-training pipeline. A published
-  provider-final pair remains an unreviewed pseudo-labelled record.
+- Local collection has no application-owned Orange authentication/mounting or
+  first-party resumable transport, review/delete interface, automatic label
+  validation, fallback spool, or model-training pipeline. A user-mounted
+  filesystem path is allowed; a published provider-final pair remains an
+  unreviewed pseudo-labelled record.

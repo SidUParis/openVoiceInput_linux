@@ -468,13 +468,27 @@ def test_local_collection_is_off_by_default_and_discloses_exact_scope(window):
     assert "unreviewed pseudo-label" in notice
     assert "Volcengine" in notice
     assert "openvoiceinput-dataset-v1" in notice
+    assert "remote filesystem already mounted" in notice
+    assert "does not mount a host" in notice
+    assert "Google Drive URLs" in notice
+    assert "asynchronously" in notice
     assert "spoken_verbatim and preferred_output remain empty" in notice
     assert "uploads" in notice
     assert "trains a model" in notice
+    assert "no fallback spool" in notice
     assert "unpublished queued records" in notice
     assert "already published records are retained" in notice
+    assert "already-mounted" in (
+        settings_window.data_collection_directory_entry.get_placeholder_text()
+    )
     assert settings_window.choose_data_collection_directory_button.get_label() == (
         "Choose folder…"
+    )
+    assert settings_window.data_collection_check.get_label() == (
+        "Keep WAV + unreviewed provider final in selected folder"
+    )
+    assert settings_window.save_data_collection_button.get_label() == (
+        "Save collection setting"
     )
 
 
@@ -493,6 +507,7 @@ def test_data_collection_save_is_explicit_local_and_never_starts_service(
     assert settings_window.data_collection_check.get_active() is True
     assert settings_window.data_collection_directory_entry.get_text() == str(selected)
     assert "collection is enabled" in settings_window.message_label.get_text()
+    assert "keep a remote mount connected" in (settings_window.message_label.get_text())
     assert controller.service_actions == []
 
 

@@ -61,6 +61,29 @@ class DocumentationAssetTests(unittest.TestCase):
         self.assertIn("empty temporary profile", readme)
         self.assertIn("空临时配置", chinese)
 
+    def test_remote_dataset_guide_keeps_mount_and_backup_boundaries_explicit(
+        self,
+    ) -> None:
+        guide = (REPOSITORY / "docs/remote-dataset-storage.md").read_text(
+            encoding="utf-8"
+        )
+        readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
+        chinese = (REPOSITORY / "docs/README.zh-CN.md").read_text(encoding="utf-8")
+
+        self.assertIn("Collection remains off", guide)
+        self.assertIn("teacher-unreviewed", guide)
+        self.assertIn("no fallback local spool", guide)
+        self.assertIn("mountpoint -q", guide)
+        self.assertIn("guarantee the modes stored on the remote server", guide)
+        self.assertIn("sftp_server=/usr/lib/openssh/sftp-server -u 077", guide)
+        self.assertIn("remote host itself", guide)
+        self.assertIn("`rclone mount` as the live collection destination", guide)
+        self.assertIn("rclone copy", guide)
+        self.assertIn("--exclude '/.pending/**'", guide)
+        self.assertIn("browser OAuth consent", guide)
+        self.assertIn("remote-dataset-storage.md", readme)
+        self.assertIn("remote-dataset-storage.md", chinese)
+
 
 if __name__ == "__main__":
     unittest.main()

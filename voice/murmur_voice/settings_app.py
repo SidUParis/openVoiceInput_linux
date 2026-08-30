@@ -290,7 +290,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         page.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
         collection_title = Gtk.Label(
-            label="Local training-data collection (optional)", xalign=0
+            label="Training-data collection (optional)", xalign=0
         )
         collection_title.add_css_class("heading")
         page.append(collection_title)
@@ -301,10 +301,15 @@ class SettingsWindow(Gtk.ApplicationWindow):
                 "Volcengine final is successfully committed, this stores a WAV "
                 "and provider_final (an "
                 "unreviewed pseudo-label) under openvoiceinput-dataset-v1 in the "
-                "selected folder. spoken_verbatim and preferred_output remain "
-                "empty until a later review workflow. Nothing here uploads the "
-                "local dataset or trains a model. Disabling immediately blocks "
-                "unpublished queued records; already published records are retained."
+                "selected absolute POSIX folder. The folder may be local or a "
+                "remote filesystem already mounted by the OS (for example SSHFS). "
+                "This app does not mount a host or accept SSH or Google Drive URLs; "
+                "back up complete local/Orange records to Google Drive asynchronously. "
+                "spoken_verbatim and preferred_output remain empty until a later "
+                "review workflow. Nothing here uploads the dataset or trains a model. "
+                "A disconnected mount can lose an unpublished record because there is "
+                "no fallback spool. Disabling immediately blocks unpublished queued "
+                "records; already published records are retained."
             ),
             xalign=0,
             wrap=True,
@@ -312,7 +317,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         page.append(self.data_collection_notice_label)
 
         self.data_collection_check = Gtk.CheckButton(
-            label="Keep local WAV + unreviewed provider final"
+            label="Keep WAV + unreviewed provider final in selected folder"
         )
         page.append(self.data_collection_check)
 
@@ -321,7 +326,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
             spacing=8,
         )
         self.data_collection_directory_entry = Gtk.Entry(
-            placeholder_text="Choose an absolute existing folder"
+            placeholder_text="Choose a local or already-mounted absolute folder"
         )
         self.data_collection_directory_entry.set_editable(False)
         self.data_collection_directory_entry.set_hexpand(True)
@@ -335,9 +340,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         collection_path_row.append(self.choose_data_collection_directory_button)
         page.append(collection_path_row)
 
-        self.save_data_collection_button = Gtk.Button(
-            label="Save local collection setting"
-        )
+        self.save_data_collection_button = Gtk.Button(label="Save collection setting")
         self.save_data_collection_button.connect(
             "clicked", self._on_save_data_collection
         )
@@ -705,7 +708,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
     def _on_choose_data_collection_directory(self, button: Gtk.Button) -> None:
         del button
         chooser = Gtk.FileChooserNative.new(
-            "Choose local dataset folder",
+            "Choose dataset folder (local or already mounted)",
             self,
             Gtk.FileChooserAction.SELECT_FOLDER,
             "Select",
@@ -727,7 +730,9 @@ class SettingsWindow(Gtk.ApplicationWindow):
             selected = chooser.get_file()
             selected_path = selected.get_path() if selected is not None else None
             if selected_path is None:
-                self._show_error("Choose a local filesystem folder.")
+                self._show_error(
+                    "Choose a local filesystem path or an already-mounted folder."
+                )
             else:
                 self.data_collection_directory_entry.set_text(selected_path)
         chooser.destroy()
@@ -804,8 +809,9 @@ class SettingsWindow(Gtk.ApplicationWindow):
         )
         if collection.enabled:
             self._show_message(
-                "Local WAV and unreviewed provider-final collection is enabled. "
-                "Each new dictation reads this choice."
+                "WAV and unreviewed provider-final collection is enabled for the "
+                "selected filesystem folder. Each new dictation reads this choice; "
+                "keep a remote mount connected."
             )
         else:
             self._show_message(
