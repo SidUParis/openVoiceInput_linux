@@ -258,6 +258,9 @@ find "$vendor_root" -type d -exec chmod 0755 {} +
 find "$vendor_root" -type f -exec chmod 0644 {} +
 find "$package_root" -exec touch -h -d "@$source_epoch" {} +
 installed_size=$(du -s -k --exclude=DEBIAN "$package_root" | cut -f 1)
+if ((installed_size > 10 * 1024)); then
+  die "Debian payload exceeds the 10 MiB lightweight-client budget" 2
+fi
 python3 -I "$helper" render-control \
   --template "$debian_source/control.in" \
   --output "$package_root/DEBIAN/control" \
@@ -273,6 +276,10 @@ checksum_temporary=$(mktemp "$output_dir/.${package_name}.sha256.tmp.XXXXXX")
 chmod 0600 "$package_temporary" "$checksum_temporary"
 SOURCE_DATE_EPOCH="$source_epoch" dpkg-deb \
   --root-owner-group -Zxz -z9 --build "$package_root" "$package_temporary" >/dev/null
+package_bytes=$(stat --format='%s' "$package_temporary")
+if ((package_bytes > 5 * 1024 * 1024)); then
+  die "Debian package exceeds the 5 MiB lightweight-client budget" 2
+fi
 
 # Inspect the completed archive before publication. No package installation is
 # performed by this builder.

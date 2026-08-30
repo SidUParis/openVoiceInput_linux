@@ -7,7 +7,7 @@ provides only the controls needed for the standalone voice preview:
 - save a replacement Volcengine API key through a masked `Gtk.PasswordEntry`;
 - edit the explicit private personal vocabulary, one term per line;
 - edit bounded, explicit wrong-to-canonical recognition corrections;
-- rank DJI, headset, other external, and built-in microphone categories;
+- arrange a complete microphone priority for the user's own equipment;
 - explicitly enable/disable optional local WAV/JSON collection and choose an
   existing absolute local or mounted destination folder;
 - clear the validated local key through an explicit two-step action while the
@@ -37,9 +37,9 @@ Collection is off by default. Only an authoritative provider final accepted by
 the focused IBus context publishes the exact 16 kHz mono signed 16-bit WAV and
 versioned JSON. The UI calls `provider_final` an unreviewed pseudo-label and
 does not fabricate `spoken_verbatim` or `preferred_output`: both remain null.
-It also states that the application does not mount Orange or accept SSH/Google
-Drive URLs. A local path backed by an already-mounted remote filesystem is
-allowed; complete local/Orange records can be backed up to Drive separately.
+It also states that the application does not mount a remote host or accept
+SSH/Google Drive URLs. A local path backed by an already-mounted remote
+filesystem is allowed; complete records can be backed up to Drive separately.
 It does not train a model or add application-level encryption. Disabling
 prevents unpublished queued/staged records from becoming visible; already
 published records are retained. The selected filesystem determines effective
@@ -47,10 +47,13 @@ visibility.
 See [the remote dataset storage guide](../docs/remote-dataset-storage.md) for
 SSHFS disconnect/permission boundaries and asynchronous Google Drive backup.
 
-The microphone list stores one complete priority order. Its recommended default
-is `DJI > headset > other external > built-in`, but users may move any category
-up or down. Before each dictation the daemon reloads this setting, re-enumerates
-currently usable sources, and falls through unavailable or ambiguous categories.
+The microphone list stores one complete priority order chosen by the user. If
+no priority has ever been saved, the current alpha loads the deterministic
+compatibility initialization `DJI > headset > other external > built-in`; this
+is an implementation fallback, not a product recommendation. Users may move
+any category up or down. Before each dictation the daemon reloads this setting,
+re-enumerates currently usable sources, and falls through unavailable or
+ambiguous categories.
 DJI is still link-aware; Bluetooth A2DP playback alone is not treated as a
 headset microphone. The choice is scoped to the new daemon stream, never
 requests a playback-sink or system-default change, and does not hand off
@@ -64,7 +67,7 @@ actions, but it does not implement or own microphone routing, ASR, or dataset
 storage.
 
 This MVP deliberately does not configure Rime data, global hotkeys, ASR
-advanced options, a tray indicator, application-owned Orange
+advanced options, a tray indicator, application-owned remote-host
 authentication/mounting or first-party resumable transfer, a review/delete
 workflow, model training, or Secret Service. Those integrations need their own
 lifecycle and migration design. Runtime requirements are PyGObject and the

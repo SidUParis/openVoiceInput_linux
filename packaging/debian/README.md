@@ -6,6 +6,12 @@ The wheelhouse from the matching offline preview bundle is accepted; its
 project wheel is ignored because application code is exported directly from
 the selected Git commit.
 
+The builder enforces the product's lightweight-client boundary: the compressed
+`.deb` must stay at or below 5 MiB and its declared `Installed-Size` at or below
+10 MiB. These are regression ceilings, not the current measured size; alpha.4
+is about 404 KiB compressed and 2.7 MiB installed. Distribution dependencies
+which APT may need to add are outside the package's own size.
+
 The Ubuntu build host needs `dpkg-deb`, `desktop-file-utils`, and `appstream`
 for archive construction and metadata validation. These checks do not access
 the network.

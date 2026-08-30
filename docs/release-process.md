@@ -61,8 +61,9 @@ integrity; it does not prove who published the file.
    writer a bounded drain. User-mounted filesystems must be described as a
    separate storage trust boundary. Also disclose that DJI selection is
    per-dictation/app-scoped with no mid-utterance handoff. A release that adds
-   microphone ordering must also state the recommended default, saved-order
-   fallback behavior, and the remaining physical-device validation gap.
+   microphone ordering must also state the deterministic initial order,
+   saved-order fallback behavior, and the remaining physical-device validation
+   gap.
 
 ## Controlled public transition
 

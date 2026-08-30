@@ -17,6 +17,10 @@
       per-utterance microphone selection, and optional user-owned ASR data
       collection. Recognition currently uses the user's Volcengine account.
     </p>
+    <p>
+      The native GTK4 client is intentionally small and does not bundle an
+      Electron runtime or local speech model.
+    </p>
     <p xml:lang="zh-CN">
       Open Voice Input Linux 将实时语音识别结果直接写入当前 IBus 输入位置，
       不依赖剪贴板或模拟粘贴。
@@ -25,7 +29,17 @@
       当前 Ubuntu 24.04 预览版支持术语纠错学习、逐句动态选择麦克风和可选的
       用户自有 ASR 数据收集；在线识别目前使用用户自己的火山引擎账号。
     </p>
+    <p xml:lang="zh-CN">
+      原生 GTK4 客户端保持轻量，不捆绑 Electron 运行时或本地语音模型。
+    </p>
   </description>
+  <screenshots>
+    <screenshot type="default">
+      <image type="source">https://raw.githubusercontent.com/SidUParis/openVoiceInput_linux/main/docs/assets/settings-window.png</image>
+      <caption>Chinese-first native GTK4 settings</caption>
+      <caption xml:lang="zh-CN">中文优先的原生 GTK4 设置界面</caption>
+    </screenshot>
+  </screenshots>
   <launchable type="desktop-id">io.github.SidUParis.OpenVoiceInputLinux.Settings.desktop</launchable>
   <provides>
     <binary>murmur-voice-daemon</binary>

@@ -117,7 +117,7 @@ class DocumentationAssetTests(unittest.TestCase):
         width, height, depth, colour, compression, filtering, interlace = struct.unpack(
             ">IIBBBBB", chunks[0][1]
         )
-        self.assertEqual((width, height), (620, 760))
+        self.assertEqual((width, height), (900, 820))
         self.assertEqual((depth, colour), (8, 2))
         self.assertEqual((compression, filtering, interlace), (0, 0, 0))
 
@@ -136,8 +136,8 @@ class DocumentationAssetTests(unittest.TestCase):
         readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
         english = (REPOSITORY / "README.en.md").read_text(encoding="utf-8")
 
-        self.assertIn("[English](README.en.md)", readme)
-        self.assertIn("[简体中文](README.md)", english)
+        self.assertIn('href="README.en.md">English</a>', readme)
+        self.assertIn('href="README.md">简体中文</a>', english)
         self.assertIn("## 一分钟安装", readme)
         self.assertNotIn("## Install on Ubuntu", readme)
         self.assertIn("## Install on Ubuntu", english)
@@ -152,6 +152,50 @@ class DocumentationAssetTests(unittest.TestCase):
             ),
             "every main README section heading must remain Chinese-first",
         )
+
+    def test_public_pages_keep_microphone_choice_and_lightweight_claim_honest(
+        self,
+    ) -> None:
+        pages = {
+            "main README": (REPOSITORY / "README.md").read_text(encoding="utf-8"),
+            "English README": (REPOSITORY / "README.en.md").read_text(encoding="utf-8"),
+            "Chinese quick guide": (REPOSITORY / "docs/README.zh-CN.md").read_text(
+                encoding="utf-8"
+            ),
+            "Chinese press kit": (REPOSITORY / "docs/press-kit.zh-CN.md").read_text(
+                encoding="utf-8"
+            ),
+        }
+
+        for name, content in pages.items():
+            with self.subTest(page=name):
+                self.assertNotIn("大疆 >", content)
+                self.assertNotIn("DJI >", content)
+                self.assertNotIn("推荐右 `Alt`", content)
+                self.assertNotIn("按 Right Alt", content)
+
+        main = pages["main README"]
+        english = pages["English README"]
+        normalised_english = " ".join(english.split())
+        self.assertIn("麦克风顺序完全由用户设置", main)
+        self.assertIn("using the user's saved priority", normalised_english)
+        self.assertIn("413,736", main)
+        self.assertIn("413,736", normalised_english)
+        self.assertIn("404 KiB", main)
+        self.assertIn("404 KiB", normalised_english)
+        self.assertIn("2,776 KiB", main)
+        self.assertIn("2,776 KiB", normalised_english)
+        self.assertIn("2.7 MiB", main)
+        self.assertIn("2.7 MiB", normalised_english)
+        self.assertIn(
+            "does not bundle Electron or local ASR model weights",
+            normalised_english,
+        )
+        self.assertIn(
+            "APT may download additional system dependencies", normalised_english
+        )
+        self.assertNotIn("Right Alt is recommended", english)
+        self.assertNotIn("Orange", english)
 
     def test_generated_hero_assets_have_bounded_publishable_dimensions(self) -> None:
         self.assertTrue(HERO_ANIMATION.is_file())
@@ -176,16 +220,25 @@ class DocumentationAssetTests(unittest.TestCase):
         generator = (REPOSITORY / "scripts/generate_hero_demo.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("interaction concept demo", notes)
+        self.assertIn("合成交互概念演示", notes)
         self.assertIn("no recording", notes)
         self.assertIn("no network access", notes)
-        self.assertIn("交互概念演示", notes)
-        self.assertIn("156 frames averaging", notes)
+        self.assertIn("不冒充产品实录", notes)
+        self.assertIn("GNOME 风格的中性标题栏", notes)
+        self.assertIn("共 156 帧", notes)
         self.assertIn("12 fps", notes)
-        self.assertIn("再按一下完成", generator)
-        self.assertIn("个人术语纠错", generator)
+        self.assertIn("合成交互演示", generator)
+        self.assertIn("自定义快捷键", generator)
+        self.assertIn("再按一次完成", generator)
+        self.assertIn("个人术语学习", generator)
+        self.assertIn("数据由你掌控", generator)
         self.assertNotIn("按住说话", generator)
         self.assertNotIn("松开后提交", generator)
+        self.assertNotIn("Right Alt", notes + generator)
+        self.assertNotIn("Tap Right Alt", notes + generator)
+        self.assertNotIn("#FF6258", generator)
+        self.assertNotIn("#FFC04A", generator)
+        self.assertNotIn("#35C759", generator)
 
     def test_remote_dataset_guide_keeps_mount_and_backup_boundaries_explicit(
         self,

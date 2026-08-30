@@ -84,9 +84,10 @@ them into the librime-capable production engine and removes engine switching.
 
 ## Phase 4 — Settings and packaging
 
-- [x] Bounded GTK4 settings window with masked API key, explicit vocabulary,
-  explicit provider-side corrections, local-collection choice, microphone
-  boundary notice, and user-service controls.
+- [x] Bounded, Chinese-first GTK4 settings window with task-oriented pages,
+  masked API key, explicit vocabulary and provider-side corrections,
+  user-defined microphone order, local-collection choice, persistent status
+  feedback, and user-service controls.
 - [ ] Optional explicit provider test that clearly warns it creates a real,
   potentially billable ASR session.
 - [ ] Store secrets in Secret Service; provide a documented `0600` fallback.

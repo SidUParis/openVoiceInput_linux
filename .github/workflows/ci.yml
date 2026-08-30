@@ -354,6 +354,21 @@ jobs:
           [[ $(dpkg-deb -f "$deb" Package) == open-voice-input-linux ]]
           [[ $(dpkg-deb -f "$deb" Version) == "$expected_version" ]]
           [[ $(dpkg-deb -f "$deb" Architecture) == amd64 ]]
+          package_bytes=$(stat --format='%s' "$deb")
+          installed_kib=$(dpkg-deb -f "$deb" Installed-Size)
+          if ((package_bytes > 5 * 1024 * 1024)); then
+            printf 'Debian package exceeds the 5 MiB lightweight-client budget: %s bytes\n' \
+              "$package_bytes" >&2
+            exit 1
+          fi
+          if [[ ! $installed_kib =~ ^[0-9]+$ ]] \
+            || ((installed_kib > 10 * 1024)); then
+            printf 'Debian payload exceeds the 10 MiB installed-size budget: %s KiB\n' \
+              "$installed_kib" >&2
+            exit 1
+          fi
+          printf 'lightweight package: %s bytes; Installed-Size: %s KiB\n' \
+            "$package_bytes" "$installed_kib"
           [[ ${deb##*/} == \
             "open-voice-input-linux_${expected_version}_amd64.deb" ]]
           depends=$(dpkg-deb -f "$deb" Depends)
