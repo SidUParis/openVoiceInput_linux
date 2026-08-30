@@ -12,6 +12,18 @@ from typing import Any
 
 DEFAULT_ENDPOINT = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
 DEFAULT_RESOURCE_ID = "volc.seedasr.sauc.duration"
+VOICE_CONFIG_SCHEMA_VERSION = 2
+SUPPORTED_PROVIDERS = ("volcengine", "qwen", "openai", "minimax")
+QWEN_ENDPOINT = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+QWEN_DEFAULT_MODEL = "qwen-audio-3.0-asr-flash-streaming"
+QWEN_MODELS = (QWEN_DEFAULT_MODEL,)
+OPENAI_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions"
+OPENAI_DEFAULT_MODEL = "gpt-4o-mini-transcribe"
+OPENAI_MODELS = (
+    "gpt-4o-mini-transcribe",
+    "gpt-4o-transcribe",
+    "whisper-1",
+)
 MAX_CONFIG_BYTES = 16 * 1024
 MAX_API_KEY_BYTES = 4096
 MAX_VOCABULARY_BYTES = 128 * 1024
@@ -51,8 +63,43 @@ class VoiceConfig:
     api_key: str = field(repr=False)
     hotwords: tuple[str, ...] = field(default=(), repr=False)
     corrections: tuple[CorrectionPair, ...] = field(default=(), repr=False)
+    provider: str = "volcengine"
+    model: str | None = None
 
     def provider_settings(self) -> dict[str, Any]:
+        provider, model = _validate_provider_configuration(self.provider, self.model)
+        if provider == "qwen":
+            vocabulary = list(normalize_vocabulary_terms(self.hotwords))
+            vocabulary.extend(
+                pair.canonical for pair in normalize_correction_pairs(self.corrections)
+            )
+            return {
+                "api_key": self.api_key,
+                "endpoint": QWEN_ENDPOINT,
+                "model": model,
+                "sample_rate": 16_000,
+                "language_hints": ("zh", "en", "fr"),
+                "vocabulary": tuple(dict.fromkeys(vocabulary)),
+                "final_result_timeout": 20.0,
+                "max_pending_audio_seconds": 10.0,
+            }
+        if provider == "openai":
+            prompt_terms = list(normalize_vocabulary_terms(self.hotwords))
+            prompt_terms.extend(
+                pair.canonical for pair in normalize_correction_pairs(self.corrections)
+            )
+            return {
+                "api_key": self.api_key,
+                "endpoint": OPENAI_ENDPOINT,
+                "model": model,
+                "prompt_terms": tuple(dict.fromkeys(prompt_terms)),
+                "final_result_timeout": 60.0,
+                "max_audio_seconds": 600.0,
+            }
+        if provider == "minimax":
+            raise ConfigError(
+                "MiniMax speech-to-text is not available in the reviewed public API"
+            )
         settings = {
             "api_key": self.api_key,
             "endpoint": DEFAULT_ENDPOINT,
@@ -136,13 +183,30 @@ def load_config(path: str | os.PathLike[str] | None = None) -> VoiceConfig:
         os.close(descriptor)
 
     try:
-        document = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        document = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_fields,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateJSONField) as error:
         raise ConfigError("voice configuration is not valid UTF-8 JSON") from error
-    if not isinstance(document, dict) or set(document) != {"api_key"}:
-        raise ConfigError("voice configuration must contain only api_key")
-
-    return VoiceConfig(api_key=_validate_api_key(document.get("api_key")))
+    if not isinstance(document, dict):
+        raise ConfigError("voice configuration must be a JSON object")
+    if set(document) == {"api_key"}:
+        return VoiceConfig(api_key=_validate_api_key(document.get("api_key")))
+    if set(document) != {"version", "provider", "api_key", "model"}:
+        raise ConfigError(
+            "voice configuration must contain only api_key or reviewed v2 fields"
+        )
+    if document.get("version") != VOICE_CONFIG_SCHEMA_VERSION:
+        raise ConfigError("voice configuration uses an unsupported schema version")
+    provider, model = _validate_provider_configuration(
+        document.get("provider"), document.get("model")
+    )
+    return VoiceConfig(
+        api_key=_validate_api_key(document.get("api_key")),
+        provider=provider,
+        model=model,
+    )
 
 
 def save_api_key(api_key: str, path: str | os.PathLike[str] | None = None) -> Path:
@@ -153,6 +217,32 @@ def save_api_key(api_key: str, path: str | os.PathLike[str] | None = None) -> Pa
     return _write_private_json(
         config_path,
         {"api_key": validated},
+        kind="voice configuration",
+        temporary_prefix=".voice.json.",
+    )
+
+
+def save_provider_config(
+    api_key: str,
+    provider: str,
+    model: str | None = None,
+    path: str | os.PathLike[str] | None = None,
+) -> Path:
+    """Atomically store one selected reviewed ASR backend and its private key."""
+
+    validated_key = _validate_api_key(api_key)
+    validated_provider, validated_model = _validate_provider_configuration(
+        provider, model
+    )
+    config_path = Path(path) if path is not None else default_config_path()
+    return _write_private_json(
+        config_path,
+        {
+            "version": VOICE_CONFIG_SCHEMA_VERSION,
+            "provider": validated_provider,
+            "api_key": validated_key,
+            "model": validated_model,
+        },
         kind="voice configuration",
         temporary_prefix=".voice.json.",
     )
@@ -591,3 +681,28 @@ def _validate_api_key(value: Any) -> str:
     ):
         raise ConfigError("api_key is empty or invalid")
     return value
+
+
+def _validate_provider_configuration(
+    provider_value: Any,
+    model_value: Any,
+) -> tuple[str, str | None]:
+    if not isinstance(provider_value, str) or provider_value not in SUPPORTED_PROVIDERS:
+        raise ConfigError("recognition provider is unsupported")
+    if model_value is not None and not isinstance(model_value, str):
+        raise ConfigError("recognition model must be a string or null")
+    if provider_value == "volcengine":
+        if model_value is not None:
+            raise ConfigError("Volcengine model is fixed by its reviewed resource")
+        return provider_value, None
+    if provider_value == "qwen":
+        model = model_value or QWEN_DEFAULT_MODEL
+        if model not in QWEN_MODELS:
+            raise ConfigError("Qwen recognition model is unsupported")
+        return provider_value, model
+    if provider_value == "openai":
+        model = model_value or OPENAI_DEFAULT_MODEL
+        if model not in OPENAI_MODELS:
+            raise ConfigError("OpenAI recognition model is unsupported")
+        return provider_value, model
+    raise ConfigError("MiniMax speech-to-text is not available")

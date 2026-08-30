@@ -10,8 +10,8 @@ supervised user daemon.
 ## Implementation status
 
 The repository now contains a pure Python, voice-only IBus engine and a
-self-contained Volcengine daemon that prove native caret-local preedit and
-final commit with this transition flow:
+self-contained provider-neutral voice daemon that prove native caret-local
+preedit and final commit with this transition flow:
 
 ```text
 current IBus engine -> murmur-voice -> Acquire/Partial/Final over D-Bus
@@ -72,9 +72,11 @@ Responsibilities:
   fixed-code error reporting;
 - a bounded start deadline plus an invisible post-preflight focus heartbeat,
   so delayed discovery cannot open capture for an invalidated input context;
-- provider authentication and WebSocket lifecycle;
-- Volcengine `bigmodel_async` request/response handling;
-- live partial, two-pass final, timeout, and cancellation events;
+- fixed-endpoint provider authentication and transport lifecycle;
+- Volcengine `bigmodel_async`, Qwen real-time, and OpenAI batch transcription
+  handling behind one bounded ASR client interface;
+- provider-supported partials, authoritative final, timeout, and cancellation
+  events;
 - deterministic extraction and private persistence of at most one strict
   replacement from the bounded post-final snapshot;
 - per-dictation reload and conflict-safe compilation of manual/adaptive
@@ -159,11 +161,18 @@ snapshot or transcript record.
 
 If local collection was enabled at utterance start, the same accepted final
 also freezes the exact captured PCM and offers it to a bounded background
-queue. The writer completes `audio.wav` and `record.json` below `.pending`,
-then atomically renames the directory into the selected dataset's `utterances/`
-tree. `provider_final` remains an unreviewed pseudo-label;
+queue. The writer completes `audio.wav` and `record.json` below `.pending`, then
+atomically renames that unchanged v1 pair into the selected dataset's
+`utterances/` tree. It subsequently publishes a transcript-free summary at
+`usage/<utterance_id>.json`. `provider_final` remains an unreviewed pseudo-label;
 `spoken_verbatim`/`preferred_output` are null. Cancellation, failure, or final
 rejection discards the in-memory collector state.
+
+The settings dashboard aggregates only bounded `usage/<utterance_id>.json`
+summaries in a
+background worker. It does not open record labels or audio. Disabled collection
+causes no dataset scan, and an unavailable mount yields an unavailable status
+without reinitialising the mount point.
 
 ## Rime composition boundary
 

@@ -65,6 +65,9 @@ selected.
 - [x] Add optional, default-off local WAV/JSON collection with a user-selected
   existing destination, bounded background publication, and explicit
   unreviewed/null label roles.
+- [x] Add adaptive-learning v2 with multi-replacement candidates, explicit
+  reasons and confirmation, safe version-1 migration, and optional dataset
+  feedback sidecars that leave the base record immutable.
 - [ ] Generalise the provider boundary and expose a production daemon D-Bus
   API; the transition implementation uses the Preedit1 bridge and local Unix
   control socket.

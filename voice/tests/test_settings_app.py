@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -10,12 +13,13 @@ try:
 except ValueError:
     pytest.skip("GTK4 introspection data is not installed", allow_module_level=True)
 
-from gi.repository import Gio, Gtk  # noqa: E402
+from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
 if not Gtk.init_check():
     pytest.skip("a GTK display is not available", allow_module_level=True)
 
 from murmur_voice.data_collection import DataCollectionConfig  # noqa: E402
+from murmur_voice.interaction import InteractionConfig  # noqa: E402
 from murmur_voice.microphone_policy import (  # noqa: E402
     DEFAULT_MICROPHONE_PRIORITY,
     MicrophonePolicyConfig,
@@ -23,7 +27,9 @@ from murmur_voice.microphone_policy import (  # noqa: E402
 from murmur_voice.settings_app import APPLY_NOTICE, SettingsWindow  # noqa: E402
 from murmur_voice.settings_controller import (  # noqa: E402
     CORRECTION_TEXT_LIMIT,
+    DatasetStatistics,
     KeyState,
+    ProviderSelection,
     ServiceSnapshot,
     SettingsError,
 )
@@ -32,11 +38,15 @@ from murmur_voice.settings_controller import (  # noqa: E402
 class FakeController:
     def __init__(self) -> None:
         self.saved_key = None
+        self.saved_provider = None
+        self.loaded_provider_selection = ProviderSelection("volcengine", None)
         self.saved_vocabulary = None
         self.save_vocabulary_calls = 0
         self.saved_corrections = None
         self.saved_microphone_priority = None
         self.saved_data_collection = None
+        self.saved_interaction = None
+        self.submitted_adaptive_feedback = None
         self.service_actions = []
         self.key_error = None
         self.clear_key_error = None
@@ -49,6 +59,11 @@ class FakeController:
         self.loaded_microphone_policy = MicrophonePolicyConfig()
         self.data_collection_error = None
         self.loaded_data_collection = DataCollectionConfig()
+        self.loaded_interaction = InteractionConfig()
+        self.loaded_dataset_statistics = DatasetStatistics("disabled")
+        self.dataset_statistics_calls = 0
+        self.dataset_statistics_started = threading.Event()
+        self.dataset_statistics_gate = None
 
     def key_state(self):
         return KeyState.READY
@@ -63,6 +78,17 @@ class FakeController:
         if self.key_error is not None:
             raise self.key_error
         self.saved_key = api_key
+
+    def provider_selection(self):
+        return self.loaded_provider_selection
+
+    def save_provider(self, api_key, provider, model=None):
+        if self.key_error is not None:
+            raise self.key_error
+        self.saved_key = api_key
+        self.saved_provider = (provider, model)
+        self.loaded_provider_selection = ProviderSelection(provider, model)
+        return self.loaded_provider_selection
 
     def clear_key(self):
         self.clear_key_calls += 1
@@ -91,6 +117,10 @@ class FakeController:
         self.loaded_corrections = tuple(normalized)
         return len(normalized)
 
+    def submit_adaptive_feedback(self, provider_text, preferred_text):
+        self.submitted_adaptive_feedback = (provider_text, preferred_text)
+        return "explicit-feedback-activated"
+
     def load_microphone_policy(self):
         if self.microphone_policy_error is not None:
             raise self.microphone_policy_error
@@ -117,6 +147,27 @@ class FakeController:
             directory=Path(directory) if directory is not None else None,
         )
         return self.loaded_data_collection
+
+    def load_interaction(self):
+        return self.loaded_interaction
+
+    def save_interaction(
+        self, mode, minimum_hold_milliseconds, release_timeout_seconds
+    ):
+        self.saved_interaction = (
+            mode,
+            minimum_hold_milliseconds,
+            release_timeout_seconds,
+        )
+        self.loaded_interaction = InteractionConfig(*self.saved_interaction)
+        return self.loaded_interaction
+
+    def load_dataset_statistics(self):
+        self.dataset_statistics_calls += 1
+        self.dataset_statistics_started.set()
+        if self.dataset_statistics_gate is not None:
+            self.dataset_statistics_gate.wait(timeout=2)
+        return self.loaded_dataset_statistics
 
     def service_status(self):
         self.service_actions.append("status")
@@ -146,6 +197,7 @@ def window(application):
         application,
         controller,
         refresh_service_on_start=False,
+        refresh_statistics_on_start=False,
     )
     yield result, controller
     result.close()
@@ -176,19 +228,20 @@ def _label_texts(widget):
     ]
 
 
-def test_settings_use_six_chinese_first_pages_and_native_cards(window):
+def test_settings_use_seven_chinese_first_pages_and_native_cards(window):
     settings_window, _ = window
 
     assert isinstance(settings_window.settings_sidebar, Gtk.StackSidebar)
     assert settings_window.settings_sidebar.get_stack() is (
         settings_window.settings_stack
     )
-    assert settings_window.settings_stack.get_pages().get_n_items() == 6
+    assert settings_window.settings_stack.get_pages().get_n_items() == 7
     assert settings_window.settings_stack.get_visible_child_name() == "overview"
 
     expected_pages = {
-        "overview": "概览与服务",
+        "overview": "首页",
         "cloud": "云端识别",
+        "interaction": "快捷键与按住说话",
         "vocabulary": "个人词表",
         "corrections": "纠错学习",
         "microphones": "麦克风",
@@ -198,6 +251,8 @@ def test_settings_use_six_chinese_first_pages_and_native_cards(window):
         child = settings_window.settings_stack.get_child_by_name(name)
         assert child is not None
         assert title in _label_texts(child)
+    sidebar_copy = " ".join(_label_texts(settings_window.settings_sidebar))
+    assert all(title in sidebar_copy for title in expected_pages.values())
 
     cards = [
         child
@@ -207,16 +262,162 @@ def test_settings_use_six_chinese_first_pages_and_native_cards(window):
     assert len(cards) >= 8
 
 
+def test_interaction_mode_is_user_selected_and_never_hardcodes_right_alt(window):
+    settings_window, controller = window
+    interaction_page = settings_window.settings_stack.get_child_by_name("interaction")
+    copy = " ".join(_label_texts(interaction_page))
+
+    assert settings_window.toggle_mode_button.get_active() is True
+    assert settings_window.minimum_hold_spin.get_sensitive() is False
+    assert "具体按键始终由你" in copy
+    assert "Right Alt" not in copy
+    assert "右 Alt" not in copy
+    assert "Wayland" in settings_window.interaction_boundary_label.get_text()
+
+    settings_window.push_to_talk_mode_button.set_active(True)
+    settings_window.minimum_hold_spin.set_value(250)
+    settings_window.release_timeout_spin.set_value(90)
+    settings_window.save_interaction()
+
+    assert controller.saved_interaction == ("push_to_talk", 250, 90)
+    assert settings_window.minimum_hold_spin.get_sensitive() is True
+    assert "下一次按下" in settings_window.message_label.get_text()
+    assert controller.service_actions == []
+
+
 def test_overview_presents_lightweight_boundary_without_personal_hotkey(window):
     settings_window, _ = window
     overview = settings_window.settings_stack.get_child_by_name("overview")
     copy = " ".join(_label_texts(overview))
 
     assert "轻量" in copy
-    assert "原生 GTK4" in copy
-    assert "不捆绑本地大模型" in copy
+    assert "IBus 原生" in copy
+    assert "中文优先" in copy
     assert "使用你设置的快捷键" in copy
+    assert "打开首页不会启动麦克风" in copy
     assert "右 Alt" not in copy
+
+
+def test_overview_has_private_usage_metrics_recent_status_and_quick_actions(window):
+    settings_window, _ = window
+    overview = settings_window.settings_stack.get_child_by_name("overview")
+    copy = " ".join(_label_texts(overview))
+
+    for expected in (
+        "今日字数",
+        "今日时长",
+        "听写次数",
+        "累计字数",
+        "累计时长",
+        "累计听写",
+        "最近留存",
+        "最近状态",
+        "完善个人词表",
+        "管理纠错学习",
+        "选择麦克风",
+        "查看数据留存",
+    ):
+        assert expected in copy
+    assert "数据集根目录下不含正文的 usage 索引" in copy
+    assert "最近识别" not in copy
+
+
+def test_ready_statistics_render_without_transcript_or_path(window):
+    settings_window, _ = window
+    private_text = "private-transcript-that-must-not-appear"
+    statistics = DatasetStatistics(
+        state="ready",
+        today_characters=1234,
+        today_seconds=65,
+        today_utterances=7,
+        total_characters=9876,
+        total_seconds=3665,
+        total_utterances=42,
+        latest_recorded_at=datetime(2026, 8, 31, 10, 30, tzinfo=timezone.utc),
+    )
+
+    settings_window._apply_dataset_statistics(statistics)
+
+    assert settings_window.today_characters_label.get_text() == "1,234"
+    assert settings_window.today_duration_label.get_text() == "1 分钟"
+    assert settings_window.today_utterances_label.get_text() == "7"
+    assert settings_window.total_characters_label.get_text() == "9,876"
+    assert settings_window.total_duration_label.get_text() == "1 小时 1 分"
+    assert settings_window.total_utterances_label.get_text() == "42"
+    assert settings_window.latest_activity_label.get_text() != "—"
+    assert "未读取或展示任何转写正文" in (
+        settings_window.statistics_status_label.get_text()
+    )
+    assert private_text not in " ".join(_label_texts(settings_window))
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    (
+        ("disabled", "不会扫描以前选择过的目录"),
+        ("unavailable", "普通听写仍可继续"),
+        ("unindexed", "不会读取 record.json 来回填"),
+    ),
+)
+def test_disabled_or_unavailable_statistics_are_unknown_not_zero(
+    window, state, expected
+):
+    settings_window, _ = window
+
+    settings_window._apply_dataset_statistics(DatasetStatistics(state))
+
+    assert settings_window.today_characters_label.get_text() == "—"
+    assert settings_window.total_utterances_label.get_text() == "—"
+    assert expected in settings_window.statistics_status_label.get_text()
+
+
+def test_statistics_refresh_is_background_and_single_flight(window):
+    settings_window, controller = window
+    controller.loaded_dataset_statistics = DatasetStatistics(
+        state="ready",
+        today_characters=9,
+        total_characters=9,
+        today_utterances=1,
+        total_utterances=1,
+    )
+    controller.dataset_statistics_gate = threading.Event()
+
+    started_at = time.monotonic()
+    settings_window.refresh_dataset_statistics()
+    elapsed = time.monotonic() - started_at
+    assert elapsed < 0.25
+    assert controller.dataset_statistics_started.wait(timeout=1)
+
+    settings_window.refresh_dataset_statistics()
+    assert controller.dataset_statistics_calls == 1
+    assert settings_window.refresh_statistics_button.get_sensitive() is False
+
+    controller.dataset_statistics_gate.set()
+    deadline = time.monotonic() + 2
+    context = GLib.MainContext.default()
+    while settings_window._statistics_busy and time.monotonic() < deadline:
+        while context.pending():
+            context.iteration(False)
+        time.sleep(0.01)
+
+    assert settings_window._statistics_busy is False
+    assert settings_window.today_characters_label.get_text() == "9"
+
+
+def test_late_statistics_completion_does_not_update_a_closed_window(window):
+    settings_window, _ = window
+    original = settings_window.statistics_status_label.get_text()
+    settings_window._statistics_busy = True
+    settings_window._window_closed = True
+
+    result = settings_window._finish_dataset_statistics(
+        settings_window._statistics_generation,
+        DatasetStatistics(state="ready", total_utterances=99),
+    )
+
+    assert result is False
+    assert settings_window._statistics_busy is False
+    assert settings_window.statistics_status_label.get_text() == original
 
 
 def test_password_entry_is_empty_masked_and_has_no_reveal_control(window):
@@ -237,10 +438,27 @@ def test_settings_disclose_remote_audio_billing_and_cancel_boundary(window):
     notice = settings_window.remote_audio_notice_label.get_text()
 
     assert "麦克风音频" in notice
-    assert "火山引擎" in notice
+    assert "你选择的服务" in notice
     assert "账号" in notice
     assert "计费" in notice
     assert "无法撤回" in notice
+    assert "MiniMax" in notice
+
+
+def test_ready_provider_can_be_selected_without_exposing_an_existing_key(window):
+    settings_window, controller = window
+
+    assert settings_window._selected_provider_id() == "volcengine"
+    settings_window.provider_combo.set_selected(1)
+    settings_window.key_entry.set_text("qwen-key-sentinel")
+
+    settings_window.save_key()
+
+    assert controller.saved_provider == ("qwen", None)
+    assert controller.saved_key == "qwen-key-sentinel"
+    assert settings_window.key_entry.get_text() == ""
+    assert settings_window._selected_provider_id() == "qwen"
+    assert "MiniMax" not in settings_window.provider_description_label.get_text()
 
 
 def test_key_save_clears_entry_and_never_restarts_service(window):
@@ -475,10 +693,28 @@ def test_correction_explanation_names_provider_scope_and_bounded_learning(window
 
     explanation = settings_window.corrections_help_label.get_text()
 
-    assert "火山引擎" in explanation
-    assert "听写请求" in explanation
-    assert "5 秒" in explanation
-    assert "含糊或冲突" in explanation
+    assert "当前识别服务" in explanation
+    assert "下一次听写" in explanation
+    assert "拆分多处替换" in explanation
+    assert "中等置信与冲突项" in explanation
+
+
+def test_cross_application_feedback_entry_is_explicit_and_clears_after_submit(window):
+    settings_window, controller = window
+    settings_window.adaptive_provider_entry.set_text("Ostro uses openai")
+    settings_window.adaptive_preferred_entry.set_text("Austral uses OpenAI")
+
+    settings_window._on_submit_adaptive_feedback(
+        settings_window.submit_adaptive_feedback_button
+    )
+
+    assert controller.submitted_adaptive_feedback == (
+        "Ostro uses openai",
+        "Austral uses OpenAI",
+    )
+    assert settings_window.adaptive_provider_entry.get_text() == ""
+    assert settings_window.adaptive_preferred_entry.get_text() == ""
+    assert "下一次听写" in settings_window.message_label.get_text()
 
 
 def test_service_controls_are_explicit_and_offer_no_restart(window):
@@ -522,10 +758,10 @@ def test_local_collection_is_off_by_default_and_discloses_exact_scope(window):
     assert settings_window.data_collection_directory_entry.get_text() == ""
     assert settings_window.data_collection_directory_entry.get_editable() is False
     assert "默认关闭" in notice
-    assert "火山引擎最终结果已成功确认" in notice
+    assert "当前识别服务的最终结果已成功确认" in notice
     assert "WAV" in notice
     assert "未经复核的伪标签" in notice
-    assert "火山引擎" in notice
+    assert "provider_final" in notice
     assert "openvoiceinput-dataset-v1" in notice
     assert "已经挂载的远程文件系统" in notice
     assert "不会连接或挂载远程主机" in notice
@@ -721,6 +957,7 @@ def test_microphone_priority_load_failure_shows_error_and_safe_default(applicati
         application,
         controller,
         refresh_service_on_start=False,
+        refresh_statistics_on_start=False,
     )
     try:
         assert tuple(settings_window._microphone_priority) == (

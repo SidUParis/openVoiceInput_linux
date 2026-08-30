@@ -7,6 +7,7 @@ from murmur_voice.adaptive_correction import (
     canonicalize_with_approved_terms,
     collapsed_term_key,
     extract_correction,
+    extract_corrections,
 )
 
 
@@ -93,10 +94,12 @@ def test_unicode_latin_words_and_accents_are_whole_tokens():
 
 
 def test_one_character_cjk_replacement_expands_to_safe_left_context():
-    assert _extract("今天开会", "今日开会") == CorrectionCandidate(
+    candidate = _extract("今天开会", "今日开会")
+    assert candidate == CorrectionCandidate(
         wrong="今天",
         canonical="今日",
     )
+    assert candidate.category == "recognition"
 
 
 def test_broad_polishing_is_not_learned_as_a_global_rule():
@@ -174,3 +177,60 @@ def test_candidate_length_is_bounded_for_provider_compatibility():
     baseline = "a" * 65
     current = "b" * 65
     assert _extract(baseline, current) is None
+
+
+def test_multiple_independent_replacements_become_medium_candidates():
+    result = extract_corrections(
+        "Ostro uses openai",
+        0,
+        len("Ostro uses openai"),
+        "Austral uses OpenAI",
+    )
+
+    assert result.reason_code == "multiple-replacements"
+    assert result.replacement_hunks == 2
+    assert [(item.wrong, item.canonical) for item in result.candidates] == [
+        ("Ostro", "Austral"),
+        ("openai", "OpenAI"),
+    ]
+    assert [item.evidence for item in result.candidates] == ["medium", "medium"]
+    assert [item.category for item in result.candidates] == [
+        "recognition",
+        "formatting",
+    ]
+
+
+def test_insertion_among_replacements_rejects_all_candidates():
+    result = extract_corrections(
+        "Ostro uses openai",
+        0,
+        len("Ostro uses openai"),
+        "Austral now uses OpenAI",
+    )
+
+    assert result.reason_code == "insertion-or-deletion"
+    assert result.candidates == ()
+
+
+def test_result_explains_no_change_and_outside_span():
+    assert extract_corrections("same", 0, 4, "same").reason_code == "no-change"
+    assert (
+        extract_corrections(
+            "prefix Ostro",
+            len("prefix "),
+            len("prefix Ostro"),
+            "changed Ostro",
+        ).reason_code
+        == "edit-outside-committed-span"
+    )
+
+
+def test_multi_hunk_diff_is_bounded_after_linear_context_trimming():
+    middle = " ".join(f"word{index}" for index in range(300))
+    baseline = f"Ostro {middle} openai"
+    current = f"Austral {middle} OpenAI"
+
+    result = extract_corrections(baseline, 0, len(baseline), current)
+
+    assert result.reason_code == "diff-too-complex"
+    assert result.candidates == ()

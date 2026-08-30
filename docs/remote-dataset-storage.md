@@ -118,13 +118,16 @@ ssh your-user@orange-host \
     /absolute/remote/path/openvoiceinput/openvoiceinput-dataset-v1 \
     /absolute/remote/path/openvoiceinput/openvoiceinput-dataset-v1/dataset.json \
     /absolute/remote/path/openvoiceinput/openvoiceinput-dataset-v1/.pending \
-    /absolute/remote/path/openvoiceinput/openvoiceinput-dataset-v1/utterances'
+    /absolute/remote/path/openvoiceinput/openvoiceinput-dataset-v1/utterances \
+    /absolute/remote/path/openvoiceinput/openvoiceinput-dataset-v1/usage'
 ```
 
-The three directories should be `0700` and `dataset.json` should be `0600`,
+The four directories should be `0700` and `dataset.json` should be `0600`,
 owned by the intended remote account. Repeat the remote-side check on a sample
 published utterance before relying on the dataset: its directory should be
-`0700` and `audio.wav`/`record.json` should be `0600`. If the remote modes are
+`0700` and `audio.wav`/`record.json` should be `0600`. The dataset-level
+`usage/` directory should be `0700`, and its `<utterance_id>.json` summaries
+should be `0600`. If the remote modes are
 broader, disable collection and correct the server-side SFTP/umask policy first.
 
 If saving reports a permission or initialization error, do not weaken the

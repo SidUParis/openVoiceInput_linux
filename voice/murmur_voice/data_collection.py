@@ -37,9 +37,12 @@ from .config import (
 
 DATA_COLLECTION_CONFIG_VERSION = 1
 DATA_RECORD_VERSION = 1
+DATA_USAGE_SUMMARY_VERSION = 1
+DATA_FEEDBACK_VERSION = 1
 MAX_DATA_COLLECTION_CONFIG_BYTES = 16 * 1024
 MAX_STORAGE_PATH_CHARACTERS = 4096
 MAX_PROVIDER_FINAL_BYTES = 256 * 1024
+MAX_FEEDBACK_BYTES = 64 * 1024
 WRITER_QUEUE_RECORDS = 2
 
 SAMPLE_RATE = 16_000
@@ -84,6 +87,17 @@ class _FrozenRecord:
     frames: int
     pcm_sha256: str
     provider_final: str = field(repr=False)
+    provider_name: str
+    provider_model: str
+    provider_resource_id: str | None
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _FrozenFeedback:
+    directory: Path = field(repr=False)
+    dataset_id: str
+    utterance_id: str
+    document: dict[str, Any] = field(repr=False)
 
 
 def default_data_collection_config_path() -> Path:
@@ -240,7 +254,7 @@ def initialize_data_collection_directory(directory: Path) -> str:
             dataset_id = uuid.uuid4().hex
             _write_json(marker, _dataset_marker(dataset_id), exclusive=True)
             _fsync_directory(dataset_root)
-        for child_name in (".pending", "utterances"):
+        for child_name in (".pending", "utterances", "usage"):
             child = dataset_root / child_name
             try:
                 child.mkdir(mode=0o700)
@@ -274,7 +288,9 @@ class DataCollectionRuntime:
             raise DataCollectionError("data collection queue size is invalid")
         self._config_path = config_path or default_data_collection_config_path()
         self._session_id = session_id or uuid.uuid4().hex
-        self._queue: queue.Queue[_FrozenRecord] = queue.Queue(maxsize=queue_records)
+        self._queue: queue.Queue[_FrozenRecord | _FrozenFeedback] = queue.Queue(
+            maxsize=queue_records
+        )
         self._lock = threading.RLock()
         self._closed = False
         self._stop_event = threading.Event()
@@ -308,6 +324,27 @@ class DataCollectionRuntime:
             utterance_id,
             collection_session_id=self._session_id,
         )
+
+    def record_feedback(self, utterance_id: str, document: Any) -> bool:
+        """Queue one immutable sidecar only while collection remains enabled."""
+
+        config = load_data_collection_config(self._config_path)
+        if not config.enabled:
+            return False
+        if not _safe_identifier(utterance_id):
+            raise DataCollectionError("data collection identifier is invalid")
+        assert config.directory is not None
+        assert config.dataset_id is not None
+        feedback = _validate_feedback_document(document)
+        self._enqueue(
+            _FrozenFeedback(
+                directory=config.directory,
+                dataset_id=config.dataset_id,
+                utterance_id=utterance_id,
+                document=feedback,
+            )
+        )
+        return True
 
     def close(self, timeout: float = 10.0) -> bool:
         """Stop accepting records and give queued local writes bounded time."""
@@ -347,7 +384,7 @@ class DataCollectionRuntime:
             and current.dataset_id == dataset_id
         )
 
-    def _enqueue(self, record: _FrozenRecord) -> None:
+    def _enqueue(self, record: _FrozenRecord | _FrozenFeedback) -> None:
         with self._lock:
             if self._closed:
                 raise DataCollectionError("data collection runtime is closed")
@@ -369,7 +406,10 @@ class DataCollectionRuntime:
                     with self._lock:
                         self._last_status_code = "none"
                     continue
-                _publish_record(item, self._publish_if_still_authorized)
+                if isinstance(item, _FrozenRecord):
+                    _publish_record(item, self._publish_if_still_authorized)
+                else:
+                    _publish_feedback(item, self._publish_feedback_if_authorized)
                 with self._lock:
                     self._last_status_code = "none"
             except _CollectionRevoked:
@@ -406,6 +446,30 @@ class DataCollectionRuntime:
                 raise DataCollectionError("data collection record already exists")
             stage.rename(final)
 
+    def _publish_feedback_if_authorized(
+        self,
+        feedback: _FrozenFeedback,
+        temporary: Path,
+        final: Path,
+    ) -> None:
+        with _configuration_lock(self._config_path):
+            if not self._still_authorized(feedback.directory, feedback.dataset_id):
+                raise _CollectionRevoked(
+                    "data collection was disabled before feedback completion"
+                )
+            _validate_dataset_root(feedback.directory, feedback.dataset_id)
+            if temporary.parent != final.parent:
+                raise DataCollectionError("data collection feedback path is invalid")
+            _secure_dataset_directory(final.parent, allow_chmod=False)
+            _validate_private_regular_file(temporary)
+            try:
+                final.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                raise DataCollectionError("data collection feedback already exists")
+            temporary.rename(final)
+
 
 class DatasetRecorder:
     """One bounded in-memory utterance offered to the background writer."""
@@ -441,6 +505,33 @@ class DatasetRecorder:
         self._failed = False
         self._stopped = False
         self._committed = False
+        self._provider_name = "volcengine"
+        self._provider_model = "bigmodel_async"
+        self._provider_resource_id: str | None = "volc.seedasr.sauc.duration"
+
+    def set_provider_identity(
+        self,
+        name: str,
+        model: str,
+        resource_id: str | None = None,
+    ) -> None:
+        """Bind secret-free backend provenance before the first audio chunk."""
+
+        values = (name, model) + (() if resource_id is None else (resource_id,))
+        if any(
+            not isinstance(value, str)
+            or not value
+            or len(value) > 128
+            or any(not character.isprintable() for character in value)
+            for value in values
+        ):
+            raise DataCollectionError("data collection provider identity is invalid")
+        with self._lock:
+            if self._chunks or self._stopped or self._committed:
+                raise DataCollectionError("data collection provider identity is late")
+            self._provider_name = name
+            self._provider_model = model
+            self._provider_resource_id = resource_id
 
     def add_audio(self, data: bytes) -> None:
         """Append one exact PCM chunk without disk or a blocking queue put."""
@@ -493,6 +584,9 @@ class DatasetRecorder:
                 frames=self._bytes // SAMPLE_WIDTH_BYTES,
                 pcm_sha256=self._digest.hexdigest(),
                 provider_final=provider_final,
+                provider_name=self._provider_name,
+                provider_model=self._provider_model,
+                provider_resource_id=self._provider_resource_id,
             )
         try:
             self._runtime._enqueue(frozen)
@@ -546,9 +640,13 @@ def _publish_record(
                 "file_sha256": file_sha256,
             },
             "provider": {
-                "name": "volcengine",
-                "model": "bigmodel_async",
-                "resource_id": "volc.seedasr.sauc.duration",
+                "name": record.provider_name,
+                "model": record.provider_model,
+                **(
+                    {"resource_id": record.provider_resource_id}
+                    if record.provider_resource_id is not None
+                    else {}
+                ),
             },
             "labels": {
                 "provider_final": {
@@ -570,12 +668,235 @@ def _publish_record(
         finalizer(record, stage, final)
         published = True
         _fsync_directory(records_root)
+        usage_root = _ensure_usage_directory(dataset_root)
+        _publish_usage_summary(record, usage_root)
     finally:
         if not published:
             try:
                 shutil.rmtree(stage)
             except OSError:
                 pass
+
+
+def _ensure_usage_directory(dataset_root: Path) -> Path:
+    """Create the separate summary index without changing utterance records."""
+
+    usage_root = dataset_root / "usage"
+    created = False
+    try:
+        usage_root.mkdir(mode=0o700)
+        created = True
+    except FileExistsError:
+        pass
+    _secure_dataset_directory(usage_root, allow_chmod=False)
+    if created:
+        _fsync_directory(dataset_root)
+    return usage_root
+
+
+def _publish_usage_summary(record: _FrozenRecord, usage_root: Path) -> None:
+    """Atomically publish content-free counters after the core v1 pair."""
+
+    temporary = usage_root / f".{record.utterance_id}.{uuid.uuid4().hex}.tmp"
+    final = usage_root / f"{record.utterance_id}.json"
+    try:
+        try:
+            final.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise DataCollectionError("data collection usage summary already exists")
+        _write_json(
+            temporary,
+            {
+                "schema_version": DATA_USAGE_SUMMARY_VERSION,
+                "kind": "openvoiceinput-private-usage-summary",
+                "utterance_id": record.utterance_id,
+                "recorded_at_utc": record.recorded_at_utc,
+                "audio_duration_ms": round(record.frames * 1000 / SAMPLE_RATE),
+                "non_whitespace_character_count": sum(
+                    not character.isspace() for character in record.provider_final
+                ),
+            },
+        )
+        temporary.rename(final)
+        _fsync_directory(usage_root)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _publish_feedback(
+    feedback: _FrozenFeedback,
+    finalizer: Any,
+) -> None:
+    dataset_root = _validate_dataset_root(feedback.directory, feedback.dataset_id)
+    utterance_root = dataset_root / "utterances" / feedback.utterance_id
+    try:
+        metadata = utterance_root.lstat()
+    except OSError as error:
+        raise DataCollectionError("data collection utterance is unavailable") from error
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+        or utterance_root.is_symlink()
+    ):
+        raise DataCollectionError("data collection utterance is unavailable")
+    try:
+        utterance_files = {path.name for path in utterance_root.iterdir()}
+    except OSError as error:
+        raise DataCollectionError("data collection utterance is unavailable") from error
+    if utterance_files != {"audio.wav", "record.json"}:
+        raise DataCollectionError("data collection utterance is incomplete")
+    for name in ("audio.wav", "record.json"):
+        _validate_private_regular_file(utterance_root / name)
+
+    feedback_root = dataset_root / "feedback"
+    try:
+        feedback_root.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    _secure_dataset_directory(feedback_root, allow_chmod=False)
+    event_root = feedback_root / feedback.utterance_id
+    try:
+        event_root.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    _secure_dataset_directory(event_root, allow_chmod=False)
+    _fsync_directory(feedback_root)
+    event_id = uuid.uuid4().hex
+    temporary = event_root / f".{event_id}.json"
+    final = event_root / f"{event_id}.json"
+    published = False
+    try:
+        document = {
+            "schema_version": DATA_FEEDBACK_VERSION,
+            "kind": "openvoiceinput-correction-feedback",
+            "dataset_id": feedback.dataset_id,
+            "utterance_id": feedback.utterance_id,
+            "source": "post-commit-edit",
+            "result": feedback.document,
+        }
+        _write_json(temporary, document)
+        finalizer(feedback, temporary, final)
+        published = True
+        _fsync_directory(event_root)
+    finally:
+        if not published:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+
+
+def _validate_private_regular_file(path: Path) -> None:
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise DataCollectionError("data collection utterance is incomplete") from error
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or path.is_symlink()
+    ):
+        raise DataCollectionError("data collection utterance is incomplete")
+
+
+def _validate_feedback_document(document: Any) -> dict[str, Any]:
+    """Validate bounded edit feedback without accepting surrounding text."""
+
+    scalar_fields = {
+        "reason_code",
+        "captured_count",
+        "activated_count",
+        "candidate_count",
+        "conflicted_count",
+        "replacement_hunks",
+        "corrections",
+    }
+    if not isinstance(document, dict) or set(document) != scalar_fields:
+        raise DataCollectionError("data collection feedback is invalid")
+    reason = document.get("reason_code")
+    if (
+        not isinstance(reason, str)
+        or not 1 <= len(reason) <= 64
+        or any(
+            not (character.islower() or character.isdigit() or character == "-")
+            for character in reason
+        )
+    ):
+        raise DataCollectionError("data collection feedback is invalid")
+    count_names = (
+        "captured_count",
+        "activated_count",
+        "candidate_count",
+        "conflicted_count",
+        "replacement_hunks",
+    )
+    counts: dict[str, int] = {}
+    for name in count_names:
+        value = document.get(name)
+        if type(value) is not int or value < 0 or value > 500:
+            raise DataCollectionError("data collection feedback is invalid")
+        counts[name] = value
+    raw_corrections = document.get("corrections")
+    if not isinstance(raw_corrections, list) or len(raw_corrections) > 8:
+        raise DataCollectionError("data collection feedback is invalid")
+    corrections: list[dict[str, str]] = []
+    for raw in raw_corrections:
+        if not isinstance(raw, dict) or set(raw) != {
+            "wrong",
+            "canonical",
+            "category",
+            "evidence",
+            "state",
+        }:
+            raise DataCollectionError("data collection feedback is invalid")
+        wrong = raw.get("wrong")
+        canonical = raw.get("canonical")
+        if any(
+            not isinstance(text, str)
+            or not text.strip()
+            or len(text.strip()) > 64
+            or any(not character.isprintable() for character in text)
+            for text in (wrong, canonical)
+        ):
+            raise DataCollectionError("data collection feedback is invalid")
+        category = raw.get("category")
+        evidence = raw.get("evidence")
+        state_value = raw.get("state")
+        if category not in {"recognition", "terminology", "formatting"}:
+            raise DataCollectionError("data collection feedback is invalid")
+        if evidence not in {"strong", "medium", "explicit"}:
+            raise DataCollectionError("data collection feedback is invalid")
+        if state_value not in {
+            "candidate",
+            "active",
+            "conflicted",
+            "suspended",
+            "archived",
+        }:
+            raise DataCollectionError("data collection feedback is invalid")
+        corrections.append(
+            {
+                "wrong": wrong.strip(),
+                "canonical": canonical.strip(),
+                "category": category,
+                "evidence": evidence,
+                "state": state_value,
+            }
+        )
+    sanitized = {"reason_code": reason, **counts, "corrections": corrections}
+    payload_size = len(
+        json.dumps(sanitized, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+    if payload_size > MAX_FEEDBACK_BYTES:
+        raise DataCollectionError("data collection feedback is too large")
+    return sanitized
 
 
 def _dataset_marker(dataset_id: str) -> dict[str, Any]:
@@ -673,6 +994,8 @@ def _write_json(path: Path, document: Any, *, exclusive: bool = True) -> None:
         json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
     flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     flags |= os.O_EXCL if exclusive else os.O_TRUNC
     descriptor = os.open(path, flags, 0o600)
     try:

@@ -117,7 +117,7 @@ class DocumentationAssetTests(unittest.TestCase):
         width, height, depth, colour, compression, filtering, interlace = struct.unpack(
             ">IIBBBBB", chunks[0][1]
         )
-        self.assertEqual((width, height), (900, 820))
+        self.assertEqual((width, height), (1020, 900))
         self.assertEqual((depth, colour), (8, 2))
         self.assertEqual((compression, filtering, interlace), (0, 0, 0))
 
@@ -196,6 +196,42 @@ class DocumentationAssetTests(unittest.TestCase):
         )
         self.assertNotIn("Right Alt is recommended", english)
         self.assertNotIn("Orange", english)
+
+    def test_public_pages_bind_cloud_disclosure_to_selected_provider(self) -> None:
+        pages = {
+            "main README": REPOSITORY / "README.md",
+            "English README": REPOSITORY / "README.en.md",
+            "Chinese quick guide": REPOSITORY / "docs/README.zh-CN.md",
+            "privacy notice": REPOSITORY / "docs/privacy.md",
+            "threat model": REPOSITORY / "docs/threat-model.md",
+            "architecture": REPOSITORY / "docs/architecture.md",
+            "voice README": REPOSITORY / "voice/README.md",
+            "settings README": REPOSITORY / "settings/README.md",
+        }
+        contents = {
+            name: path.read_text(encoding="utf-8") for name, path in pages.items()
+        }
+
+        stale_claims = (
+            "audio is sent to Volcengine",
+            "sends the audio to Volcengine",
+            "streamed to the Volcengine",
+            "音频才会发给火山引擎",
+            "音频在用户主动听写时发送给火山引擎",
+        )
+        for name, content in contents.items():
+            with self.subTest(page=name):
+                for claim in stale_claims:
+                    self.assertNotIn(claim, content)
+
+        self.assertIn("当前选择的在线 ASR 服务", contents["main README"])
+        self.assertIn("selected online ASR provider", contents["English README"])
+        self.assertIn("selected provider's terms", contents["privacy notice"])
+        self.assertIn("selected online ASR provider receives", contents["threat model"])
+        self.assertIn("provider-neutral voice daemon", contents["architecture"])
+        normalised_voice = " ".join(contents["voice README"].split())
+        self.assertIn("Qwen and OpenAI remain experimental", normalised_voice)
+        self.assertIn("does not contact any provider", contents["settings README"])
 
     def test_generated_hero_assets_have_bounded_publishable_dimensions(self) -> None:
         self.assertTrue(HERO_ANIMATION.is_file())

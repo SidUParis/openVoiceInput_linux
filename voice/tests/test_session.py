@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from murmur_voice.adaptive_runtime import (
+    AdaptiveObservationResult,
+    AdaptiveObservedCandidate,
+)
 from murmur_voice.audio import AudioDeviceError, MicrophonePolicyError
 from murmur_voice.config import ConfigError, VoiceConfig
 from murmur_voice.preedit import AcquireResult, ObservationSnapshot
@@ -721,6 +725,102 @@ def test_toggle_during_observation_finishes_then_starts_next_utterance():
     assert session.state is VoiceState.STARTING
     assert [call[0] for call in preedit.calls].count("finish-observation") == 1
     assert [call[0] for call in preedit.calls].count("acquire") == 2
+
+
+def test_candidate_result_is_observable_and_offered_as_feedback_sidecar():
+    feedback = []
+    result = AdaptiveObservationResult(
+        "candidates-saved",
+        captured_count=1,
+        candidate_count=1,
+        replacement_hunks=2,
+        candidates=(
+            AdaptiveObservedCandidate(
+                "Ostro", "Austral", "recognition", "medium", "candidate"
+            ),
+        ),
+    )
+    session, asr, audio, preedit, timers, order = _session(
+        observation_handler=lambda snapshot: result,
+        data_collection_feedback_writer=lambda utterance_id, document: feedback.append(
+            (utterance_id, document)
+        ),
+    )
+    preedit.observation_result = ObservationSnapshot("Ostro", 0, 5, "Austral", 7, 7)
+    session.start()
+    asr.on_result("Ostro")
+    asr.on_finish()
+
+    timers[2].fire()
+
+    assert session.status().code == "adaptive-correction-candidate"
+    assert feedback[0][0] == "utterance-1"
+    assert feedback[0][1]["reason_code"] == "candidates-saved"
+    assert set(feedback[0][1]) == {
+        "reason_code",
+        "captured_count",
+        "activated_count",
+        "candidate_count",
+        "conflicted_count",
+        "replacement_hunks",
+        "corrections",
+    }
+
+
+def test_missing_surrounding_text_persists_reason_and_feedback():
+    reasons = []
+    feedback = []
+
+    def report(reason):
+        reasons.append(reason)
+        return AdaptiveObservationResult(reason)
+
+    session, asr, audio, preedit, timers, order = _session(
+        observation_handler=lambda snapshot: pytest.fail("unexpected snapshot"),
+        observation_result_handler=report,
+        data_collection_feedback_writer=lambda utterance_id, document: feedback.append(
+            (utterance_id, document)
+        ),
+    )
+    session.start()
+    asr.on_result("provider final")
+    asr.on_finish()
+
+    timers[2].fire()
+
+    assert reasons == ["surrounding-text-unavailable"]
+    assert feedback[0][0] == "utterance-1"
+    assert feedback[0][1]["reason_code"] == "surrounding-text-unavailable"
+    assert session.status().code == "adaptive-correction-skipped"
+
+
+def test_feedback_sidecar_failure_is_not_hidden_by_learning_status():
+    result = AdaptiveObservationResult(
+        "active-learned",
+        captured_count=1,
+        activated_count=1,
+        candidates=(
+            AdaptiveObservedCandidate(
+                "Ostro", "Austral", "recognition", "strong", "active"
+            ),
+        ),
+    )
+
+    def fail_feedback(_utterance_id, _document):
+        raise OSError("simulated storage failure")
+
+    session, asr, audio, preedit, timers, order = _session(
+        observation_handler=lambda snapshot: result,
+        data_collection_feedback_writer=fail_feedback,
+    )
+    preedit.observation_result = ObservationSnapshot("Ostro", 0, 5, "Austral", 7, 7)
+    session.start()
+    asr.on_result("Ostro")
+    asr.on_finish()
+
+    timers[2].fire()
+
+    assert session.status().code == "data-collection-failed"
 
 
 def test_invalid_hot_reload_context_never_opens_microphone_or_network():

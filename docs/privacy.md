@@ -2,17 +2,21 @@
 
 Open Voice Input Linux keeps ordinary Rime keyboard input local. Voice input
 is different: during an explicitly started dictation, 16 kHz mono PCM audio is
-streamed to the Volcengine BigModel ASR service configured by the user.
+sent to the online ASR service selected and configured by the user. Volcengine
+is the default and the only path validated with a real key on the maintainer
+workstation; Qwen and OpenAI remain experimental and have not had real-key
+acceptance in this release. MiniMax is planned and not selectable.
 
 ## Remote data and billing
 
-- The user must activate the matching speech service in their own Volcengine
-  project and provide their own API key. Quota and charges belong to that
-  account; the project does not bundle or share a key.
+- The user must activate the matching speech service in their own provider
+  account and provide that provider's API key. Quota and charges belong to
+  that account; the project does not bundle or share a key.
 - Cancelling stops capture and prevents local commit, but cannot retract audio
   already uploaded before cancellation.
-- Provider-side storage, retention, regional processing, and account policy
-  are governed by the user's Volcengine agreement and configuration.
+- Provider-side storage, retention, regional processing, billing, and account
+  policy are governed by the selected provider's terms and the user's account
+  configuration.
 - The current standalone daemon sends audio and reviewed ASR options. Its
   optional personal vocabulary and manual/adaptive recognition corrections
   send only bounded values kept in the user's private configuration. They never
@@ -27,11 +31,13 @@ streamed to the Volcengine BigModel ASR service configured by the user.
   its password field after every save attempt.
 - Its two-step key-clear action is allowed only while the managed voice service
   is explicitly inactive. It removes only a validated private local key file;
-  users must revoke or rotate the credential separately in Volcengine.
-- The fallback key-only file is atomically written under
+  users must revoke or rotate the credential separately with the selected
+  provider.
+- The private provider file is atomically written under
   `$XDG_CONFIG_HOME/murmur-ime/voice.json` with directory mode `0700` and file
-  mode `0600`. It is rejected if it is a symlink, foreign-owned, public, too
-  large, or contains fields other than `api_key`.
+  mode `0600`. Version 2 records the selected provider, fixed reviewed model,
+  and API key; the legacy key-only form remains Volcengine-compatible. Unsafe,
+  oversized, foreign-owned, public, linked, or unknown-field files are rejected.
 - The optional vocabulary is stored separately as `vocabulary.json` under the
   same private directory, with the same ownership and permission checks.
 - Optional recognition corrections are stored separately as
@@ -137,16 +143,29 @@ Each atomically published `utterances/<utterance_id>/` contains:
   accepted utterance;
 - `record.json`: versioned identifiers, time, audio format/frame counts and
   hashes, provider/model identity, and three deliberately separate labels;
-- `provider_final.text`: the authoritative Volcengine result, labelled
+- `provider_final.text`: the authoritative result from the selected provider,
+  labelled
   `teacher-unreviewed`, which is a pseudo-label rather than ground truth;
 - `spoken_verbatim.text` and `preferred_output.text`: both `null` and
   `unreviewed` until a separate human-review workflow exists.
 
+The immutable utterance record remains exactly `audio.wav` + `record.json`.
+After it is published, the dataset-level `usage/<utterance_id>.json` index adds
+only time, audio duration and non-whitespace character count for private
+dashboard totals.
+
+Dashboard aggregation runs outside the GTK thread and reads only the dataset
+marker plus `usage/<utterance_id>.json`. It never reads or displays
+`provider_final`, the two
+review labels, or audio. Disabling collection also disables the scan; an
+unavailable local or mounted destination produces an unknown/unavailable state,
+not a misleading zero, and does not stop ordinary dictation.
+
 The collection feature does not authenticate to or mount Orange, upload to
 Google Drive, train, fine-tune, or distil a model, or add application-level
-encryption. The normal ASR path still sends the audio to Volcengine as described
-above. A compatible remote filesystem already mounted by the user is part of
-the selected filesystem boundary. The selected filesystem determines effective
+encryption. The normal ASR path still sends the audio to the selected online
+provider as described above. A compatible remote filesystem already mounted by
+the user is part of the selected filesystem boundary. The selected filesystem determines effective
 visibility, sharing, backup, and at-rest protection; directory/file modes
 cannot strengthen a filesystem that does not enforce them.
 

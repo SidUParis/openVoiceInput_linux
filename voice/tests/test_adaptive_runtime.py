@@ -7,8 +7,11 @@ import pytest
 from murmur_voice import adaptive_runtime
 from murmur_voice.adaptive_runtime import (
     AdaptiveCorrectionRuntime,
+    adaptive_review_entries,
+    adaptive_status_document,
     load_adaptive_ledger,
     save_adaptive_ledger,
+    submit_explicit_feedback,
 )
 from murmur_voice.adaptive_store import AdaptiveEntry, AdaptiveLedger
 from murmur_voice.config import (
@@ -139,7 +142,7 @@ def test_observation_with_a_selected_range_is_not_learned(tmp_path):
     )
 
     assert runtime.observe(snapshot) is False
-    assert not adaptive.exists()
+    assert load_adaptive_ledger(adaptive).last_result.reason_code == "selection-active"
 
 
 def test_conflicting_evidence_is_recorded_but_not_reported_as_active(
@@ -238,3 +241,155 @@ def test_maximum_multibyte_ledger_round_trips_within_its_read_bound(tmp_path):
     save_adaptive_ledger(AdaptiveLedger(entries=entries), path)
 
     assert load_adaptive_ledger(path) == AdaptiveLedger(entries=entries)
+
+
+def test_multi_hunk_observation_is_persisted_as_candidates_then_confirmed(tmp_path):
+    runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
+    del config, vocabulary
+    snapshot = ObservationSnapshot(
+        baseline_text="Ostro uses openai",
+        committed_start=0,
+        committed_end=len("Ostro uses openai"),
+        current_text="Austral uses OpenAI",
+        cursor=len("Austral uses OpenAI"),
+        anchor=len("Austral uses OpenAI"),
+    )
+
+    result = runtime.observe_result(snapshot)
+
+    assert result.reason_code == "candidates-saved"
+    assert result.captured_count == 2
+    assert result.activated_count == 0
+    assert result.candidate_count == 2
+    assert {entry.state for entry in load_adaptive_ledger(adaptive).entries} == {
+        "candidate"
+    }
+    assert len(adaptive_review_entries(adaptive)) == 2
+    assert adaptive_status_document(adaptive)["statistics"]["candidate"] == 2
+
+    confirmed = runtime.confirm("Ostro", "Austral")
+    assert confirmed.reason_code == "explicitly-activated"
+    assert confirmed.activated_count == 1
+    assert adaptive_status_document(adaptive)["statistics"] == {
+        "total": 2,
+        "active": 1,
+        "archived": 0,
+        "candidate": 1,
+        "conflicted": 0,
+        "suspended": 0,
+    }
+
+
+def test_strong_single_observation_activates_once_and_records_reason(tmp_path):
+    runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
+    del config, vocabulary, corrections
+    snapshot = ObservationSnapshot("Ostro", 0, 5, "Austral", 7, 7)
+
+    result = runtime.observe_result(snapshot)
+
+    assert result.reason_code == "active-learned"
+    assert result.activated_count == 1
+    ledger = load_adaptive_ledger(adaptive)
+    assert ledger.entries[0].state == "active"
+    assert ledger.last_result.reason_code == "active-learned"
+
+
+def test_rejected_observation_persists_reason_but_never_surrounding_text(tmp_path):
+    runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
+    del config, vocabulary, corrections
+    snapshot = ObservationSnapshot(
+        "private prefix Ostro private suffix",
+        len("private prefix "),
+        len("private prefix Ostro"),
+        "changed prefix Ostro private suffix",
+        7,
+        7,
+    )
+
+    result = runtime.observe_result(snapshot)
+
+    assert result.reason_code == "edit-outside-committed-span"
+    raw = adaptive.read_text(encoding="utf-8")
+    assert "private prefix" not in raw
+    assert "private suffix" not in raw
+    assert load_adaptive_ledger(adaptive).entries == ()
+
+
+def test_external_timeout_is_visible_without_correction_text(tmp_path):
+    runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
+    del config, vocabulary, corrections
+
+    result = runtime.record_external_result("observation-timeout")
+
+    assert result.reason_code == "observation-timeout"
+    assert adaptive_status_document(adaptive)["last_result"]["reason_code"] == (
+        "observation-timeout"
+    )
+
+
+def test_malformed_snapshot_becomes_visible_reason_instead_of_exception(tmp_path):
+    runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
+    del config, vocabulary, corrections
+
+    result = runtime.observe_result(object())
+
+    assert result.reason_code == "invalid-snapshot"
+    assert load_adaptive_ledger(adaptive).last_result.reason_code == "invalid-snapshot"
+
+
+def test_first_v2_outcome_atomically_migrates_v1_ledger_without_state_change(
+    tmp_path,
+):
+    runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
+    del config, vocabulary, corrections
+    adaptive.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": [
+                    {
+                        "wrong": "legacy wrong",
+                        "canonical": "legacy right",
+                        "state": "active",
+                        "support": 3,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    adaptive.chmod(0o600)
+
+    runtime.record_external_result("surrounding-text-unavailable")
+
+    document = json.loads(adaptive.read_text(encoding="utf-8"))
+    assert document["version"] == 2
+    assert document["entries"][0]["state"] == "active"
+    assert document["entries"][0]["support"] == 3
+    assert document["last_result"]["reason_code"] == ("surrounding-text-unavailable")
+
+
+def test_explicit_cross_application_feedback_activates_without_storing_sentences(
+    tmp_path,
+):
+    runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
+    del runtime, config
+    provider = "private prefix Ostro uses openai private suffix"
+    preferred = "private prefix Austral uses OpenAI private suffix"
+
+    result = submit_explicit_feedback(
+        adaptive,
+        corrections,
+        vocabulary,
+        provider,
+        preferred,
+    )
+
+    assert result.reason_code == "explicit-feedback-activated"
+    assert result.activated_count == 2
+    raw = adaptive.read_text(encoding="utf-8")
+    assert "private prefix" not in raw
+    assert "private suffix" not in raw
+    assert {entry.evidence for entry in load_adaptive_ledger(adaptive).entries} == {
+        "explicit"
+    }

@@ -51,6 +51,9 @@ def test_config_round_trip_is_private_and_requires_absolute_path(tmp_path):
         )
     )
     assert marker["dataset_id"] == loaded.dataset_id
+    usage_root = selected / "openvoiceinput-dataset-v1" / "usage"
+    assert usage_root.is_dir()
+    assert stat.S_IMODE(usage_root.stat().st_mode) == 0o700
     with pytest.raises(ConfigError, match="absolute"):
         save_data_collection_config(True, "relative", path)
 
@@ -151,6 +154,49 @@ def test_completed_record_is_atomic_wav_plus_unreviewed_teacher_label(tmp_path):
         "preferred_output": {"text": None, "review_status": "unreviewed"},
     }
     assert document["recorded_at_utc"] == "2026-08-30T12:00:00Z"
+    usage_path = selected / "openvoiceinput-dataset-v1" / "usage" / "utterance-1.json"
+    usage = json.loads(usage_path.read_text(encoding="utf-8"))
+    assert usage == {
+        "schema_version": 1,
+        "kind": "openvoiceinput-private-usage-summary",
+        "utterance_id": "utterance-1",
+        "recorded_at_utc": "2026-08-30T12:00:00Z",
+        "audio_duration_ms": 75,
+        "non_whitespace_character_count": 12,
+    }
+    assert "teacher final" not in usage_path.read_text(encoding="utf-8")
+    assert stat.S_IMODE(usage_path.stat().st_mode) == 0o600
+    assert runtime.close()
+
+
+def test_record_binds_the_actual_provider_without_changing_label_semantics(tmp_path):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-qwen")
+    assert recorder is not None
+    recorder.set_provider_identity("qwen", "qwen-audio-3.0-asr-flash-streaming")
+    recorder.add_audio(b"\x00\x00" * 100)
+    recorder.commit("teacher final")
+    assert runtime.wait_until_idle()
+
+    record = (
+        selected
+        / "openvoiceinput-dataset-v1"
+        / "utterances"
+        / "utterance-qwen"
+        / "record.json"
+    )
+    document = json.loads(record.read_text(encoding="utf-8"))
+    assert document["provider"] == {
+        "name": "qwen",
+        "model": "qwen-audio-3.0-asr-flash-streaming",
+    }
+    assert document["labels"]["provider_final"]["review_status"] == (
+        "teacher-unreviewed"
+    )
     assert runtime.close()
 
 
@@ -346,4 +392,107 @@ def test_disabling_collection_during_recording_discards_pending_record(tmp_path)
     assert runtime.wait_until_idle()
     assert not list((selected / "openvoiceinput-dataset-v1" / "utterances").iterdir())
     assert runtime.status_code() == "none"
+    assert runtime.close()
+
+
+def _feedback_document():
+    return {
+        "reason_code": "candidates-saved",
+        "captured_count": 1,
+        "activated_count": 0,
+        "candidate_count": 1,
+        "conflicted_count": 0,
+        "replacement_hunks": 2,
+        "corrections": [
+            {
+                "wrong": "Ostro",
+                "canonical": "Austral",
+                "category": "recognition",
+                "evidence": "medium",
+                "state": "candidate",
+            }
+        ],
+    }
+
+
+def test_enabled_collection_writes_feedback_sidecar_without_mutating_record(tmp_path):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-1")
+    assert recorder is not None
+    recorder.add_audio(b"\x00\x00" * 100)
+    recorder.commit("teacher final")
+    assert runtime.wait_until_idle()
+
+    final = selected / "openvoiceinput-dataset-v1" / "utterances" / "utterance-1"
+    record_before = (final / "record.json").read_bytes()
+    assert runtime.record_feedback("utterance-1", _feedback_document())
+    assert runtime.wait_until_idle()
+    event_root = selected / "openvoiceinput-dataset-v1" / "feedback" / "utterance-1"
+    events = list(event_root.glob("*.json"))
+    assert len(events) == 1
+    sidecar = json.loads(events[0].read_text(encoding="utf-8"))
+
+    assert (final / "record.json").read_bytes() == record_before
+    assert sorted(path.name for path in final.iterdir()) == ["audio.wav", "record.json"]
+    assert sidecar["kind"] == "openvoiceinput-correction-feedback"
+    assert sidecar["dataset_id"] == load_data_collection_config(config_path).dataset_id
+    assert sidecar["utterance_id"] == "utterance-1"
+    assert sidecar["result"] == _feedback_document()
+    assert "surrounding" not in json.dumps(sidecar)
+    assert stat.S_IMODE(event_root.stat().st_mode) == 0o700
+    assert stat.S_IMODE(events[0].stat().st_mode) == 0o600
+    assert runtime.close()
+
+
+def test_feedback_queued_immediately_after_record_preserves_fifo_publication(tmp_path):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-1")
+    assert recorder is not None
+    recorder.add_audio(b"\x00\x00" * 100)
+
+    recorder.commit("teacher final")
+    assert runtime.record_feedback("utterance-1", _feedback_document())
+    assert runtime.wait_until_idle()
+
+    final = selected / "openvoiceinput-dataset-v1" / "utterances" / "utterance-1"
+    assert (final / "record.json").is_file()
+    assert sorted(path.name for path in final.iterdir()) == ["audio.wav", "record.json"]
+    event_root = selected / "openvoiceinput-dataset-v1" / "feedback" / "utterance-1"
+    assert len(list(event_root.glob("*.json"))) == 1
+    assert runtime.status_code() == "none"
+    assert runtime.close()
+
+
+def test_disabled_collection_writes_no_feedback_sidecar(tmp_path):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(False, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+
+    assert runtime.record_feedback("utterance-1", _feedback_document()) is False
+    assert not (selected / "openvoiceinput-dataset-v1").exists()
+    assert runtime.close()
+
+
+def test_feedback_rejects_surrounding_or_unknown_fields(tmp_path):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    document = _feedback_document()
+    document["surrounding_text"] = "must not persist"
+
+    with pytest.raises(DataCollectionError, match="feedback is invalid"):
+        runtime.record_feedback("utterance-1", document)
+
     assert runtime.close()

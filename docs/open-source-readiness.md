@@ -19,7 +19,7 @@ graphical/provider matrix is finished. The standalone Ubuntu 24.04 `amd64`
 - [x] Public product name and repository URLs are consistent.
 - [x] Voice daemon source is self-contained in this repository with MIT
       attribution for migrated Doubao Murmur files.
-- [x] Configuration requires only the user's own Volcengine API key after the user
+- [x] Configuration requires only the user's own selected-provider API key after the user
       has enabled the matching service in their account.
 - [ ] Alpha validation gap: install, upgrade, and uninstall have offline mock
       lifecycle coverage and prior same-machine coverage, but no fresh
@@ -98,14 +98,16 @@ graphical/provider matrix is finished. The standalone Ubuntu 24.04 `amd64`
 6. Changing focus or cancelling never commits a late result.
 7. Uninstall restores the prior input method and removes only project-owned
    files.
-8. Public docs state that audio is sent to Volcengine and billed under the
-   user's account.
+8. Public docs state that audio is sent to the user-selected online ASR service
+   and that billing, regional processing, and retention follow that provider
+   and the user's account configuration.
 
 ## Deferred after the first preview
 
 - Permanent `ibus-rime`/librime-derived combined engine.
 - Wayland desktop-global shortcut standardisation.
-- Additional ASR providers.
+- Real-key acceptance for the experimental providers and additional ASR
+  providers.
 - A signed APT repository, broader Debian-family qualification, and Arch
   packaging.
 - Optional managed hotword-table tooling.

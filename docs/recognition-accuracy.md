@@ -84,13 +84,14 @@ the same focused IBus context for at most five seconds. If the application
 supports IBus surrounding text, the engine first anchors the exact committed
 span. At the end of the observation, the daemon compares the two bounded
 surrounding snapshots to prove that text outside that span is unchanged, then
-extracts only the changed portion inside the span. It accepts at most one
-strict replacement and derives a bounded wrong-to-canonical pair; it does not
-rewrite the text that the user has already corrected.
+extracts only changed portions inside the span. One high-confidence bounded
+replacement can activate immediately. Several independent bounded
+replacements are split into medium-confidence candidates and stay inactive
+until the user confirms them; the daemon never rewrites text already corrected.
 
 This intentionally rejects ambiguous feedback:
 
-- pure insertion or deletion, more than one edit, and broad sentence polishing;
+- pure insertion or deletion, mixed insert/delete edits, and broad polishing;
 - any change outside the anchored committed span;
 - focus or private-input changes, a selection still active when the observation
   finishes, timeout, engine disable,
@@ -104,6 +105,10 @@ only after expansion through an unchanged adjacent lexical token, so a narrow
 edit such as `今天开会` to `今日开会` can become `今天` → `今日`, while a
 context-free one-character mapping is rejected. Presentation-only corrections
 such as `openai` → `OpenAI` remain valid.
+Common unchanged edges are trimmed in linear time before multi-edit matching;
+the remaining diff window is capped at 256 tokens. A wider edit returns the
+visible `diff-too-complex` reason instead of doing unbounded work in the input
+path.
 
 The next `toggle` ends the observation early, allowing the next dictation to
 start without waiting for the full five seconds. The temporary voice-only IBus
@@ -120,15 +125,29 @@ canonicalize a unique separator-insensitive spelling such as `bench mark` →
 `benchmark`; an ambiguous lookup is left unchanged. This is deterministic,
 event-driven processing, not a continuously running local neural model.
 
-Accepted pairs are stored in the private versioned
+Captured pairs are stored in the private versioned
 `adaptive-corrections.json` ledger. An entry contains only the bounded pair,
-its state, and a support count: no separate transcript record, surrounding
+its category, evidence, state, and a support count: no separate transcript, surrounding
 snapshot, timestamp, audio, document context, or edit stream is retained. The
 observer uses IBus surrounding text; it does not read the clipboard, AT-SPI
 accessibility tree, global keyboard events, Rime database, or microphone audio.
-The schema distinguishes `active`, `conflicted`, `suspended`, and `archived`
-entries and caps the ledger at 500; reaching that bound fails the new update
-without evicting an existing pair silently.
+version-2 schema distinguishes `candidate`, `active`, `conflicted`,
+`suspended`, and `archived` entries and caps the ledger at 500. Existing
+version-1 ledgers migrate in memory without changing their active decisions.
+Each observation also stores one transcript-free result code and bounded
+counts, so timeout, unsupported surrounding text, selection, conflict,
+candidate capture, and activation are visible instead of failing silently.
+Reaching the bound fails the new update without silently evicting a pair.
+
+The settings window shows active, candidate, and conflicted counts, the latest
+reason, and confirm buttons. For applications that cannot expose trusted IBus
+surrounding text, the same page offers an explicit fallback: the user supplies
+the provider sentence and their final sentence. The runtime diffs them in
+memory, stores only safe bounded pairs, and activates an explicitly confirmed
+choice. It never reads the clipboard or global keyboard state and never stores
+the two complete sentences in the adaptive ledger. The CLI exposes content-free
+statistics with `murmur-voice-daemon adaptive-status`; interactive confirmation
+keeps private pair text out of process arguments.
 
 At the next dictation, the daemon builds a provider view from manual and active
 adaptive corrections. Manual `corrections.json` entries always win. Conflicting
@@ -158,7 +177,7 @@ overall quality. See the official
 - Do not use a generative LLM to rewrite the user's meaning.
 - Do not learn automatically from live partial hypotheses.
 - Do not read the clipboard or selected text merely to build vocabulary.
-- Do not treat insertions, deletions, multi-edit polishing, or text outside the
+- Do not treat insertions, deletions, broad multi-edit polishing, or text outside the
   anchored final span as adaptive correction evidence.
 - Do not upload the full Rime user database.
 - Do not log vocabulary, transcripts, API keys, or replacement pairs.
@@ -183,6 +202,11 @@ saved `provider_final` is explicitly `teacher-unreviewed`; both
 `spoken_verbatim` and `preferred_output` are null. Collected records must stay
 out of CER/WER evaluation until a separate review workflow supplies the
 appropriate reference label and a leakage-safe train/development/test split.
+When collection was already enabled for an utterance, the post-commit learner
+can add an append-only `feedback/<utterance_id>/<event_id>.json` event containing only bounded
+correction pairs, categories, decisions, counts, and the result code. It never
+modifies `record.json` or the strict two-file utterance directory, and no event
+is written while collection is disabled.
 
 ## Optional data collection and future training
 

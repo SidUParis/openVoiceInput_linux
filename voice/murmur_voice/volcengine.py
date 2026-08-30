@@ -356,12 +356,15 @@ class VolcengineASRClient:
 
     is_streaming = True
     waits_for_final_event = True
+    provider_name = "volcengine"
+    provider_model = "bigmodel_async"
 
     def __init__(self, settings: dict[str, Any]) -> None:
         settings = settings if isinstance(settings, dict) else {}
         self._api_key = str(settings.get("api_key") or "").strip()
         self._endpoint = str(settings.get("endpoint") or DEFAULT_ENDPOINT)
         self._resource_id = str(settings.get("resource_id") or DEFAULT_RESOURCE_ID)
+        self.provider_resource_id = self._resource_id
         if self._endpoint != DEFAULT_ENDPOINT:
             raise ValueError("only the reviewed Volcengine endpoint is supported")
         if self._resource_id != DEFAULT_RESOURCE_ID:

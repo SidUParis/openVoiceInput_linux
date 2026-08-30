@@ -1,23 +1,27 @@
-"""Conservatively derive one correction from an observed text edit.
+"""Derive bounded correction candidates from an observed text edit.
 
 The extractor is deliberately pure.  It receives the post-commit surrounding
-text, the span committed by Murmur, and a later surrounding-text snapshot.  A
-candidate is returned only when the two snapshots contain exactly one token
-replacement wholly inside the committed span.  This keeps unrelated edits,
-insertions, deletions, and broad rewrites out of adaptive correction memory.
+text, the span committed by Murmur, and a later surrounding-text snapshot.
+Multiple independent replacements may be captured, but unrelated edits,
+insertions, deletions, and broad rewrites never become provider rules.
 """
 
 from __future__ import annotations
 
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from enum import Enum
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Literal
 
 MAX_CANDIDATE_TEXT_CHARACTERS = 64
 MAX_CHANGED_LEXICAL_TOKENS = 3
 MIN_CANDIDATE_SIMILARITY = 0.4
+MAX_REPLACEMENT_HUNKS = 8
+MAX_DIFF_MIDDLE_TOKENS = 256
+
+CorrectionCategory = Literal["recognition", "terminology", "formatting"]
+CorrectionEvidence = Literal["strong", "medium"]
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -26,6 +30,17 @@ class CorrectionCandidate:
 
     wrong: str
     canonical: str
+    category: CorrectionCategory = field(default="recognition", compare=False)
+    evidence: CorrectionEvidence = field(default="strong", compare=False)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class CorrectionExtractionResult:
+    """Content-safe outcome plus private bounded candidates."""
+
+    reason_code: str
+    candidates: tuple[CorrectionCandidate, ...] = ()
+    replacement_hunks: int = 0
 
 
 class _TokenKind(Enum):
@@ -61,21 +76,191 @@ def extract_correction(
     spelling is used (for example, ``bench mark`` becomes ``benchmark``).
     """
 
+    result = extract_corrections(
+        baseline_text,
+        committed_start,
+        committed_end,
+        current_text,
+        approved_terms=approved_terms,
+        approved_term_resolver=approved_term_resolver,
+    )
+    if len(result.candidates) != 1 or result.replacement_hunks != 1:
+        return None
+    return result.candidates[0]
+
+
+def extract_corrections(
+    baseline_text: str,
+    committed_start: int,
+    committed_end: int,
+    current_text: str,
+    *,
+    approved_terms: Iterable[str] = (),
+    approved_term_resolver: Callable[[str], str] | None = None,
+) -> CorrectionExtractionResult:
+    """Capture one or more safe replacement hunks with an explicit reason.
+
+    A single conservative replacement is strong evidence and may be activated
+    immediately.  Several independent replacements are retained as medium
+    evidence candidates for one explicit user confirmation.  Full surrounding
+    text is used only in memory and is never part of the returned result.
+    """
+
     if not isinstance(baseline_text, str) or not isinstance(current_text, str):
-        return None
+        return CorrectionExtractionResult("invalid-snapshot")
     if type(committed_start) is not int or type(committed_end) is not int:
-        return None
+        return CorrectionExtractionResult("invalid-committed-span")
     if not 0 <= committed_start < committed_end <= len(baseline_text):
-        return None
+        return CorrectionExtractionResult("invalid-committed-span")
     if baseline_text == current_text:
-        return None
+        return CorrectionExtractionResult("no-change")
 
     baseline_tokens = _tokenize(baseline_text)
     current_tokens = _tokenize(current_text)
-    change = _single_replacement_bounds(baseline_tokens, current_tokens)
-    if change is None:
+    changes = _bounded_change_opcodes(baseline_tokens, current_tokens)
+    if changes is None:
+        return CorrectionExtractionResult("diff-too-complex")
+    if not changes:
+        return CorrectionExtractionResult("no-change")
+    if len(changes) > MAX_REPLACEMENT_HUNKS:
+        return CorrectionExtractionResult(
+            "too-many-edits", replacement_hunks=len(changes)
+        )
+
+    for tag, baseline_first, baseline_last, current_first, current_last in changes:
+        if (
+            tag != "replace"
+            or baseline_first == baseline_last
+            or current_first == current_last
+        ):
+            return CorrectionExtractionResult(
+                "insertion-or-deletion", replacement_hunks=len(changes)
+            )
+        changed_start = baseline_tokens[baseline_first].start
+        changed_end = baseline_tokens[baseline_last - 1].end
+        if changed_start < committed_start or changed_end > committed_end:
+            return CorrectionExtractionResult(
+                "edit-outside-committed-span", replacement_hunks=len(changes)
+            )
+
+    evidence: CorrectionEvidence = "strong" if len(changes) == 1 else "medium"
+    candidates: list[CorrectionCandidate] = []
+    for _tag, baseline_first, baseline_last, current_first, current_last in changes:
+        baseline_slice = baseline_tokens[baseline_first:baseline_last]
+        current_slice = current_tokens[current_first:current_last]
+        baseline_lexical = sum(
+            token.kind in {_TokenKind.WORD, _TokenKind.CJK} for token in baseline_slice
+        )
+        current_lexical = sum(
+            token.kind in {_TokenKind.WORD, _TokenKind.CJK} for token in current_slice
+        )
+        if (
+            evidence == "medium"
+            and current_lexical > baseline_lexical
+            and collapsed_term_key("".join(token.text for token in baseline_slice))
+            != collapsed_term_key("".join(token.text for token in current_slice))
+        ):
+            return CorrectionExtractionResult(
+                "insertion-or-deletion", replacement_hunks=len(changes)
+            )
+        candidate = _candidate_from_bounds(
+            baseline_text,
+            current_text,
+            baseline_tokens,
+            current_tokens,
+            committed_start,
+            committed_end,
+            baseline_first,
+            baseline_last,
+            current_first,
+            current_last,
+            approved_terms=approved_terms,
+            approved_term_resolver=approved_term_resolver,
+            evidence=evidence,
+        )
+        if candidate is None:
+            return CorrectionExtractionResult(
+                "unsafe-or-broad-replacement", replacement_hunks=len(changes)
+            )
+        identity = (candidate.wrong, candidate.canonical)
+        if all((item.wrong, item.canonical) != identity for item in candidates):
+            candidates.append(candidate)
+    if not candidates:
+        return CorrectionExtractionResult(
+            "unsafe-or-broad-replacement", replacement_hunks=len(changes)
+        )
+    return CorrectionExtractionResult(
+        "strong-replacement" if evidence == "strong" else "multiple-replacements",
+        tuple(candidates),
+        replacement_hunks=len(changes),
+    )
+
+
+def _bounded_change_opcodes(
+    baseline: tuple[_Token, ...],
+    current: tuple[_Token, ...],
+) -> tuple[tuple[str, int, int, int, int], ...] | None:
+    """Diff only a bounded middle after linear common-edge trimming."""
+
+    prefix = 0
+    prefix_limit = min(len(baseline), len(current))
+    while prefix < prefix_limit and baseline[prefix].text == current[prefix].text:
+        prefix += 1
+    baseline_last = len(baseline)
+    current_last = len(current)
+    while (
+        baseline_last > prefix
+        and current_last > prefix
+        and baseline[baseline_last - 1].text == current[current_last - 1].text
+    ):
+        baseline_last -= 1
+        current_last -= 1
+    baseline_middle = baseline[prefix:baseline_last]
+    current_middle = current[prefix:current_last]
+    if max(len(baseline_middle), len(current_middle)) > MAX_DIFF_MIDDLE_TOKENS:
         return None
-    baseline_first, baseline_last, current_first, current_last = change
+    matcher = SequenceMatcher(
+        None,
+        tuple(token.text for token in baseline_middle),
+        tuple(token.text for token in current_middle),
+        autojunk=False,
+    )
+    return tuple(
+        (tag, i1 + prefix, i2 + prefix, j1 + prefix, j2 + prefix)
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes()
+        if tag != "equal"
+    )
+
+
+def _candidate_from_bounds(
+    baseline_text: str,
+    current_text: str,
+    baseline_tokens: tuple[_Token, ...],
+    current_tokens: tuple[_Token, ...],
+    committed_start: int,
+    committed_end: int,
+    baseline_first: int,
+    baseline_last: int,
+    current_first: int,
+    current_last: int,
+    *,
+    approved_terms: Iterable[str],
+    approved_term_resolver: Callable[[str], str] | None,
+    evidence: CorrectionEvidence,
+) -> CorrectionCandidate | None:
+    if (
+        sum(
+            token.kind in {_TokenKind.WORD, _TokenKind.CJK}
+            for token in baseline_tokens[baseline_first:baseline_last]
+        )
+        > MAX_CHANGED_LEXICAL_TOKENS
+        or sum(
+            token.kind in {_TokenKind.WORD, _TokenKind.CJK}
+            for token in current_tokens[current_first:current_last]
+        )
+        > MAX_CHANGED_LEXICAL_TOKENS
+    ):
+        return None
 
     changed_start = baseline_tokens[baseline_first].start
     changed_end = baseline_tokens[baseline_last - 1].end
@@ -157,7 +342,36 @@ def extract_correction(
         return None
     if not _specific_enough(wrong, canonical):
         return None
-    return CorrectionCandidate(wrong=wrong, canonical=canonical)
+    return CorrectionCandidate(
+        wrong=wrong,
+        canonical=canonical,
+        category=_classify_candidate(wrong, canonical),
+        evidence=evidence,
+    )
+
+
+def _classify_candidate(wrong: str, canonical: str) -> CorrectionCategory:
+    normalized_wrong = unicodedata.normalize("NFKC", wrong).casefold()
+    normalized_canonical = unicodedata.normalize("NFKC", canonical).casefold()
+    if " ".join(normalized_wrong.split()) == " ".join(normalized_canonical.split()):
+        return "formatting"
+    wrong_scripts = _lexical_scripts(wrong)
+    canonical_scripts = _lexical_scripts(canonical)
+    if wrong_scripts != canonical_scripts:
+        return "terminology"
+    return "recognition"
+
+
+def _lexical_scripts(text: str) -> set[str]:
+    scripts: set[str] = set()
+    for character in text:
+        if _is_cjk(character):
+            scripts.add("cjk")
+        elif character.isalpha():
+            scripts.add("latin")
+        elif character.isdigit():
+            scripts.add("digit")
+    return scripts
 
 
 def canonicalize_with_approved_terms(

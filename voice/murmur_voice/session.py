@@ -13,7 +13,7 @@ from .config import ConfigError, VoiceConfig
 from .data_collection import DataCollectionError
 from .preedit import AcquireResult, PreeditClient
 from .state import CommandReply, VoiceState
-from .volcengine import AudioBackpressureError, VolcengineASRClient
+from .volcengine import AudioBackpressureError
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +60,11 @@ class VoiceSession:
         monotonic: Any | None = None,
         start_timeout_seconds: float = VOICE_START_TIMEOUT_SECONDS,
         observation_handler: Any | None = None,
+        observation_result_handler: Any | None = None,
         observation_seconds: float = ADAPTIVE_OBSERVATION_SECONDS,
         data_collection_factory: Any | None = None,
         data_collection_status_reader: Any | None = None,
+        data_collection_feedback_writer: Any | None = None,
         microphone_policy_validator: Any | None = None,
     ) -> None:
         if asr_client_factory is not None:
@@ -70,8 +72,9 @@ class VoiceSession:
         elif asr_client is not None:
             self._asr_factory = lambda: asr_client
         else:
-            provider_settings = config.provider_settings()
-            self._asr_factory = lambda: VolcengineASRClient(provider_settings)
+            from .providers import create_asr_client
+
+            self._asr_factory = lambda: create_asr_client(config)
         self._asr: Any | None = None
         self._audio = audio_capture or AudioCapture()
         self._preedit = preedit_client or PreeditClient()
@@ -81,9 +84,11 @@ class VoiceSession:
         self._monotonic = monotonic or time.monotonic
         self._start_timeout_seconds = max(1.0, float(start_timeout_seconds))
         self._observation_handler = observation_handler
+        self._observation_result_handler = observation_result_handler
         self._observation_seconds = max(0.1, min(30.0, float(observation_seconds)))
         self._data_collection_factory = data_collection_factory
         self._data_collection_status_reader = data_collection_status_reader
+        self._data_collection_feedback_writer = data_collection_feedback_writer
         self._microphone_policy_validator = microphone_policy_validator
 
         self._lock = threading.RLock()
@@ -199,7 +204,7 @@ class VoiceSession:
                     raise _PreeditHeartbeatRejected
                 self._revision = 1
                 self._require_start_time(start_deadline)
-                self._begin_data_record_locked(utterance_id)
+                self._begin_data_record_locked(utterance_id, asr)
                 # The provider immediately returns after creating its private
                 # event-loop thread. Network work never runs in the IBus engine.
                 asr.connect()
@@ -507,20 +512,69 @@ class VoiceSession:
         if utterance_id is not None:
             snapshot = self._preedit.finish_observation(utterance_id)
         learned = False
+        observation_result = None
         if (
             within_deadline
             and snapshot is not None
             and self._observation_handler is not None
         ):
             try:
-                learned = self._observation_handler(snapshot) is True
+                observation_result = self._observation_handler(snapshot)
+                learned = observation_result is True or bool(
+                    getattr(observation_result, "learned", False)
+                )
             except Exception:
                 # Never include a transcript or pair in the diagnostic.
                 logger.error("Adaptive correction update failed")
                 self._last_error_code = "adaptive-correction-failed"
-        if learned:
-            self._last_error_code = "adaptive-correction-learned"
+        elif self._observation_result_handler is not None:
+            reason_code = (
+                "observation-timeout"
+                if not within_deadline
+                else (
+                    "surrounding-text-unavailable"
+                    if snapshot is None
+                    else "observation-handler-unavailable"
+                )
+            )
+            try:
+                observation_result = self._observation_result_handler(reason_code)
+            except Exception:
+                logger.error("Adaptive correction outcome could not be saved")
+                self._last_error_code = "adaptive-correction-failed"
+        if utterance_id is not None and observation_result is not None:
+            self._write_data_feedback_locked(utterance_id, observation_result)
+        if self._last_error_code != "data-collection-failed":
+            if learned:
+                self._last_error_code = "adaptive-correction-learned"
+            elif getattr(observation_result, "conflicted_count", 0):
+                self._last_error_code = "adaptive-correction-conflicted"
+            elif getattr(observation_result, "candidate_count", 0):
+                self._last_error_code = "adaptive-correction-candidate"
+            elif (
+                observation_result is not None
+                and self._last_error_code != "adaptive-correction-failed"
+            ):
+                self._last_error_code = "adaptive-correction-skipped"
         self._clear_sensitive_state_locked()
+
+    def _write_data_feedback_locked(
+        self,
+        utterance_id: str,
+        observation_result: Any,
+    ) -> None:
+        writer = self._data_collection_feedback_writer
+        if writer is None:
+            return
+        serializer = getattr(observation_result, "as_feedback_document", None)
+        if not callable(serializer):
+            return
+        try:
+            writer(utterance_id, serializer())
+        except Exception:
+            # Feedback is optional and must not break dictation or expose text.
+            logger.error("Optional local correction feedback could not be saved")
+            self._last_error_code = "data-collection-failed"
 
     def _abort_locked(self, code: str) -> None:
         self._cancel_warning_timer_locked()
@@ -569,13 +623,22 @@ class VoiceSession:
         self._duration_warning = False
         self._observation_deadline = None
 
-    def _begin_data_record_locked(self, utterance_id: str) -> None:
+    def _begin_data_record_locked(self, utterance_id: str, asr: Any) -> None:
         self._data_record = None
         factory = self._data_collection_factory
         if factory is None:
             return
         try:
-            self._data_record = factory(utterance_id)
+            record = factory(utterance_id)
+            if record is not None:
+                setter = getattr(record, "set_provider_identity", None)
+                if callable(setter):
+                    setter(
+                        str(getattr(asr, "provider_name", "unknown")),
+                        str(getattr(asr, "provider_model", "unknown")),
+                        getattr(asr, "provider_resource_id", None),
+                    )
+            self._data_record = record
         except (ConfigError, DataCollectionError, OSError):
             # Optional retention must never prevent dictation or disclose the
             # selected path through logs.

@@ -16,7 +16,8 @@
 > hacks, with adaptive corrections and user-owned training data.**
 
 首批用户是使用 Ubuntu、IBus、Rime，并经常混合中文和英文术语的开发者、
-研究人员和重度文字工作者。当前线上识别由用户自己的火山引擎账户提供；
+研究人员和重度文字工作者。当前线上识别由用户选择并自行配置的 ASR 服务提供；
+火山引擎是默认且唯一用真实 Key 验收的路径，Qwen/OpenAI 仍是实验后端；
 本项目不能写成“完全离线”“永久免费 ASR”或“已经支持本地训练”。
 
 ## 产品架构
@@ -26,7 +27,7 @@ flowchart LR
     H["Right Alt / 悬浮按钮"] --> C["最小控制器"]
     C -->|"start / stop / cancel / status"| V["语音守护进程"]
     P["每句麦克风策略"] --> V
-    V --> A["火山 ASR（当前）"]
+    V --> A["用户选择的在线 ASR"]
     V -.-> L["本地 ASR 后端（路线图）"]
     V -->|"partial / final"| I["IBus 输入引擎"]
     I -->|"preedit / commit"| F["当前光标"]
@@ -57,7 +58,7 @@ flowchart LR
 
 1. 用户从 GitHub Release 下载适用于 Ubuntu 24.04 x86_64 的 `.deb`；
 2. 系统软件中心或 `apt install ./包名.deb` 安装系统依赖和产品文件；
-3. 用户从应用菜单打开设置，填写自己的火山引擎 Key；
+3. 用户从应用菜单打开设置，选择服务并填写该服务的 Key；
 4. 设置页完成用户服务启用，并明确告诉用户如何使用 Right Alt；
 5. 用户在浏览器、编辑器或聊天框中按 Right Alt，说出第一句话；
 6. partial 在当前光标显示，authoritative final 原位提交；
@@ -77,7 +78,7 @@ Debian maintainer script 不得读取、打印或迁移用户 Key，也不得在
 3. 一个明显的 Ubuntu `.deb` 下载/安装入口；
 4. 三项差异：IBus 原生、不用剪贴板；会从严格修改中学习；数据由用户选择
    是否保留；
-5. 当前事实：Ubuntu 24.04、IBus、火山引擎 BYOK、alpha 限制；
+5. 当前事实：Ubuntu 24.04、IBus、在线 ASR BYOK、alpha 限制；
 6. 中文完整上手和英文辅助文档入口。
 
 D-Bus ABI、SBOM、威胁模型、DJI USB 细节和构建可复现性仍然公开，但从首屏
@@ -202,5 +203,5 @@ GitHub star 之外，每周记录：
 | 61–90 天 | 本地 ASR preview、可复现中英混说评测、更多发行版包 | 500–1000 stars |
 
 这些数字是用于决定工作优先级的估算，不是增长承诺。若产品仍然是
-“Ubuntu + Volcengine-only + tar.gz alpha”，即使继续增加内部功能，公开增长
+“Ubuntu + 单一在线后端 + tar.gz alpha”，即使继续增加内部功能，公开增长
 上限也会明显低于提供本地后端、发行版原生安装包和稳定日用体验的版本。

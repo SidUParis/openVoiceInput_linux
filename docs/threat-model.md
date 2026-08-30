@@ -75,9 +75,11 @@ The current boundaries are:
   offline state.
 - The private Unix control socket and session D-Bus are boundaries between
   Unix users, not between applications running as the same user.
-- Volcengine is a remote processor selected by the user. Standard TLS protects
-  transport, but the provider can necessarily process audio and any explicit
-  vocabulary/corrections included with a request.
+- The selected online ASR service is a remote processor. Standard TLS protects
+  transport, but that provider can necessarily process audio and any explicit
+  vocabulary/corrections included with a request. Volcengine is the default
+  and the only real-key-validated path in this release; Qwen and OpenAI remain
+  experimental.
 - The installer trusts the local operating system, Python interpreter,
   systemd user manager, IBus, and a preview archive that has passed the
   repository verifier. It does not elevate privileges.
@@ -205,6 +207,13 @@ one atomic rename into `utterances/<utterance_id>`. The JSON identifies
 `preferred_output` null and unreviewed. This prevents an ASR result from being
 silently presented as a human-verified acoustic label or preferred text.
 
+After the unchanged two-file utterance pair is durable, the writer publishes a
+separate `usage/<utterance_id>.json` summary with no transcript. The GTK
+dashboard reads only these bounded private summaries on a worker thread. It
+does not enumerate utterance directories, read record labels/audio, or create a
+missing index while merely viewing statistics. Hidden interrupted summary
+staging is ignored.
+
 Configuration save and final publication share a short lock and the writer
 rechecks the dataset identity and consent before rename. Once disabling or
 redirecting collection returns, an older queued/staged record cannot become
@@ -312,9 +321,10 @@ fingerprint before and after install/upgrade/uninstall/reinstall.
   session D-Bus preedit service or interact with the user's private control
   socket. There is not yet a short-lived user-presence capability. Do not use
   the preview when mutually untrusted same-UID applications are in scope.
-- Volcengine receives microphone audio and explicit request vocabulary or
-  correction pairs. Cancellation cannot retract bytes already uploaded, and
-  provider retention/region/account policy is outside this project.
+- The selected online ASR provider receives microphone audio and any explicit
+  request vocabulary or correction context supported by that provider.
+  Cancellation cannot retract bytes already uploaded, and provider billing,
+  retention, region, and account policy are outside this project.
 - Enabling local collection deliberately creates sensitive audio/text records.
   The selected filesystem or mount controls who can read, back up, or replicate
   them; the application supplies no static encryption. `provider_final` is an

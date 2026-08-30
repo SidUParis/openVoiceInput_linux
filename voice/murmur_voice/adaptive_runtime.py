@@ -4,26 +4,35 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import stat
 import threading
 import unicodedata
-from dataclasses import replace
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from .adaptive_correction import (
+    CorrectionCandidate,
     canonicalize_with_approved_terms,
     collapsed_term_key,
-    extract_correction,
+    extract_corrections,
 )
 from .adaptive_store import (
+    AdaptiveEntry,
     AdaptiveLedger,
+    AdaptiveLastResult,
     AdaptiveStoreError,
+    activate_correction,
+    adaptive_statistics,
     compile_provider_corrections,
     normalized_key,
     parse_adaptive_ledger,
-    record_correction,
+    record_evidence,
     serialize_adaptive_ledger,
+    with_last_result,
 )
 from .config import (
     ConfigError,
@@ -38,6 +47,7 @@ from .config import (
 )
 
 MAX_ADAPTIVE_CORRECTIONS_BYTES = 384 * 1024
+MAX_EXPLICIT_FEEDBACK_TEXT_CHARACTERS = 4096
 _SYSTEM_DICTIONARY_GLOBS = (
     "/usr/share/hunspell/en_US*.dic",
     "/usr/share/hunspell/en_GB*.dic",
@@ -45,6 +55,56 @@ _SYSTEM_DICTIONARY_GLOBS = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class AdaptiveObservedCandidate:
+    """One private bounded pair plus its decision, hidden from debug reprs."""
+
+    wrong: str
+    canonical: str
+    category: str
+    evidence: str
+    state: str
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class AdaptiveObservationResult:
+    """One explicit learning outcome suitable for status and feedback."""
+
+    reason_code: str
+    captured_count: int = 0
+    activated_count: int = 0
+    candidate_count: int = 0
+    conflicted_count: int = 0
+    replacement_hunks: int = 0
+    candidates: tuple[AdaptiveObservedCandidate, ...] = field(default=(), repr=False)
+
+    @property
+    def learned(self) -> bool:
+        return self.activated_count > 0
+
+    def as_feedback_document(self) -> dict[str, Any]:
+        """Return only bounded pairs and classifications, never surrounding text."""
+
+        return {
+            "reason_code": self.reason_code,
+            "captured_count": self.captured_count,
+            "activated_count": self.activated_count,
+            "candidate_count": self.candidate_count,
+            "conflicted_count": self.conflicted_count,
+            "replacement_hunks": self.replacement_hunks,
+            "corrections": [
+                {
+                    "wrong": item.wrong,
+                    "canonical": item.canonical,
+                    "category": item.category,
+                    "evidence": item.evidence,
+                    "state": item.state,
+                }
+                for item in self.candidates
+            ],
+        }
 
 
 def load_adaptive_ledger(path: str | Path | None = None) -> AdaptiveLedger:
@@ -136,65 +196,143 @@ class AdaptiveCorrectionRuntime:
             except AdaptiveStoreError as error:
                 raise ConfigError("adaptive correction ledger is invalid") from error
 
-        # Keep provider/GI imports lazy for configure and status-only commands.
-        from .volcengine import VolcengineASRClient
+        # Keep provider and optional transport imports lazy for configure and
+        # status-only commands.
+        from .providers import create_asr_client
 
-        return VolcengineASRClient(effective.provider_settings())
+        return create_asr_client(effective)
 
     def observe(self, snapshot: Any) -> bool:
-        """Record one strict replacement without retaining surrounding text."""
+        """Compatibility wrapper returning whether a provider rule activated."""
+
+        return self.observe_result(snapshot).learned
+
+    def observe_result(self, snapshot: Any) -> AdaptiveObservationResult:
+        """Capture classified replacements and persist an explicit outcome."""
 
         with self._lock:
-            if (
-                type(snapshot.cursor) is not int
-                or type(snapshot.anchor) is not int
-                or snapshot.cursor != snapshot.anchor
-            ):
-                return False
+            cursor = getattr(snapshot, "cursor", None)
+            anchor = getattr(snapshot, "anchor", None)
+            if type(cursor) is not int or type(anchor) is not int:
+                return self._record_result("invalid-snapshot")
+            if cursor != anchor:
+                return self._record_result("selection-active")
             vocabulary = load_vocabulary(self._vocabulary_path)
-            candidate = extract_correction(
-                snapshot.baseline_text,
-                snapshot.committed_start,
-                snapshot.committed_end,
-                snapshot.current_text,
+            extraction = extract_corrections(
+                getattr(snapshot, "baseline_text", None),
+                getattr(snapshot, "committed_start", None),
+                getattr(snapshot, "committed_end", None),
+                getattr(snapshot, "current_text", None),
                 approved_term_resolver=lambda text: _canonicalize_approved_term(
                     text,
                     vocabulary,
                 ),
             )
-            if candidate is None:
-                return False
-            ledger = load_adaptive_ledger(self._adaptive_path)
-            try:
-                updated = record_correction(
-                    ledger,
-                    candidate.wrong,
-                    candidate.canonical,
+            if not extraction.candidates:
+                return self._record_result(
+                    extraction.reason_code,
+                    replacement_hunks=extraction.replacement_hunks,
                 )
-            except AdaptiveStoreError as error:
-                raise ConfigError("adaptive correction ledger is invalid") from error
-            save_adaptive_ledger(updated, self._adaptive_path)
-            manual = load_corrections(self._corrections_path)
-            try:
-                provider_view = compile_provider_corrections(manual, updated)
-            except AdaptiveStoreError as error:
-                raise ConfigError("adaptive correction ledger is invalid") from error
-            source_key = normalized_key(candidate.wrong)
-            canonical_key = normalized_key(candidate.canonical)
-            if any(normalized_key(pair.wrong) == source_key for pair in manual):
-                return False
-            active_matches = tuple(
-                entry
-                for entry in updated.entries
-                if entry.state == "active"
-                and normalized_key(entry.wrong) == source_key
-                and normalized_key(entry.canonical) == canonical_key
+            with _adaptive_file_lock(self._adaptive_path):
+                ledger = load_adaptive_ledger(self._adaptive_path)
+                updated = ledger
+                try:
+                    for candidate in extraction.candidates:
+                        updated = record_evidence(
+                            updated,
+                            candidate.wrong,
+                            candidate.canonical,
+                            state=(
+                                "active"
+                                if candidate.evidence == "strong"
+                                else "candidate"
+                            ),
+                            category=candidate.category,
+                            evidence=candidate.evidence,
+                        )
+                    manual = load_corrections(self._corrections_path)
+                    provider_view = compile_provider_corrections(manual, updated)
+                except AdaptiveStoreError as error:
+                    raise ConfigError(
+                        "adaptive correction ledger is invalid"
+                    ) from error
+
+                observed = tuple(
+                    _observed_candidate(candidate, updated)
+                    for candidate in extraction.candidates
+                )
+                provider_identities = {
+                    (normalized_key(pair.wrong), normalized_key(pair.canonical))
+                    for pair in provider_view
+                }
+                manual_sources = {normalized_key(pair.wrong) for pair in manual}
+                activated_count = sum(
+                    item.state == "active"
+                    and normalized_key(item.wrong) not in manual_sources
+                    and (normalized_key(item.wrong), normalized_key(item.canonical))
+                    in provider_identities
+                    for item in observed
+                )
+                candidate_count = sum(item.state == "candidate" for item in observed)
+                conflicted_count = sum(item.state == "conflicted" for item in observed)
+                reason = _decision_reason(
+                    activated_count,
+                    candidate_count,
+                    conflicted_count,
+                )
+                result = AdaptiveObservationResult(
+                    reason_code=reason,
+                    captured_count=len(observed),
+                    activated_count=activated_count,
+                    candidate_count=candidate_count,
+                    conflicted_count=conflicted_count,
+                    replacement_hunks=extraction.replacement_hunks,
+                    candidates=observed,
+                )
+                updated = with_last_result(updated, _last_result(result))
+                save_adaptive_ledger(updated, self._adaptive_path)
+                return result
+
+    def record_external_result(self, reason_code: str) -> AdaptiveObservationResult:
+        """Persist a reason produced outside extraction, such as a timeout."""
+
+        with self._lock:
+            return self._record_result(reason_code)
+
+    def confirm(self, wrong: str, canonical: str) -> AdaptiveObservationResult:
+        """Explicitly activate one retained choice and archive alternatives."""
+
+        with self._lock:
+            return confirm_adaptive_correction(
+                self._adaptive_path,
+                self._corrections_path,
+                wrong,
+                canonical,
             )
-            return any(
-                pair.wrong == entry.wrong and pair.canonical == entry.canonical
-                for entry in active_matches
-                for pair in provider_view
+
+    def status_document(self) -> dict[str, Any]:
+        """Read content-free statistics and the most recent result."""
+
+        with self._lock:
+            return adaptive_status_document(self._adaptive_path)
+
+    def _record_result(
+        self,
+        reason_code: str,
+        *,
+        replacement_hunks: int = 0,
+    ) -> AdaptiveObservationResult:
+        result = AdaptiveObservationResult(
+            reason_code=reason_code,
+            replacement_hunks=replacement_hunks,
+        )
+        with _adaptive_file_lock(self._adaptive_path):
+            ledger = load_adaptive_ledger(self._adaptive_path)
+            save_adaptive_ledger(
+                with_last_result(ledger, _last_result(result)),
+                self._adaptive_path,
             )
+        return result
 
     def _load_snapshot(
         self,
@@ -204,6 +342,270 @@ class AdaptiveCorrectionRuntime:
         manual = load_corrections(self._corrections_path)
         ledger = load_adaptive_ledger(self._adaptive_path)
         return config, vocabulary, manual, ledger
+
+
+def adaptive_status_document(path: str | Path | None = None) -> dict[str, Any]:
+    """Return transcript-free lifecycle statistics for settings and CLI."""
+
+    ledger = load_adaptive_ledger(path)
+    recent = ledger.last_result
+    return {
+        "schema_version": ledger.version,
+        "statistics": adaptive_statistics(ledger),
+        "last_result": (
+            {
+                "reason_code": recent.reason_code,
+                "captured_count": recent.captured_count,
+                "activated_count": recent.activated_count,
+                "candidate_count": recent.candidate_count,
+                "conflicted_count": recent.conflicted_count,
+                "replacement_hunks": recent.replacement_hunks,
+            }
+            if recent is not None
+            else None
+        ),
+    }
+
+
+def adaptive_review_entries(
+    path: str | Path | None = None,
+) -> tuple[AdaptiveEntry, ...]:
+    """Return only entries that need or permit an explicit local decision."""
+
+    return tuple(
+        entry
+        for entry in load_adaptive_ledger(path).entries
+        if entry.state in {"candidate", "conflicted", "suspended"}
+    )
+
+
+def confirm_adaptive_correction(
+    adaptive_path: str | Path,
+    corrections_path: str | Path,
+    wrong: str,
+    canonical: str,
+) -> AdaptiveObservationResult:
+    """Activate one retained choice under the cross-process ledger lock."""
+
+    path = Path(adaptive_path)
+    with _adaptive_file_lock(path):
+        ledger = load_adaptive_ledger(path)
+        try:
+            updated = activate_correction(ledger, wrong, canonical)
+            manual = load_corrections(corrections_path)
+            provider_view = compile_provider_corrections(manual, updated)
+        except AdaptiveStoreError as error:
+            raise ConfigError("adaptive correction ledger is invalid") from error
+        identity = (normalized_key(wrong), normalized_key(canonical))
+        manual_sources = {normalized_key(pair.wrong) for pair in manual}
+        activated = int(
+            identity[0] not in manual_sources
+            and any(
+                (normalized_key(pair.wrong), normalized_key(pair.canonical)) == identity
+                for pair in provider_view
+            )
+        )
+        chosen = next(
+            entry
+            for entry in updated.entries
+            if (normalized_key(entry.wrong), normalized_key(entry.canonical))
+            == identity
+        )
+        observed = AdaptiveObservedCandidate(
+            chosen.wrong,
+            chosen.canonical,
+            chosen.category,
+            "explicit",
+            chosen.state,
+        )
+        result = AdaptiveObservationResult(
+            reason_code=("explicitly-activated" if activated else "active-suppressed"),
+            captured_count=1,
+            activated_count=activated,
+            candidates=(observed,),
+        )
+        save_adaptive_ledger(
+            with_last_result(updated, _last_result(result)),
+            path,
+        )
+        return result
+
+
+def submit_explicit_feedback(
+    adaptive_path: str | Path,
+    corrections_path: str | Path,
+    vocabulary_path: str | Path,
+    provider_text: str,
+    preferred_text: str,
+) -> AdaptiveObservationResult:
+    """Reliably learn an explicitly supplied last-result edit.
+
+    This is the cross-application fallback API for clients that cannot expose
+    trusted IBus surrounding text.  Only bounded correction pairs are stored;
+    neither complete input is persisted in the adaptive ledger.
+    """
+
+    if (
+        not isinstance(provider_text, str)
+        or not isinstance(preferred_text, str)
+        or not provider_text
+        or not preferred_text
+        or len(provider_text) > MAX_EXPLICIT_FEEDBACK_TEXT_CHARACTERS
+        or len(preferred_text) > MAX_EXPLICIT_FEEDBACK_TEXT_CHARACTERS
+    ):
+        raise ConfigError("explicit adaptive feedback is invalid")
+    vocabulary = load_vocabulary(vocabulary_path)
+    extraction = extract_corrections(
+        provider_text,
+        0,
+        len(provider_text),
+        preferred_text,
+        approved_term_resolver=lambda text: _canonicalize_approved_term(
+            text, vocabulary
+        ),
+    )
+    path = Path(adaptive_path)
+    with _adaptive_file_lock(path):
+        ledger = load_adaptive_ledger(path)
+        if not extraction.candidates:
+            result = AdaptiveObservationResult(
+                reason_code=f"explicit-feedback-{extraction.reason_code}",
+                replacement_hunks=extraction.replacement_hunks,
+            )
+            save_adaptive_ledger(with_last_result(ledger, _last_result(result)), path)
+            return result
+
+        updated = ledger
+        try:
+            for candidate in extraction.candidates:
+                updated = record_evidence(
+                    updated,
+                    candidate.wrong,
+                    candidate.canonical,
+                    state="candidate",
+                    category=candidate.category,
+                    evidence=candidate.evidence,
+                )
+                updated = activate_correction(
+                    updated, candidate.wrong, candidate.canonical
+                )
+            manual = load_corrections(corrections_path)
+            provider_view = compile_provider_corrections(manual, updated)
+        except AdaptiveStoreError as error:
+            raise ConfigError("adaptive correction ledger is invalid") from error
+        provider_identities = {
+            (normalized_key(pair.wrong), normalized_key(pair.canonical))
+            for pair in provider_view
+        }
+        manual_sources = {normalized_key(pair.wrong) for pair in manual}
+        observed = tuple(
+            _observed_candidate(candidate, updated)
+            for candidate in extraction.candidates
+        )
+        activated = sum(
+            item.state == "active"
+            and normalized_key(item.wrong) not in manual_sources
+            and (normalized_key(item.wrong), normalized_key(item.canonical))
+            in provider_identities
+            for item in observed
+        )
+        result = AdaptiveObservationResult(
+            reason_code=(
+                "explicit-feedback-activated"
+                if activated
+                else "explicit-feedback-suppressed"
+            ),
+            captured_count=len(observed),
+            activated_count=activated,
+            replacement_hunks=extraction.replacement_hunks,
+            candidates=tuple(replace(item, evidence="explicit") for item in observed),
+        )
+        save_adaptive_ledger(
+            with_last_result(updated, _last_result(result)),
+            path,
+        )
+        return result
+
+
+def _observed_candidate(
+    candidate: CorrectionCandidate,
+    ledger: AdaptiveLedger,
+) -> AdaptiveObservedCandidate:
+    identity = (normalized_key(candidate.wrong), normalized_key(candidate.canonical))
+    entry = next(
+        entry
+        for entry in ledger.entries
+        if (normalized_key(entry.wrong), normalized_key(entry.canonical)) == identity
+    )
+    return AdaptiveObservedCandidate(
+        wrong=entry.wrong,
+        canonical=entry.canonical,
+        category=entry.category,
+        evidence=entry.evidence,
+        state=entry.state,
+    )
+
+
+def _decision_reason(activated: int, candidates: int, conflicted: int) -> str:
+    if conflicted:
+        return "conflict-recorded"
+    if activated and candidates:
+        return "active-and-candidates-saved"
+    if candidates:
+        return "candidates-saved"
+    if activated:
+        return "active-learned"
+    return "active-suppressed"
+
+
+def _last_result(result: AdaptiveObservationResult) -> AdaptiveLastResult:
+    return AdaptiveLastResult(
+        reason_code=result.reason_code,
+        captured_count=result.captured_count,
+        activated_count=result.activated_count,
+        candidate_count=result.candidate_count,
+        conflicted_count=result.conflicted_count,
+        replacement_hunks=result.replacement_hunks,
+    )
+
+
+@contextmanager
+def _adaptive_file_lock(path: Path):
+    """Serialize daemon/settings ledger mutations without following links."""
+
+    import fcntl
+
+    parent = path.parent
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    metadata = parent.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or parent.is_symlink()
+    ):
+        raise ConfigError("adaptive correction directory is unsafe")
+    parent.chmod(0o700)
+    lock_path = path.with_name(".adaptive-corrections.lock")
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as error:
+        raise ConfigError("adaptive correction lock is unavailable") from error
+    try:
+        lock_metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(lock_metadata.st_mode)
+            or lock_metadata.st_uid != os.getuid()
+        ):
+            raise ConfigError("adaptive correction lock is unsafe")
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def _canonicalize_approved_term(text: str, vocabulary: tuple[str, ...]) -> str:

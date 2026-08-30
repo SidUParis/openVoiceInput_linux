@@ -220,6 +220,12 @@ the focused IBus context, the collector publishes one
 `preferred_output` are both null/unreviewed: the current pair is a future
 review candidate, not a gold label or distillation-ready sample.
 
+The v1 utterance directory stays an immutable two-file pair. After it is
+published, the writer atomically adds a separate private
+`usage/<utterance_id>.json` summary containing only timestamp, duration and a
+non-whitespace character count. The settings dashboard scans this bounded
+index in a background worker and never opens `record.json` or audio.
+
 Capture copies bounded PCM into memory; WAV encoding, hashing, syncing, and
 atomic publication run in a bounded background writer. A full/unavailable
 writer or invalid destination reports `data-collection-failed` or
@@ -287,6 +293,28 @@ desktop shortcut to:
 ```bash
 ~/.local/share/murmur-ime/murmur-voice-daemon toggle
 ```
+
+The native settings page can instead select `push_to_talk`. An integration
+which has real key edges sends:
+
+```bash
+~/.local/share/murmur-ime/murmur-voice-daemon press
+~/.local/share/murmur-ime/murmur-voice-daemon release
+```
+
+The key name is intentionally not stored by the daemon: the user chooses it
+in the desktop, keyboard firmware, or accessibility tool which owns the key
+event. Repeat key-down is idempotent. A release below the configured minimum
+hold cancels the utterance, and a missing release is bounded by the configured
+watchdog before a normal stop. `cancel` (including an Escape binding) clears
+held-key ownership. A press received during `observing` first finishes the
+observation and then starts the next utterance atomically.
+
+GNOME/KDE activation shortcuts can invoke `toggle` on X11 and Wayland, but a
+generic Wayland global shortcut does not guarantee a key-up callback. Do not
+configure push-to-talk unless the selected integration can invoke both
+commands. Open Voice Input does not add the user to `input`, scan all evdev
+devices, or advertise an X11 listener as a Wayland solution.
 
 ## Status and troubleshooting
 

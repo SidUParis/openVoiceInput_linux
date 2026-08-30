@@ -15,7 +15,8 @@
     <p>
       This Ubuntu 24.04 preview supports adaptive terminology corrections,
       per-utterance microphone selection, and optional user-owned ASR data
-      collection. Recognition currently uses the user's Volcengine account.
+      collection. Recognition uses the user's account for the selected online
+      provider; Volcengine remains the default and real-key-validated path.
     </p>
     <p>
       The native GTK4 client is intentionally small and does not bundle an
@@ -27,7 +28,8 @@
     </p>
     <p xml:lang="zh-CN">
       当前 Ubuntu 24.04 预览版支持术语纠错学习、逐句动态选择麦克风和可选的
-      用户自有 ASR 数据收集；在线识别目前使用用户自己的火山引擎账号。
+      用户自有 ASR 数据收集；在线识别使用用户所选服务的自有账号，火山引擎
+      仍是默认且已用真实 Key 验收的路径。
     </p>
     <p xml:lang="zh-CN">
       原生 GTK4 客户端保持轻量，不捆绑 Electron 运行时或本地语音模型。
@@ -52,6 +54,14 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.0-alpha.5" date="2026-08-31">
+      <description>
+        <p>
+          Ubuntu 24.04 alpha with flexible voice controls, broader adaptive
+          learning, a usage dashboard, and provider-ready ASR backends.
+        </p>
+      </description>
+    </release>
     <release version="0.1.0-alpha.4" date="2026-08-30">
       <description>
         <p>
