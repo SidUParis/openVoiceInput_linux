@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 
 from .dji_microphone import is_dji_source, probe_dji_link_state
+from .microphone_policy import MicrophonePolicyConfig
 
 SAMPLE_RATE = 16_000
 CHANNELS = 1
@@ -42,6 +43,10 @@ class AudioDeviceError(RuntimeError):
     """A safe, content-free failure to find or open a usable microphone."""
 
 
+class MicrophonePolicyError(AudioDeviceError):
+    """A fixed failure for an existing invalid/unsafe microphone policy."""
+
+
 class _PactlCommandError(RuntimeError):
     pass
 
@@ -51,6 +56,8 @@ class _PulseSource:
     name: str
     state: str
     card_index: int | None = None
+    category: str | None = None
+    available: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,6 +263,7 @@ def resolve_input_device(
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
     dji_link_probe: Callable[[], bool | None] = probe_dji_link_state,
+    microphone_policy: MicrophonePolicyConfig = MicrophonePolicyConfig(),
 ) -> _PulseInputSelection | int | str | None:
     """Resolve one microphone afresh for each explicitly started recording.
 
@@ -264,6 +272,9 @@ def resolve_input_device(
     state seen after a Bluetooth input disconnect may be extended with its
     matching input profile.  No source is unmuted and no volume is changed.
     """
+
+    if not isinstance(microphone_policy, MicrophonePolicyConfig):
+        raise MicrophonePolicyError("microphone priority configuration is invalid")
 
     budget = _PreflightBudget(pactl_runner, sleep, monotonic)
     try:
@@ -287,6 +298,7 @@ def resolve_input_device(
             sources,
             pulse_device,
             dji_link_probe,
+            microphone_policy,
         )
     except FileNotFoundError as error:
         # Once pactl answered, losing it mid-transaction is an uncertain Pulse
@@ -307,6 +319,7 @@ def _ensure_pulse_input(
     sources: Sequence[_PulseSource],
     pulse_device: int,
     dji_link_probe: Callable[[], bool | None] = probe_dji_link_state,
+    microphone_policy: MicrophonePolicyConfig = MicrophonePolicyConfig(),
 ) -> _PulseInputSelection:
     default_source = _get_default_source(runner)
     if default_source is None:
@@ -314,20 +327,17 @@ def _ensure_pulse_input(
         # the current default was observed first.
         raise AudioDeviceError("PulseAudio default source could not be determined")
     usable_sources = _usable_sources(sources)
-    link_aware, usable_sources = _choose_link_aware_source(
+    selected, eligible_sources = _choose_policy_source(
         usable_sources,
         default_source,
         dji_link_probe,
+        microphone_policy,
     )
-    if link_aware is not None:
-        return _PulseInputSelection(link_aware.name, pulse_device)
-    if default_source and any(
-        source.name == default_source for source in usable_sources
-    ):
-        return _PulseInputSelection(default_source, pulse_device)
+    if selected is not None:
+        return _PulseInputSelection(selected.name, pulse_device)
 
     recovery: _ProfileRecovery | None = None
-    if not usable_sources:
+    if not eligible_sources:
         # A monitor/missing default plus zero real sources can mean that
         # WirePlumber left the built-in card in an output-only profile after a
         # Bluetooth headset disappeared. Only add input to the exact existing
@@ -357,66 +367,109 @@ def _ensure_pulse_input(
         # recovered source is bound only to this recording stream below.
         return _PulseInputSelection(selected.name, pulse_device)
 
-    return _PulseInputSelection(_choose_source(usable_sources).name, pulse_device)
+    raise AudioDeviceError("microphone policy has no unambiguous available source")
 
 
-def _choose_link_aware_source(
+def _choose_policy_source(
     sources: Sequence[_PulseSource],
     default_source: str,
     link_probe: Callable[[], bool | None],
+    policy: MicrophonePolicyConfig,
 ) -> tuple[_PulseSource | None, tuple[_PulseSource, ...]]:
-    """Prefer a linked DJI receiver or bypass its silent offline source.
+    """Select the first unambiguous currently usable policy category.
 
-    This choice is scoped to the new PortAudio stream. It never changes the
-    desktop default and never touches a sink. An unknown USB probe preserves
-    the existing default-source behavior, which also composes with an external
-    routing service already holding the receiver's status interface. The
-    returned candidates exclude a receiver that was proven offline, allowing
-    the existing output-only-card recovery path when no fallback is enumerated.
+    DJI sources are eligible only after a positive link probe. A negative
+    probe excludes them. An unknown probe also avoids promoting DJI, but the
+    already-current DJI default remains a last resort when no non-DJI source
+    can be selected; this keeps compatibility with a separate router that may
+    own the receiver's USB status interface.
+
+    Within a category, an exact configured source wins, then the live system
+    default, then a unique candidate. An unresolved category is skipped so a
+    lower-priority class can keep dictation available without guessing.
     """
 
     candidates = tuple(sources)
-    dji_sources = tuple(source for source in candidates if is_dji_source(source.name))
-    if len(dji_sources) != 1:
-        return None, candidates
-    try:
-        online = link_probe()
-    except Exception:
-        online = None
-    if online is True:
-        return dji_sources[0], candidates
-    if online is None:
-        return None, candidates
+    dji_sources = tuple(
+        source for source in candidates if _source_category(source) == "dji"
+    )
+    online: bool | None = None
+    if len(dji_sources) == 1:
+        try:
+            online = link_probe()
+        except Exception:
+            online = None
 
-    fallbacks = tuple(source for source in candidates if source not in dji_sources)
-    current = next(
-        (source for source in fallbacks if source.name == default_source),
-        None,
-    )
-    if current is not None:
-        return current, fallbacks
-    built_in = tuple(
-        source
-        for source in fallbacks
-        if source.name.casefold().startswith("alsa_input.pci-")
-    )
-    if len(built_in) == 1:
-        return built_in[0], fallbacks
-    if len(fallbacks) == 1:
-        return fallbacks[0], fallbacks
-    if not fallbacks:
-        return None, fallbacks
-    raise AudioDeviceError("offline wireless microphone has no unambiguous fallback")
+    if online is True or not dji_sources:
+        eligible = candidates
+    else:
+        eligible = tuple(source for source in candidates if source not in dji_sources)
+
+    for category in policy.priority:
+        category_sources = tuple(
+            source for source in eligible if _source_category(source) == category
+        )
+        if not category_sources:
+            continue
+        preferred_name = policy.preferred_source_for(category)
+        if preferred_name is not None:
+            preferred = tuple(
+                source for source in category_sources if source.name == preferred_name
+            )
+            if len(preferred) == 1:
+                return preferred[0], eligible
+        current = tuple(
+            source for source in category_sources if source.name == default_source
+        )
+        if len(current) == 1:
+            return current[0], eligible
+        if len(category_sources) == 1:
+            return category_sources[0], eligible
+
+    if online is None and len(dji_sources) == 1:
+        current_dji = tuple(
+            source for source in dji_sources if source.name == default_source
+        )
+        if len(current_dji) == 1:
+            return current_dji[0], candidates
+    return None, eligible
 
 
 def _list_pulse_sources(
     runner: Callable[[Sequence[str]], str],
 ) -> tuple[_PulseSource, ...]:
+    """Enumerate sources with metadata, falling back to legacy short output."""
+
     try:
-        output = runner(("list", "short", "sources"))
+        output = runner(("--format=json", "list", "sources"))
     except FileNotFoundError:
         # Preserve this sentinel for resolve_input_device's no-pactl fallback;
         # a present-but-failing pactl must instead fail closed below.
+        raise
+    except AudioDeviceError:
+        raise
+    except Exception:
+        output = None
+    if output is not None:
+        if len(output.encode("utf-8", errors="replace")) > _MAX_PACTL_OUTPUT_BYTES:
+            raise AudioDeviceError("PulseAudio source list is too large")
+        try:
+            document = json.loads(output)
+        except (TypeError, json.JSONDecodeError):
+            document = None
+        if isinstance(document, list):
+            parsed = tuple(_pulse_source_from_json(item) for item in document)
+            if any(source is None for source in parsed):
+                raise AudioDeviceError(
+                    "PulseAudio source discovery returned invalid data"
+                )
+            sources = tuple(source for source in parsed if source is not None)
+            # An empty JSON list is a valid observation: there are no sources.
+            return sources
+
+    try:
+        output = runner(("list", "short", "sources"))
+    except FileNotFoundError:
         raise
     except AudioDeviceError:
         raise
@@ -438,10 +491,168 @@ def _list_pulse_sources(
             malformed = True
             continue
         state = fields[-1].strip().upper() if len(fields) >= 5 else "UNKNOWN"
-        sources.append(_PulseSource(name, state))
+        sources.append(_PulseSource(name, state, category=_category_from_name(name)))
     if malformed and not sources:
         raise AudioDeviceError("PulseAudio returned an invalid source list")
     return tuple(sources)
+
+
+def _pulse_source_from_json(value: Any) -> _PulseSource | None:
+    if not isinstance(value, Mapping):
+        return None
+    name = _safe_name(value.get("name"))
+    if name is None:
+        return None
+    raw_card_index = value.get("card")
+    card_index = _pulse_index(raw_card_index)
+    properties = value.get("properties")
+    safe_properties = properties if isinstance(properties, Mapping) else {}
+    device_class = str(safe_properties.get("device.class") or "").casefold()
+    media_class = str(safe_properties.get("media.class") or "").casefold()
+    if device_class == "monitor" or any(
+        marker in media_class for marker in ("sink", "monitor")
+    ):
+        category = "monitor"
+    else:
+        category = _category_from_metadata(name, value, safe_properties)
+    available = _active_port_available(value)
+    state = str(value.get("state") or "UNKNOWN").strip().upper()
+    return _PulseSource(name, state, card_index, category, available)
+
+
+def _category_from_metadata(
+    name: str,
+    source: Mapping[Any, Any],
+    properties: Mapping[Any, Any],
+) -> str:
+    vendor_id = _normalized_hex_identifier(
+        properties.get("device.vendor.id")
+        or properties.get("device.vendor_id")
+        or properties.get("usb.vendor_id")
+    )
+    product_id = _normalized_hex_identifier(
+        properties.get("device.product.id")
+        or properties.get("device.product_id")
+        or properties.get("usb.product_id")
+    )
+    if vendor_id is not None or product_id is not None:
+        if vendor_id == "2ca3" and product_id == "4011":
+            return "dji"
+    elif is_dji_source(name):
+        return "dji"
+
+    active_port_text = _active_port_text(source)
+    form_factor = str(properties.get("device.form_factor") or "").casefold()
+    bus = str(properties.get("device.bus") or "").casefold()
+    identity_text = " ".join(
+        (
+            name.casefold(),
+            active_port_text,
+            form_factor,
+            str(properties.get("device.description") or "").casefold(),
+            str(properties.get("device.product.name") or "").casefold(),
+        )
+    )
+    if name.casefold().startswith("bluez_input.") or any(
+        marker in identity_text
+        for marker in ("headset", "headphone", "handsfree", "hands-free", "earbud")
+    ):
+        return "headset"
+    if "external" in active_port_text:
+        return "external"
+    if (
+        "internal" in active_port_text
+        or form_factor == "internal"
+        or bus in {"pci", "platform"}
+        or name.casefold().startswith(
+            ("alsa_input.pci-", "alsa_input.platform-", "alsa_input.soc-")
+        )
+    ):
+        return "built-in"
+    return "external"
+
+
+def _category_from_name(name: str) -> str:
+    return _category_from_metadata(name, {}, {})
+
+
+def _source_category(source: _PulseSource) -> str:
+    return source.category or _category_from_name(source.name)
+
+
+def _normalized_hex_identifier(value: Any) -> str | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return f"{value:04x}"
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip().casefold()
+    if candidate.startswith("0x"):
+        candidate = candidate[2:]
+    if not candidate or any(
+        character not in "0123456789abcdef" for character in candidate
+    ):
+        return None
+    return candidate.lstrip("0") or "0"
+
+
+def _active_port_text(source: Mapping[Any, Any]) -> str:
+    active_port = source.get("active_port")
+    if isinstance(active_port, Mapping):
+        values = (
+            active_port.get("name"),
+            active_port.get("description"),
+            active_port.get("type"),
+        )
+    else:
+        values = (active_port,)
+    active_name = _safe_name(active_port) if isinstance(active_port, str) else None
+    matched = _find_port(source.get("ports"), active_name)
+    if matched is not None:
+        values = (
+            *values,
+            matched.get("name"),
+            matched.get("description"),
+            matched.get("type"),
+        )
+    return " ".join(str(value).casefold() for value in values if value is not None)
+
+
+def _active_port_available(source: Mapping[Any, Any]) -> bool | None:
+    active_port = source.get("active_port")
+    active_name = _safe_name(active_port) if isinstance(active_port, str) else None
+    port = active_port if isinstance(active_port, Mapping) else None
+    if port is None:
+        port = _find_port(source.get("ports"), active_name)
+    if not isinstance(port, Mapping):
+        return None
+    value = port.get("availability", port.get("available"))
+    if value is True:
+        return True
+    if value is False:
+        return False
+    normalized = str(value or "").strip().casefold().replace("_", "-").replace(" ", "-")
+    if normalized in {"yes", "available", "true"}:
+        return True
+    if normalized in {"no", "not-available", "unavailable", "false"}:
+        return False
+    return None
+
+
+def _find_port(value: Any, name: str | None) -> Mapping[Any, Any] | None:
+    if name is None:
+        return None
+    if isinstance(value, Mapping):
+        candidate = value.get(name)
+        return candidate if isinstance(candidate, Mapping) else None
+    if isinstance(value, list):
+        matches = [
+            item
+            for item in value
+            if isinstance(item, Mapping) and _safe_name(item.get("name")) == name
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    return None
 
 
 def _get_default_source(runner: Callable[[Sequence[str]], str]) -> str | None:
@@ -472,7 +683,14 @@ def _get_default_source(runner: Callable[[Sequence[str]], str]) -> str | None:
 
 
 def _usable_sources(sources: Sequence[_PulseSource]) -> tuple[_PulseSource, ...]:
-    return tuple(source for source in sources if not _is_monitor_source(source.name))
+    return tuple(
+        source
+        for source in sources
+        if not _is_monitor_source(source.name)
+        and _source_category(source) != "monitor"
+        and source.available is not False
+        and source.state != "UNAVAILABLE"
+    )
 
 
 def _is_monitor_source(name: str) -> bool:
@@ -527,11 +745,14 @@ def _list_card_sources(
     for item in document:
         if not isinstance(item, Mapping):
             continue
-        name = _safe_name(item.get("name"))
+        parsed_source = _pulse_source_from_json(item)
+        if parsed_source is None:
+            continue
+        name = parsed_source.name
         raw_card_index = item.get("card")
         source_card_index = _pulse_index(raw_card_index)
         properties = item.get("properties")
-        if name is None or not isinstance(properties, Mapping):
+        if not isinstance(properties, Mapping):
             continue
         device_class = str(properties.get("device.class") or "").casefold()
         source_card_name = _safe_name(properties.get("device.name"))
@@ -570,10 +791,12 @@ def _list_card_sources(
             or identity_conflicts
             or _is_monitor_source(name)
             or device_class == "monitor"
+            or _source_category(parsed_source) == "monitor"
+            or parsed_source.available is False
+            or parsed_source.state == "UNAVAILABLE"
         ):
             continue
-        state = str(item.get("state") or "UNKNOWN").strip().upper()
-        sources.append(_PulseSource(name, state, source_card_index))
+        sources.append(parsed_source)
     return tuple(sources)
 
 
@@ -595,12 +818,27 @@ def _choose_profile_recovery(cards: Any) -> _ProfileRecovery:
             if isinstance(properties, Mapping)
             else None
         )
+        device_bus = (
+            str(properties.get("device.bus") or "").casefold()
+            if isinstance(properties, Mapping)
+            else ""
+        )
+        form_factor = (
+            str(properties.get("device.form_factor") or "").casefold()
+            if isinstance(properties, Mapping)
+            else ""
+        )
         active_name = _active_profile_name(card.get("active_profile"))
         profiles = card.get("profiles")
         if (
             card_name is None
             or card_index is None
             or not card_name.startswith("alsa_card.")
+            or not (
+                card_name.startswith(("alsa_card.pci-", "alsa_card.platform-"))
+                or device_bus in {"pci", "platform"}
+                or form_factor == "internal"
+            )
             or active_name is None
             or not isinstance(profiles, Mapping)
         ):
