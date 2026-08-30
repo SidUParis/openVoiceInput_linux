@@ -1,19 +1,31 @@
-# Open Voice Input Linux
-
-**[简体中文](README.md) · [English](README.en.md)**
-
-**IBus-native voice typing for Linux: press a shortcut, speak, and see text
-appear at the caret—without clipboard paste or simulated keystrokes.**
-
-> This is the secondary English edition. The project currently serves Chinese
-> users first; see the [Chinese landing page](README.md) for the canonical
-> product overview.
+<div align="center">
+  <img src="packaging/icons/io.github.SidUParis.OpenVoiceInputLinux.Settings.svg"
+       width="96" height="96" alt="Open Voice Input Linux microphone icon">
+  <h1>Open Voice Input Linux</h1>
+  <p><strong>Native adaptive voice input for Linux: speak, and text appears at the caret.</strong></p>
+  <p>Built for Ubuntu, IBus and Chinese-first workflows—without clipboard paste,
+  <code>Ctrl+V</code>, or simulated per-character typing.</p>
+  <p><a href="README.md">简体中文</a> · <strong>English</strong></p>
+  <p>
+    <a href="https://github.com/SidUParis/openVoiceInput_linux/actions/workflows/ci.yml"><img src="https://github.com/SidUParis/openVoiceInput_linux/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+    <a href="https://github.com/SidUParis/openVoiceInput_linux/releases"><img src="https://img.shields.io/github/v/release/SidUParis/openVoiceInput_linux?include_prereleases" alt="Release"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue.svg" alt="GPL-3.0-only"></a>
+  </p>
+  <strong>Text at the caret</strong> · <strong>No clipboard paste</strong> ·
+  <strong>~404 KiB .deb</strong> · <strong>Collection off by default</strong>
+</div>
 
 ![Open Voice Input Linux: voice input appears directly at the active caret](docs/assets/hero-demo.gif)
 
 _This interaction concept animation uses synthetic text to illustrate the
 implemented caret-local flow. It is not a screen recording or ASR call; real
 dictation in this alpha uses the user's own Volcengine account._
+
+> [!IMPORTANT]
+> This is the secondary English edition of a public alpha for **Ubuntu 24.04
+> x86_64 + IBus**. The project currently serves Chinese users first; see the
+> [Chinese landing page](README.md) for the canonical product overview. Real
+> dictation uses the user's own Volcengine account and may incur provider fees.
 
 ## Install on Ubuntu
 
@@ -27,9 +39,9 @@ sudo apt install ./open-voice-input-linux_*_amd64.deb
 ```
 
 Open **Open Voice Input Linux** from the application menu, save your
-own Volcengine API key, review the microphone order, and enable the service.
-The current alpha does not install a system-wide shortcut automatically; bind
-your preferred key (Right Alt is recommended) to:
+own Volcengine API key, arrange microphone priority for your equipment and
+workflow, and enable the service. The current alpha does not install a
+system-wide shortcut automatically; bind any key you prefer to:
 
 ```bash
 murmur-voice-daemon toggle
@@ -68,6 +80,20 @@ local or already-mounted folder selected by the user. In this alpha the JSON
 contains an **unreviewed provider result**; user edits do not yet backfill the
 training record, and `spoken_verbatim` / `preferred_output` remain unset until
 a future review workflow.
+
+### A lightweight client, not a bundled model
+
+The official alpha.4 Debian package is **413,736 bytes (about 404 KiB)**, and
+its package metadata reports an **Installed-Size of 2,776 KiB (about 2.7
+MiB)**. It uses Ubuntu's existing Python, GTK, IBus and audio components. It
+does not bundle Electron or local ASR model weights, and it does not download a
+model on first launch.
+
+This is what “lightweight client” means here; it does not mean offline speech
+recognition. The current ASR path still uses the online provider configured by
+the user. On a fresh Ubuntu installation, APT may download additional system
+dependencies, so the total network download depends on what is already
+installed.
 
 ## Cloud, privacy and cost
 
@@ -113,9 +139,10 @@ See [known changes and limitations](CHANGELOG.md) and the
 - Password, PIN, private, fake and preedit-incompatible contexts are refused.
 - A self-contained voice daemon with a 10-minute recording limit, bounded
   pending audio and generation-safe late-callback rejection.
-- Fresh microphone selection before every utterance using a user-configurable
-  order of DJI, headset, other external and built-in inputs. Selection affects
-  this capture stream only and does not change the playback device.
+- Fresh microphone selection before every utterance using the user's saved
+  priority. If a preferred input is unavailable, the next usable candidate is
+  tried automatically. Selection affects this capture stream only and does
+  not change the playback device.
 - Explicit vocabulary, manual correction pairs and bounded adaptive correction
   memory, reloaded before the next dictation without restarting the service.
 - Optional background WAV/JSON publication to an existing local or mounted
@@ -140,7 +167,8 @@ dictation.
 
 ![Open Voice Input Linux settings window with no API key configured](docs/assets/settings-window.png)
 
-_Rendered from an empty temporary profile; no saved key or user data appears._
+_Rendered from the current `main` branch with an empty temporary profile; no
+saved key or user data appears._
 
 ### Start, stop or cancel
 
@@ -161,10 +189,10 @@ already happened.
 
 ### Optional personal-ASR records
 
-Enable **Keep WAV + unreviewed provider final in selected folder** only if you
-want to retain data. Select an existing absolute local path or an operating-
-system-mounted filesystem. The application itself does not log in to Orange,
-mount SSH storage or accept a Google Drive URL. See the
+Enable the explicitly labelled WAV + unreviewed `provider_final` collection
+checkbox only if you want to retain data. Select an existing absolute local path or an operating-
+system-mounted filesystem. The application itself does not log in to a remote
+host, mount SSH storage or accept a Google Drive URL. See the
 [remote dataset storage guide](docs/remote-dataset-storage.md) for SSHFS and
 asynchronous `rclone` backup boundaries.
 

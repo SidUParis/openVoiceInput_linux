@@ -5,6 +5,30 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+### Changed
+
+- The native GTK4 settings window now uses a Chinese-first, task-oriented
+  sidebar with an always-visible status area instead of one long technical
+  form. Provider credentials, vocabulary, corrections, microphone preferences,
+  optional data retention, and service controls keep their existing safety
+  boundaries.
+- Public landing pages now describe microphone routing as a user-defined
+  preference with per-utterance fallback, rather than presenting one
+  maintainer's device order as a product recommendation.
+- README visuals and copy now foreground the caret-native workflow and the
+  measured lightweight-client boundary. The alpha.4 `.deb` is about 404 KiB,
+  reports about 2.7 MiB installed size, and bundles neither Electron nor local
+  ASR model weights.
+- AppStream metadata now includes the sanitized Chinese settings screenshot
+  and the same native, lightweight-client boundary for graphical package
+  browsers.
+
+### Build and quality
+
+- Exact-commit Debian CI now rejects packages larger than 5 MiB or an
+  `Installed-Size` above 10 MiB, so future UI work cannot silently replace the
+  lightweight native client with a large runtime.
+
 ## [0.1.0-alpha.4] - 2026-08-30
 
 ### Added

@@ -1,16 +1,19 @@
-# Open Voice Input Linux
-
-**[简体中文](README.md) · [English](README.en.md)**
-
-**Linux 原生自适应语音输入：按下快捷键，说话，文字直接出现在当前光标。**
-
-面向 Ubuntu、IBus 和中文输入场景，不读取剪贴板，不发送 `Ctrl+V`，也不靠
-模拟逐字按键完成输入。当前 alpha 尤其适合经常混用英文术语、项目名、人名
-和服务器名的中文用户。
-
-[![CI](https://github.com/SidUParis/openVoiceInput_linux/actions/workflows/ci.yml/badge.svg)](https://github.com/SidUParis/openVoiceInput_linux/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/SidUParis/openVoiceInput_linux?include_prereleases)](https://github.com/SidUParis/openVoiceInput_linux/releases)
-[![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
+<div align="center">
+  <img src="packaging/icons/io.github.SidUParis.OpenVoiceInputLinux.Settings.svg"
+       width="96" height="96" alt="Open Voice Input Linux 麦克风图标">
+  <h1>Open Voice Input Linux</h1>
+  <p><strong>Linux 原生自适应语音输入：说话，文字直接出现在当前光标。</strong></p>
+  <p>面向 Ubuntu、IBus 和中文输入场景；不读取剪贴板，不发送 <code>Ctrl+V</code>，
+  也不靠模拟逐字按键完成输入。</p>
+  <p><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
+  <p>
+    <a href="https://github.com/SidUParis/openVoiceInput_linux/actions/workflows/ci.yml"><img src="https://github.com/SidUParis/openVoiceInput_linux/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+    <a href="https://github.com/SidUParis/openVoiceInput_linux/releases"><img src="https://img.shields.io/github/v/release/SidUParis/openVoiceInput_linux?include_prereleases" alt="Release"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue.svg" alt="GPL-3.0-only"></a>
+  </p>
+  <strong>光标内出字</strong> · <strong>不碰剪贴板</strong> ·
+  <strong>.deb 约 404 KiB</strong> · <strong>数据采集默认关闭</strong>
+</div>
 
 ![按下快捷键后，语音文字直接显示在当前光标](docs/assets/hero-demo.gif)
 
@@ -39,14 +42,14 @@ open-voice-input-settings
 
 ![未配置 API Key 的 Open Voice Input Linux 设置窗口](docs/assets/settings-window.png)
 
-_截图来自空临时配置，不包含已经保存的 Key 或用户数据。_
+_截图由当前 `main` 分支使用空临时配置渲染，不包含已经保存的 Key 或用户数据。_
 
 接下来只需：
 
 1. 填入自己的火山引擎 API Key；
-2. 检查麦克风优先级；
-3. 点击 **Enable and start service**；
-4. 在 GNOME/KDE 键盘快捷键设置中，把右 `Alt` 或其他按键绑定到：
+2. 按自己的设备和使用场景设置麦克风优先级；
+3. 点击 **启用并启动**；
+4. 在 GNOME/KDE 键盘快捷键设置中，选择一个方便且不冲突的组合键并绑定到：
 
 ```bash
 murmur-voice-daemon toggle
@@ -61,8 +64,9 @@ murmur-voice-daemon toggle
 | 光标内实时出字 | 使用 IBus preedit 在当前输入框显示 partial，authoritative final 原位提交且只提交一次 |
 | 不依赖粘贴 | 正常路径不读取剪贴板，不发送 `Ctrl+V`，不模拟逐字键盘输入 |
 | 记住个人术语 | 在同一输入框内最多观察 5 秒，只从一次严格替换中提取有界的“错误 → 正确”规则 |
-| 动态麦克风 | 每次听写按用户顺序重新选择 DJI、耳麦、其他外置或电脑内置麦克风；掉线后下一次自动回退 |
+| 动态麦克风 | 每次听写按用户保存的顺序重新选择当前可用输入；首选设备不可用时，下一次自动回退 |
 | 数据归用户 | 可选保存 WAV 与版本化 JSON 到用户选择的本地或已挂载目录，采集默认关闭 |
+| 轻量安装 | 当前 `.deb` 约 404 KiB，包自身安装占用约 2.7 MiB，不捆绑本地 ASR 模型 |
 
 ### 1. 文字真正进入当前输入框
 
@@ -73,8 +77,8 @@ murmur-voice-daemon toggle
 
 最终文本提交后，输入法可以在同一输入框中保留最长 5 秒的有界观察窗口。
 如果用户只替换了原提交区间内的一处文字，这个严格的纠错对可以用于后续
-听写。例如把 `奔驰 mark` 修成 `bench mark` 时，词表可以帮助规范为更具体的
-`奔驰 mark → benchmark`，而不是学习过宽的 `奔驰 → bench`。
+听写。例如把 `bench mark` 修成 `benchmark` 时，只会形成这一个具体短语的
+候选规则，不会把无关的单词或整句一起记住。
 
 它不会监听全局键盘、AT-SPI、剪贴板、Rime 历史或其他应用内容。失焦、
 超时、多处修改、整句润色以及不支持可信 IBus surrounding text 的应用都
@@ -92,10 +96,21 @@ murmur-voice-daemon toggle
 `preferred_output` 也仍待未来的审核流程填写。因此这些是有价值的候选数据，
 不是已经确认的 gold label。
 
-目录可以位于本地磁盘，也可以是操作系统已经挂载的 SSHFS/Orange 等 POSIX
+目录可以位于本地磁盘，也可以是操作系统已经挂载的 SSHFS 等 POSIX
 文件系统。程序本身不会登录远端，也不直接接受 Google Drive URL。Google
 Drive 更适合在一条记录完整发布后使用 `rclone copy` 异步备份。详见
 [远程数据集存储指南](docs/remote-dataset-storage.md)。
+
+### 4. 小安装包，不把模型塞进电脑
+
+当前 alpha.4 的正式 Debian 包是 **413,736 字节（约 404 KiB）**，包元数据中
+的 `Installed-Size` 是 **2,776 KiB（约 2.7 MiB）**。它复用 Ubuntu 已有的
+Python、GTK、IBus 与音频组件，不随包附带几百兆的模型权重，也不会在首次
+启动时偷偷下载模型。
+
+这是“轻量客户端”的含义，并不等于完全离线：当前识别仍由用户选择并配置的
+在线 ASR 服务完成。若一台全新 Ubuntu 机器尚未安装所需系统组件，APT 可能
+额外下载依赖；具体总下载量取决于机器现状。
 
 ## 在线服务、隐私与费用
 
@@ -129,7 +144,21 @@ Drive 更适合在一条记录完整发布后使用 `rclone copy` 异步备份�
 [CHANGELOG](CHANGELOG.md)、[ROADMAP](ROADMAP.md)和
 [真实兼容性验证矩阵](docs/compatibility-matrix.md)。
 
-## 使用与控制
+## 日常使用
+
+日常使用只需要一个由用户自己选择的快捷键：第一次触发开始听写，第二次
+触发停止并等待 final。设置页负责 Key、个人词表、纠错、设备偏好与可选数据
+采集；保存设置不会打断正在进行的听写，新配置从下一次听写开始生效。
+
+麦克风顺序完全由用户设置。每次新听写都会重新检查当前可用输入，并按照该
+顺序选择；首选设备掉线时自动尝试后续候选，重新连接后也无需重启服务。选择
+只作用于本应用新开的录音流，不主动修改播放设备、系统默认输入、音量或
+静音；一次已经开始的听写不会在中途换麦。
+
+<details>
+<summary>命令行控制（可选）</summary>
+
+<br>
 
 ```bash
 murmur-voice-daemon start    # 开始
@@ -138,21 +167,13 @@ murmur-voice-daemon cancel   # 取消本地提交
 murmur-voice-daemon status   # 查看状态
 ```
 
-保存 Key、词表、纠错、麦克风顺序或采集选择不会打断正在进行的听写；新配置
-会在下一次听写前加载。设置页不会把已保存 Key 的明文重新填回窗口。
-
-每次新听写都会重新枚举输入设备。推荐默认顺序为：
-
-> 大疆 > 耳麦 > 其他外接 > 电脑内置
-
-用户可以在设置页自由重排。选择只作用于本应用新开的录音流，不主动修改
-播放设备、系统默认输入、音量或静音；一次已经开始的听写不会在中途换麦。
+</details>
 
 ## 架构与安全边界
 
 ```mermaid
 flowchart LR
-    M["用户优先级选择的麦克风"] --> V["Voice daemon"]
+    M["按用户偏好选出的可用麦克风"] --> V["Voice daemon"]
     S["设置与私有配置"] --> V
     V -->|"partial / final · D-Bus"| E["临时 IBus 语音引擎"]
     E -->|"preedit / commit"| F["当前输入框"]

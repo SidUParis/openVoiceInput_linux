@@ -115,9 +115,10 @@ The native settings window stores the user's complete four-class ordering in
 `~/.config/murmur-ime/microphone-priority.json`). The file uses the same
 private ownership, regular-file, `0700` directory, and `0600` file checks as
 the key and recognition settings. A missing file selects the documented
-recommended order without writing anything; an existing invalid file fails
-the next dictation with `microphone-policy-invalid` until the user explicitly
-repairs it in settings.
+deterministic compatibility initialization without writing anything; this is
+not a recommendation for the user's own equipment. An existing invalid file
+fails the next dictation with `microphone-policy-invalid` until the user
+explicitly repairs it in settings.
 
 The ordering is reloaded before every new dictation and never changes an
 already open stream. See the microphone-routing section below for category,
@@ -240,14 +241,15 @@ restart is required after a device change.
 
 The private `microphone-priority.json` file stores one complete order for DJI,
 headset, other external, and built-in microphone categories. A missing file
-uses the recommended `DJI > headset > other external > built-in` default; an
-existing invalid or unsafe file rejects the next start before preedit, provider,
-USB, profile, or microphone activity. The native settings window can repair it
-by explicitly saving a complete allowlisted order. Each new dictation reloads
-the file and re-enumerates sources. Within one category, an exact saved source
-wins, then the live system default, then a unique candidate; unresolved
-same-category ambiguity falls through to the next category rather than being
-guessed.
+uses the deterministic compatibility initialization
+`DJI > headset > other external > built-in`; this is not a product
+recommendation. An existing invalid or unsafe file rejects the next start
+before preedit, provider, USB, profile, or microphone activity. The native
+settings window can repair it by explicitly saving a complete allowlisted
+order. Each new dictation reloads the file and re-enumerates sources. Within
+one category, an exact saved source wins, then the live system default, then a
+unique candidate; unresolved same-category ambiguity falls through to the
+next category rather than being guessed.
 
 When exactly one DJI Mic Mini 2 source is present, preflight performs a bounded
 read-only transmitter-link probe. Proven online makes DJI eligible at its saved

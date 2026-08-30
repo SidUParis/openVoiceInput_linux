@@ -160,6 +160,22 @@ class DebianWheelTests(unittest.TestCase):
 
 
 class DebianMetadataTests(unittest.TestCase):
+    def test_appstream_metadata_presents_the_native_lightweight_ui(self) -> None:
+        metadata = (
+            DEBIAN / "io.github.SidUParis.OpenVoiceInputLinux.metainfo.xml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("native GTK4 client is intentionally small", metadata)
+        self.assertIn("原生 GTK4 客户端保持轻量", metadata)
+        self.assertIn("docs/assets/settings-window.png", metadata)
+        self.assertIn("中文优先的原生 GTK4 设置界面", metadata)
+
+    def test_builder_enforces_lightweight_package_budgets(self) -> None:
+        builder = (REPOSITORY / "scripts/build-deb.sh").read_text(encoding="utf-8")
+        self.assertIn("installed_size > 10 * 1024", builder)
+        self.assertIn("package_bytes > 5 * 1024 * 1024", builder)
+        self.assertIn("10 MiB lightweight-client budget", builder)
+        self.assertIn("5 MiB lightweight-client budget", builder)
+
     def test_control_renderer_allows_maintainer_email_but_no_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "control"

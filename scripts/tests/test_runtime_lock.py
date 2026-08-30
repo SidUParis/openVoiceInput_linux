@@ -109,6 +109,9 @@ class PreviewRuntimeLockTests(unittest.TestCase):
         self.assertIn("filecmp.cmp(", workflow)
         self.assertIn("repeated preview build is not byte-identical", workflow)
         self.assertIn('cmp -- "${primary_debs[0]}" "${repeated_debs[0]}"', workflow)
+        self.assertIn("package_bytes > 5 * 1024 * 1024", workflow)
+        self.assertIn("installed_kib > 10 * 1024", workflow)
+        self.assertIn("lightweight package:", workflow)
         self.assertIn("unexpected preview assets", workflow)
         self.assertIn("git diff --exit-code", workflow)
 

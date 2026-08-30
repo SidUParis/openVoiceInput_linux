@@ -227,43 +227,53 @@ def waveform(draw: ImageDraw.ImageDraw, x: int, y: int, phase: float) -> None:
 
 def editor_chrome(image: Image.Image) -> tuple[ImageDraw.ImageDraw, int, int]:
     draw = ImageDraw.Draw(image)
-    window = (55, 41, 905, 500)
+    window = (50, 34, 910, 505)
     rounded_shadow(image, window, radius=20, blur=22, offset_y=12, opacity=64)
     draw = ImageDraw.Draw(image)
     draw.rounded_rectangle(window, radius=20, fill=PANEL, outline="#FFFFFF", width=1)
-    draw.rounded_rectangle((55, 41, 905, 89), radius=20, fill="#292332")
-    draw.rectangle((55, 68, 905, 89), fill="#292332")
+    # GNOME-style neutral header bar: one menu button, a centred title, and a
+    # quiet close control. It intentionally avoids macOS traffic-light dots.
+    draw.rounded_rectangle((50, 34, 910, 94), radius=20, fill="#F7F5F8")
+    draw.rectangle((50, 70, 910, 94), fill="#F7F5F8")
+    draw.line((50, 94, 910, 94), fill="#DED9E2", width=1)
+    draw.rounded_rectangle((69, 50, 105, 79), radius=8, fill="#E9E5EB")
+    for y in (59, 64, 69):
+        draw.line((80, y, 94, y), fill="#645E69", width=2)
+    title_font = font(14, bold=True)
+    title = "文本编辑器"
+    title_x = 480 - text_width(draw, title, title_font) // 2
+    draw.text((title_x, 54), title, font=title_font, fill=INK)
+    draw.rounded_rectangle((868, 50, 894, 78), radius=8, fill="#E9E5EB")
+    draw.line((877, 59, 885, 69), fill="#645E69", width=2)
+    draw.line((885, 59, 877, 69), fill="#645E69", width=2)
 
-    for x, colour in ((79, "#FF6258"), (99, "#FFC04A"), (119, "#35C759")):
-        draw.ellipse((x - 6, 59, x + 6, 71), fill=colour)
-    draw.text(
-        (145, 56), "今天.md — 文本编辑器", font=font(14, bold=True), fill="#EEEAF1"
-    )
+    draw.rectangle((50, 95, 228, 505), fill="#F3F1F5")
+    draw.text((72, 117), "我的笔记", font=font(12, bold=True), fill="#817989")
+    draw.rounded_rectangle((64, 145, 214, 183), radius=9, fill="#E5DFE8")
+    draw.ellipse((80, 159, 90, 169), fill=ORANGE)
+    draw.text((101, 152), "今天", font=font(14, bold=True), fill=PLUM)
+    draw.ellipse((80, 205, 90, 215), outline="#AAA3AE", width=1)
+    draw.text((101, 198), "术语表", font=font(14), fill="#787180")
+    draw.ellipse((80, 245, 90, 255), outline="#AAA3AE", width=1)
+    draw.text((101, 238), "项目计划", font=font(14), fill="#787180")
 
-    draw.rectangle((55, 89, 222, 500), fill="#F2EFF4")
-    draw.text((75, 113), "文件", font=font(12, bold=True), fill="#817989")
-    draw.rounded_rectangle((67, 142, 210, 178), radius=8, fill="#E5DFE8")
-    draw.text((84, 150), "●  今天.md", font=font(14, bold=True), fill=PLUM)
-    draw.text((84, 193), "○  术语表.md", font=font(14), fill="#787180")
-    draw.text((84, 229), "○  项目计划.md", font=font(14), fill="#787180")
-
-    draw.line((222, 89, 222, 500), fill=BORDER, width=1)
-    draw.text((260, 117), "今天的笔记", font=font(29, bold=True), fill=INK)
-    draw.text((261, 166), "Linux 原生语音输入", font=font(17), fill=MUTED)
-    draw.line((260, 202, 860, 202), fill="#ECE8EF", width=1)
+    draw.line((228, 95, 228, 505), fill=BORDER, width=1)
+    draw.text((264, 120), "今天的笔记", font=font(29, bold=True), fill=INK)
+    draw.text((265, 169), "Linux 原生轻量语音输入", font=font(17), fill=MUTED)
+    draw.line((264, 205, 864, 205), fill="#ECE8EF", width=1)
 
     # A small persistent explanation makes the synthetic nature unambiguous.
     pill(
         draw,
-        (711, 52),
-        "交互概念演示",
-        background="#493A51",
-        foreground="#F7F3F8",
+        (714, 51),
+        "合成交互演示",
+        background="#EDE8F0",
+        foreground=PLUM,
         text_font=font(11, bold=True),
         pad_x=11,
-        height=25,
+        height=27,
     )
-    return draw, 260, 247
+    return draw, 264, 250
 
 
 def phase_progress(frame: int, start: int, end: int) -> float:
@@ -271,31 +281,36 @@ def phase_progress(frame: int, start: int, end: int) -> float:
 
 
 def draw_key_hint(draw: ImageDraw.ImageDraw, frame: int) -> None:
-    starting = 15 <= frame < 29 or 113 <= frame < 124
-    finishing = 53 <= frame < 61 or 141 <= frame < 146
-    pressed = starting or finishing
-    box = (713, 438, 860, 478)
+    listening = 15 <= frame < 61 or 113 <= frame < 146
+    pressed = listening
+    box = (682, 431, 862, 482)
     fill = ORANGE if pressed else "#F6F3F7"
     outline = ORANGE if pressed else "#D9D2DD"
     foreground = "white" if pressed else PLUM
-    draw.rounded_rectangle(box, radius=10, fill=fill, outline=outline, width=2)
-    draw.text(
-        (729, 447), "Right Alt", font=font(14, bold=True, mono=True), fill=foreground
-    )
-    if starting:
-        action = "开始"
-    elif finishing:
-        action = "完成"
+    draw.rounded_rectangle(box, radius=12, fill=fill, outline=outline, width=2)
+    # A generic keycap icon communicates configurability without naming the
+    # maintainer's personal shortcut.
+    icon_fill = "#FF8B62" if pressed else "#E7E1E9"
+    draw.rounded_rectangle((698, 443, 724, 468), radius=6, fill=icon_fill)
+    for y in (449, 455):
+        for x in (703, 710, 717):
+            draw.rounded_rectangle((x, y, x + 4, y + 3), radius=1, fill=foreground)
+    draw.rounded_rectangle((704, 461, 720, 464), radius=1, fill=foreground)
+    draw.text((735, 439), "自定义快捷键", font=font(12, bold=True), fill=foreground)
+    if listening:
+        action = "再按一次完成"
+    elif 61 <= frame < 113:
+        action = "修改后自动学习"
     else:
-        action = "按一下切换"
-    draw.text((808, 447), action, font=font(11), fill=foreground)
+        action = "按一次开始"
+    draw.text((735, 458), action, font=font(10), fill=foreground)
 
 
 def draw_listening_hud(
     draw: ImageDraw.ImageDraw,
     frame: int,
     label: str,
-    action: str = "再按一下完成",
+    action: str = "再按一次完成",
 ) -> None:
     rounded = (535, 372, 860, 422)
     draw.rounded_rectangle(rounded, radius=15, fill="#282331")
@@ -311,23 +326,28 @@ def draw_preedit(
     *,
     y: int,
     status: str,
-    highlight_alt: bool = False,
+    highlight_term: str | None = None,
     caret_on: bool = True,
 ) -> None:
-    x = 260
+    x = 264
     body_font = font(24)
-    if highlight_alt and "ALT" in text:
-        prefix, suffix = text.split("ALT", 1)
+    if highlight_term and highlight_term in text:
+        prefix, suffix = text.split(highlight_term, 1)
         draw.text((x, y), prefix, font=body_font, fill=INK)
         prefix_width = text_width(draw, prefix, body_font)
-        alt_width = text_width(draw, "ALT", body_font)
+        term_width = text_width(draw, highlight_term, body_font)
         draw.rounded_rectangle(
-            (x + prefix_width - 3, y - 1, x + prefix_width + alt_width + 3, y + 31),
+            (
+                x + prefix_width - 3,
+                y - 1,
+                x + prefix_width + term_width + 3,
+                y + 31,
+            ),
             radius=5,
             fill=BLUE_LIGHT,
         )
-        draw.text((x + prefix_width, y), "ALT", font=body_font, fill=BLUE)
-        draw.text((x + prefix_width + alt_width, y), suffix, font=body_font, fill=INK)
+        draw.text((x + prefix_width, y), highlight_term, font=body_font, fill=BLUE)
+        draw.text((x + prefix_width + term_width, y), suffix, font=body_font, fill=INK)
     else:
         draw.text((x, y), text, font=body_font, fill=INK)
     width = text_width(draw, text, body_font)
@@ -335,7 +355,7 @@ def draw_preedit(
     cursor(draw, x + width + 3, y + 2, 29, visible=caret_on)
     pill(
         draw,
-        (260, y + 47),
+        (264, y + 47),
         status,
         background=BLUE_LIGHT,
         foreground=BLUE,
@@ -353,7 +373,7 @@ def draw_committed_line(
     highlight_term: str | None = None,
     caret_on: bool = False,
 ) -> None:
-    x, y = 260, 247
+    x, y = 264, 250
     body_font = font(24)
     term = select_term or highlight_term
     if term and term in text:
@@ -395,13 +415,11 @@ def draw_committed_line(
         cursor(draw, x + text_width(draw, text, body_font) + 3, y + 2, 29)
 
 
-def draw_final_badge(
-    draw: ImageDraw.ImageDraw, label: str = "Final 已提交一次"
-) -> None:
-    box = (260, 299, 415, 328)
+def draw_final_badge(draw: ImageDraw.ImageDraw, label: str = "文字已提交一次") -> None:
+    box = (264, 302, 420, 332)
     draw.rounded_rectangle(box, radius=14, fill=GREEN_LIGHT)
-    check_icon(draw, (278, 313), GREEN)
-    draw.text((294, 305), label, font=font(11, bold=True), fill=GREEN)
+    check_icon(draw, (282, 317), GREEN)
+    draw.text((298, 309), label, font=font(11, bold=True), fill=GREEN)
 
 
 def draw_correction_card(image: Image.Image, amount: float) -> None:
@@ -444,21 +462,21 @@ def draw_correction_card(image: Image.Image, amount: float) -> None:
     )
     card.text(
         (566, 303 + y_offset),
-        "严格替换已学习",
+        "术语纠正已学习",
         font=font(13, bold=True),
         fill=(*hex_rgb(INK), alpha),
     )
     card.text(
         (566, 326 + y_offset),
-        "NLP  →  ALT   ·   用于下一次请求",
-        font=font(12),
+        "bench mark  →  benchmark   ·   下次生效",
+        font=font(11),
         fill=(*hex_rgb(MUTED), alpha),
     )
     image.alpha_composite(overlay)
 
 
 def draw_stepper(draw: ImageDraw.ImageDraw, frame: int) -> None:
-    labels = ("按键", "preedit", "Final", "修改", "下次命中")
+    labels = ("快捷键", "实时文字", "提交", "人工修改", "下次命中")
     if frame < 29:
         active = 0
     elif frame < 61:
@@ -469,8 +487,8 @@ def draw_stepper(draw: ImageDraw.ImageDraw, frame: int) -> None:
         active = 3
     else:
         active = 4
-    start_x = 260
-    y = 465
+    start_x = 264
+    y = 468
     for index, label in enumerate(labels):
         x = start_x + index * 83
         if index < active:
@@ -492,26 +510,24 @@ def render_frame(frame: int) -> Image.Image:
     draw_gradient(image, "#341B40", "#1B1023", horizontal_shift="#51253A")
     draw, _, _ = editor_chrome(image)
 
-    first_final = "按下 NLP 开始语音输入。"
-    corrected = "按下 ALT 开始语音输入。"
-    second_final = "再次按下 ALT，文字直接出现在当前光标。"
+    first_final = "今天整理 bench mark 的实验结果。"
+    corrected = "今天整理 benchmark 的实验结果。"
+    second_final = "新的 benchmark 结果已写入当前光标。"
 
     if frame < 15:
-        draw.text((260, 247), "▏", font=font(24), fill=BLUE)
-        draw.text(
-            (260, 291), "准备好后，按一下 Right Alt 开始", font=font(14), fill=MUTED
-        )
+        draw.text((264, 250), "▏", font=font(24), fill=BLUE)
+        draw.text((264, 294), "准备好后，按你的快捷键开始", font=font(14), fill=MUTED)
     elif frame < 29:
-        draw.text((260, 247), "▏", font=font(24), fill=BLUE)
-        draw.text((260, 291), "已连接当前输入框", font=font(14, bold=True), fill=ORANGE)
+        draw.text((264, 250), "▏", font=font(24), fill=BLUE)
+        draw.text((264, 294), "已连接当前输入框", font=font(14, bold=True), fill=ORANGE)
         draw_listening_hud(draw, frame, "正在建立语音会话")
     elif frame < 61:
         partials = (
-            "按",
-            "按下",
-            "按下 NLP",
-            "按下 NLP 开始",
-            "按下 NLP 开始语音",
+            "今天",
+            "今天整理",
+            "今天整理 bench mark",
+            "今天整理 bench mark 的实验",
+            "今天整理 bench mark 的实验结果",
             first_final,
         )
         progress = (frame - 29) / 32
@@ -519,22 +535,22 @@ def render_frame(frame: int) -> Image.Image:
         draw_preedit(
             draw,
             partials[index],
-            y=247,
-            status="IBus 原生 preedit · 当前光标",
+            y=250,
+            status="IBus 实时预编辑 · 当前光标",
             caret_on=(frame // 5) % 2 == 0,
         )
         if frame >= 53:
-            draw_listening_hud(draw, frame, "完成听写", "等待 Final")
+            draw_listening_hud(draw, frame, "完成听写", "等待最终文字")
         else:
             draw_listening_hud(draw, frame, "正在听写 · 中文")
     elif frame < 76:
         draw_committed_line(draw, first_final, caret_on=(frame // 5) % 2 == 0)
         draw_final_badge(draw)
     elif frame < 88:
-        draw_committed_line(draw, first_final, select_term="NLP")
+        draw_committed_line(draw, first_final, select_term="bench mark")
         pill(
             draw,
-            (260, 299),
+            (264, 302),
             "5 秒修改窗口 · 同一输入框",
             background=ORANGE_LIGHT,
             foreground=ORANGE,
@@ -543,13 +559,17 @@ def render_frame(frame: int) -> Image.Image:
             height=27,
         )
     elif frame < 98:
-        edit_states = ("按下 A 开始语音输入。", "按下 AL 开始语音输入。", corrected)
+        edit_states = (
+            "今天整理 benchm 的实验结果。",
+            "今天整理 benchmar 的实验结果。",
+            corrected,
+        )
         index = min(2, int((frame - 88) / 4))
         draw_committed_line(draw, edit_states[index], caret_on=True)
         pill(
             draw,
-            (260, 299),
-            "只修改一个严格替换：NLP → ALT",
+            (264, 302),
+            "只学习这次严格替换：bench mark → benchmark",
             background=ORANGE_LIGHT,
             foreground=ORANGE,
             text_font=font(11, bold=True),
@@ -558,19 +578,22 @@ def render_frame(frame: int) -> Image.Image:
         )
     elif frame < 113:
         draw_committed_line(
-            draw, corrected, highlight_term="ALT", caret_on=(frame // 5) % 2 == 0
+            draw,
+            corrected,
+            highlight_term="benchmark",
+            caret_on=(frame // 5) % 2 == 0,
         )
         draw_correction_card(image, phase_progress(frame, 98, 106))
     elif frame < 124:
-        draw_committed_line(draw, corrected, highlight_term="ALT")
+        draw_committed_line(draw, corrected, highlight_term="benchmark")
         draw_correction_card(image, 1.0)
         draw_listening_hud(draw, frame, "下一次听写")
     elif frame < 146:
         partials = (
-            "再次",
-            "再次按下 ALT",
-            "再次按下 ALT，文字",
-            "再次按下 ALT，文字直接出现",
+            "新的",
+            "新的 benchmark",
+            "新的 benchmark 结果",
+            "新的 benchmark 结果已写入",
             second_final,
         )
         progress = (frame - 124) / 22
@@ -578,21 +601,21 @@ def render_frame(frame: int) -> Image.Image:
         draw_preedit(
             draw,
             partials[index],
-            y=247,
-            status="纠错提示命中 · ALT",
-            highlight_alt=True,
+            y=250,
+            status="个人术语命中 · benchmark",
+            highlight_term="benchmark",
             caret_on=(frame // 5) % 2 == 0,
         )
         if frame >= 141:
-            draw_listening_hud(draw, frame, "完成听写", "等待 Final")
+            draw_listening_hud(draw, frame, "完成听写", "等待最终文字")
         else:
             draw_listening_hud(draw, frame, "正在听写 · 中文")
     else:
-        draw_committed_line(draw, second_final, highlight_term="ALT")
-        draw_final_badge(draw, "Final 已提交")
+        draw_committed_line(draw, second_final, highlight_term="benchmark")
+        draw_final_badge(draw, "文字已提交")
         pill(
             draw,
-            (641, 299),
+            (635, 302),
             "不读剪贴板 · 不模拟粘贴",
             background=GREEN_LIGHT,
             foreground=GREEN,
@@ -605,8 +628,8 @@ def render_frame(frame: int) -> Image.Image:
     draw_stepper(draw, frame)
     # A quiet playhead makes each encoded GIF frame unique, keeps timing exact,
     # and gives the viewer a visual cue for the loop boundary.
-    playhead_x = 55 + round(850 * (frame + 1) / FRAME_COUNT)
-    draw.line((55, 498, playhead_x, 498), fill=ORANGE, width=2)
+    playhead_x = 50 + round(860 * (frame + 1) / FRAME_COUNT)
+    draw.line((50, 503, playhead_x, 503), fill=ORANGE, width=2)
     return image.convert("RGB")
 
 
@@ -663,21 +686,21 @@ def draw_social_preview() -> Image.Image:
             fill=ORANGE if 4 <= index <= 8 else "#87576E",
         )
 
-    draw.text((72, 143), "Open Voice Input", font=font(65, bold=True), fill="#FFFFFF")
+    draw.text((72, 137), "Open Voice Input", font=font(63, bold=True), fill="#FFFFFF")
     draw.text(
-        (75, 224), "Linux 原生自适应语音输入", font=font(34, bold=True), fill="#FFD9CA"
+        (75, 215), "轻量的 Linux 原生语音输入", font=font(34, bold=True), fill="#FFD9CA"
     )
     draw.text(
-        (76, 280),
-        "文字实时出现在当前光标 · 不用剪贴板 · 从修改中学习",
+        (76, 273),
+        "在当前光标直接出字 · 不碰剪贴板 · 会记住你的纠正",
         font=font(22),
         fill="#D7CBDD",
     )
 
     features = (
-        ("IBus 原生 preedit", BLUE, "#EAF0FF"),
-        ("个人术语纠错", ORANGE, ORANGE_LIGHT),
-        ("训练数据归用户", GREEN, GREEN_LIGHT),
+        ("IBus 原生输入", BLUE, "#EAF0FF"),
+        ("个人术语学习", ORANGE, ORANGE_LIGHT),
+        ("数据由你掌控", GREEN, GREEN_LIGHT),
     )
     x = 76
     for value, accent, background in features:
@@ -694,8 +717,8 @@ def draw_social_preview() -> Image.Image:
         x = box[2] + 14
 
     draw.text(
-        (76, 451),
-        "Tap Right Alt. Speak. Tap again. Dictate better next time.",
+        (76, 446),
+        "自定义快捷键，说话，再按一次完成。下一次，术语更懂你。",
         font=font(18),
         fill="#FFFFFF",
     )
@@ -712,39 +735,46 @@ def draw_social_preview() -> Image.Image:
     )
     draw = ImageDraw.Draw(image)
     draw.rounded_rectangle((792, 94, 1127, 505), radius=24, fill="#FFFFFF")
-    draw.rounded_rectangle((792, 94, 1127, 146), radius=24, fill="#292332")
-    draw.rectangle((792, 121, 1127, 146), fill="#292332")
-    for x_dot, colour in ((819, "#FF6258"), (840, "#FFC04A"), (861, "#35C759")):
-        draw.ellipse((x_dot - 6, 115, x_dot + 6, 127), fill=colour)
-    draw.text((819, 181), "当前光标", font=font(15, bold=True), fill=MUTED)
-    draw.text((819, 226), "再次按下", font=font(24), fill=INK)
-    alt_x = 819 + text_width(draw, "再次按下", font(24))
-    draw.rounded_rectangle((alt_x - 2, 225, alt_x + 56, 261), radius=7, fill=BLUE_LIGHT)
-    draw.text((alt_x + 3, 226), "ALT", font=font(24, bold=True), fill=BLUE)
-    draw.text((819, 271), "文字直接出现。", font=font(24), fill=INK)
-    draw.line((819, 309, 1038, 309), fill=BLUE, width=4)
-    cursor(draw, 1048, 272, 34)
+    draw.rounded_rectangle((792, 94, 1127, 150), radius=24, fill="#F4F2F6")
+    draw.rectangle((792, 124, 1127, 150), fill="#F4F2F6")
+    draw.ellipse((817, 111, 839, 133), fill=ORANGE_LIGHT)
+    microphone_icon(draw, (828, 122), ORANGE)
+    draw.text((852, 111), "实时输入", font=font(14, bold=True), fill=INK)
+    draw.rounded_rectangle((1075, 108, 1107, 136), radius=8, fill="#E7E3EA")
+    for y in (116, 121, 126):
+        draw.ellipse((1090, y, 1093, y + 3), fill="#746D79")
+    draw.text((819, 180), "当前光标", font=font(15, bold=True), fill=MUTED)
+    draw.text((819, 221), "新的", font=font(24), fill=INK)
+    term_font = font(22, bold=True)
+    term_width = text_width(draw, "benchmark", term_font)
+    draw.rounded_rectangle(
+        (819, 260, 819 + term_width + 12, 296), radius=7, fill=BLUE_LIGHT
+    )
+    draw.text((825, 263), "benchmark", font=term_font, fill=BLUE)
+    draw.text((819, 306), "结果写在光标处。", font=font(22), fill=INK)
+    draw.line((819, 345, 1056, 345), fill=BLUE, width=4)
+    cursor(draw, 1066, 309, 34)
     pill(
         draw,
-        (819, 339),
-        "IBus 原生 preedit",
+        (819, 366),
+        "IBus 实时预编辑",
         background=BLUE_LIGHT,
         foreground=BLUE,
-        text_font=font(14, bold=True),
+        text_font=font(13, bold=True),
         pad_x=14,
-        height=34,
+        height=32,
     )
     pill(
         draw,
-        (819, 397),
-        "NLP  →  ALT",
+        (819, 414),
+        "bench mark  →  benchmark",
         background=ORANGE_LIGHT,
         foreground=ORANGE,
-        text_font=font(15, bold=True, mono=True),
-        pad_x=15,
-        height=39,
+        text_font=font(11, bold=True),
+        pad_x=12,
+        height=34,
     )
-    draw.text((819, 457), "严格替换 · 下一次生效", font=font(13), fill=MUTED)
+    draw.text((819, 465), "人工修正 · 下一次生效", font=font(13), fill=MUTED)
     return image.convert("RGB")
 
 

@@ -163,9 +163,9 @@ uninstall.
 
 The stored key is never prefilled or revealed. Saving clears the password
 field, does not contact Volcengine, and does not restart an active recording.
-Use the explicit **Enable and start service** button after configuration.
-To remove the local key, first use **Disable and stop**, then use the two-step
-**Clear saved key** action. This deletes only the validated private local file;
+Use the explicit **启用并启动** (enable and start) button after configuration.
+To remove the local key, first use **停用并停止（取消当前听写）**, then use the
+two-step **清除已保存的 Key…** action. This deletes only the validated private local file;
 it does not revoke the key in the provider console.
 
 The masked terminal flow remains available, using the exact command printed
@@ -206,8 +206,8 @@ available.
 ### Optional filesystem training-data collection
 
 Collection is off by default. In the settings window, select an existing
-absolute local or mounted folder, enable **Keep WAV + unreviewed provider final
-in selected folder**, and choose **Save collection setting**. Saving initializes or
+absolute local or mounted folder, enable the WAV + unreviewed `provider_final`
+checkbox, and choose **保存数据留存设置**. Saving initializes or
 reopens `openvoiceinput-dataset-v1` below the selected folder. It does not
 contact Volcengine, start capture, or restart the service; the next dictation
 reads the choice.
