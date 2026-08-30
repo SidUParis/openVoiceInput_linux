@@ -88,6 +88,8 @@ class SystemdUnitTests(unittest.TestCase):
         self.assertIn("UMask=0077", voice_unit)
         self.assertIn("RuntimeDirectory=murmur-ime", voice_unit)
         self.assertIn("RuntimeDirectoryMode=0700", voice_unit)
+        self.assertIn("RuntimeDirectoryPreserve=yes", voice_unit)
+        self.assertNotIn("RuntimeDirectoryPreserve=restart", voice_unit)
         self.assertIn("TimeoutStopSec=30", voice_unit)
         self.assertIn("Environment=PYTHONNOUSERSITE=1", voice_unit)
         self.assertIn("RestartPreventExitStatus=2", voice_unit)

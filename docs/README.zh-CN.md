@@ -92,10 +92,12 @@ _截图使用空临时配置；当前 0.x 设置界面为英文，页面可继�
 选项不会联网，也不会打断正在进行的听写；空闲后的下一次听写会重新加载，
 无需重启服务。首次完成设置后，点击 **Enable and start service**。
 
-若要保留数据，勾选 **Keep local WAV + unreviewed provider final**，选择一个
-已有文件夹，再点击 **Save local collection setting**。保存立即作用于下一次
+若要保留数据，勾选 **Keep WAV + unreviewed provider final in selected
+folder**，选择一个
+已有文件夹，再点击 **Save collection setting**。保存立即作用于下一次
 听写，不需要重启服务。不要勾选时，缺失或不可用的采集目录不会阻止普通
-听写。
+听写。这里可以选择本地目录，也可以选择操作系统已经挂载的 SSHFS 等远程
+目录，但不能填写 SSH 或 Google Drive URL。
 
 ## 不用 Key 的轻量级实时光标验证
 
@@ -142,14 +144,18 @@ IBus 上下文接受时，才会在后台发布该次听写的精确 16 kHz、�
 `spoken_verbatim`（实际说了什么）与 `preferred_output`（希望最终输入什么）
 保持 `null`，不能把当前记录宣传成 gold label 或可直接蒸馏的数据。
 
-采集使用有界内存并在后台写盘；写盘失败不会阻塞正常听写。这个功能不会
-把本地数据上传云端或 Orange，不会训练／微调模型，也不做应用层静态加密；
-实际可见性和静态保护由用户所选文件系统决定。关闭后，尚未发布的排队记录
-不能再发布，已经发布的数据会保留。训练和 Orange 传输仍只是后续计划。
+采集使用有界内存并在后台写盘；写盘失败不会阻塞正常听写。软件本身不会
+登录或挂载 Orange，也不会直接上传 Google Drive；用户可以选择已经挂载的
+Orange/SSHFS 路径。Google Drive 应在本机或 Orange 完整发布记录后，再由
+rclone 异步备份。软件不会训练／微调模型，也不做应用层静态加密；实际
+可见性和静态保护由用户所选文件系统决定。关闭后，尚未发布的排队记录不能
+再发布，已经发布的数据会保留。
 数据会直接写向所选目录，没有备用本地 spool；服务退出时后台 writer 只在
 systemd 的 30 秒总停止预算内等待最多 10 秒。若挂载点卡住或消失，隐藏的
 staging 可能被保留或清理，该条尚未发布的记录可能丢失，已发布记录不受影响。
-详见[个人 ASR 数据计划](personal-asr-data-plan.md)。
+Google OAuth 必须由用户本人通过浏览器明确授权，软件不读取该 token。具体
+SSHFS、断线恢复和 rclone 命令见[远程数据集存储指南](remote-dataset-storage.md)，
+训练前的数据边界见[个人 ASR 数据计划](personal-asr-data-plan.md)。
 
 火山官方资料：
 

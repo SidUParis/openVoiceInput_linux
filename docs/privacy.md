@@ -142,21 +142,23 @@ Each atomically published `utterances/<utterance_id>/` contains:
 - `spoken_verbatim.text` and `preferred_output.text`: both `null` and
   `unreviewed` until a separate human-review workflow exists.
 
-The collection feature does not make an extra cloud upload, copy data to the
-Orange computer, train, fine-tune, or distil a model, or add application-level
+The collection feature does not authenticate to or mount Orange, upload to
+Google Drive, train, fine-tune, or distil a model, or add application-level
 encryption. The normal ASR path still sends the audio to Volcengine as described
-above. The selected filesystem determines effective visibility, sharing,
-backup, and at-rest protection; directory/file modes cannot strengthen a
-filesystem that does not enforce them.
+above. A compatible remote filesystem already mounted by the user is part of
+the selected filesystem boundary. The selected filesystem determines effective
+visibility, sharing, backup, and at-rest protection; directory/file modes
+cannot strengthen a filesystem that does not enforce them.
 
 Disabling collection and changing its destination take effect for the next
 utterance without a service restart. A disable that has returned also prevents
 older queued or staged, unpublished records from being published. Already
 published records remain until the user deliberately removes them. The
 uninstaller preserves `microphone-priority.json`, `data-collection.json`, and
-every dataset in a user-selected directory. Orange transport, label review,
-deletion tooling, and
-model training remain future work. See
+every dataset in a user-selected directory. First-party resumable Orange
+transport, label review, deletion tooling, and model training remain future
+work. User-managed SSHFS and asynchronous Google Drive backup are documented in
+[remote-dataset-storage.md](remote-dataset-storage.md); see also
 [personal-asr-data-plan.md](personal-asr-data-plan.md).
 
 ## Microphone priority and DJI link probe

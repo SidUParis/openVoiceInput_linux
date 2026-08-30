@@ -192,9 +192,13 @@ the user. It stores the exact 16 kHz mono signed 16-bit WAV and a versioned JSON
 record. The audio/provider-final pair is a future review candidate, not a gold
 sample or evidence that self-training is safe.
 
-Collection is bounded and written in the background. It does not transfer to a
-user-controlled Orange machine, upload a dataset, train a model, or add static
-encryption. A later workflow must keep a reviewed literal
+Collection is bounded and written in the background. The application does not
+authenticate to or mount Orange, upload to Google Drive, train a model, or add
+static encryption. A user-mounted compatible Orange filesystem can be selected
+as an ordinary absolute path; complete local/Orange records can instead be
+backed up asynchronously with rclone as described in
+[remote-dataset-storage.md](remote-dataset-storage.md). A later workflow must
+keep a reviewed literal
 `spoken_verbatim` label separate from the user's edited `preferred_output`.
 Training and model choice remain postponed until label quality, deletion,
 language coverage, acoustic diversity, split hygiene, and evaluation rules

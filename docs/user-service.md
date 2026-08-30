@@ -138,11 +138,11 @@ Collection remains an optional side path: its invalid setting or unavailable
 destination reports a fixed collection status and leaves normal dictation
 available.
 
-### Optional local training-data collection
+### Optional filesystem training-data collection
 
 Collection is off by default. In the settings window, select an existing
-absolute local or mounted folder, enable **Keep local WAV + unreviewed provider
-final**, and choose **Save local collection setting**. Saving initializes or
+absolute local or mounted folder, enable **Keep WAV + unreviewed provider final
+in selected folder**, and choose **Save collection setting**. Saving initializes or
 reopens `openvoiceinput-dataset-v1` below the selected folder. It does not
 contact Volcengine, start capture, or restart the service; the next dictation
 reads the choice.
@@ -161,9 +161,13 @@ writer or invalid destination reports `data-collection-failed` or
 `data-collection-unavailable` but never blocks normal dictation. Cancelled,
 failed, final-rejected, and no-final sessions produce no published record.
 
-The collector does not make an extra cloud upload, transfer to Orange, train or
-fine-tune a model, or add application-level encryption. The selected
-filesystem controls effective visibility, backup, and at-rest protection.
+The collector does not authenticate to or mount Orange, upload to Google Drive,
+train or fine-tune a model, or add application-level encryption. A compatible
+Orange/SSHFS filesystem which the user mounted separately is still an existing
+filesystem path and can be selected. Google Drive should receive only complete
+local/Orange records through a separate asynchronous rclone backup. The
+selected filesystem controls effective visibility, backup, and at-rest
+protection.
 Disabling or changing the destination immediately applies to the next
 utterance; once the save returns, older queued/staged records cannot publish.
 Already published records remain until the user deletes them directly.
@@ -173,6 +177,9 @@ local spool. Normal service shutdown gives its writer 10 seconds to drain
 accepted queued records within systemd's 30-second total stop budget. A stalled
 or unmounted destination may leave or remove a hidden staging directory and
 lose that unpublished record. Published `utterances/` entries remain.
+Connection commands, disconnect recovery, Google OAuth requirements, and the
+non-destructive rclone workflow are documented in
+[remote-dataset-storage.md](remote-dataset-storage.md).
 
 ### Adaptive correction observation
 

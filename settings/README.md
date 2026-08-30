@@ -37,10 +37,15 @@ Collection is off by default. Only an authoritative provider final accepted by
 the focused IBus context publishes the exact 16 kHz mono signed 16-bit WAV and
 versioned JSON. The UI calls `provider_final` an unreviewed pseudo-label and
 does not fabricate `spoken_verbatim` or `preferred_output`: both remain null.
-It also states that the collector does not upload to Orange or elsewhere,
-train a model, or add application-level encryption. Disabling prevents
-unpublished queued/staged records from becoming visible; already published
-records are retained. The selected filesystem determines effective visibility.
+It also states that the application does not mount Orange or accept SSH/Google
+Drive URLs. A local path backed by an already-mounted remote filesystem is
+allowed; complete local/Orange records can be backed up to Drive separately.
+It does not train a model or add application-level encryption. Disabling
+prevents unpublished queued/staged records from becoming visible; already
+published records are retained. The selected filesystem determines effective
+visibility.
+See [the remote dataset storage guide](../docs/remote-dataset-storage.md) for
+SSHFS disconnect/permission boundaries and asynchronous Google Drive backup.
 
 The microphone list stores one complete priority order. Its recommended default
 is `DJI > headset > other external > built-in`, but users may move any category
@@ -59,8 +64,9 @@ actions, but it does not implement or own microphone routing, ASR, or dataset
 storage.
 
 This MVP deliberately does not configure Rime data, global hotkeys, ASR
-advanced options, a tray indicator, Orange transfer, a review/delete workflow,
-model training, or Secret Service. Those integrations need their own lifecycle
-and migration design. Runtime requirements are PyGObject and the GTK4
-introspection data, provided on Ubuntu by `python3-gi` and
+advanced options, a tray indicator, application-owned Orange
+authentication/mounting or first-party resumable transfer, a review/delete
+workflow, model training, or Secret Service. Those integrations need their own
+lifecycle and migration design. Runtime requirements are PyGObject and the
+GTK4 introspection data, provided on Ubuntu by `python3-gi` and
 `gir1.2-gtk-4.0`.

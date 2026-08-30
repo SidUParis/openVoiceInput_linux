@@ -111,9 +111,10 @@ them into the librime-capable production engine and removes engine switching.
   `spoken_verbatim` and `preferred_output` null.
 - [ ] Add review, keep/delete, and schema-migration tooling before treating
   records as a maintained corpus.
-- [ ] Add resumable, authenticated Orange transport with count/hash/deletion
-  verification; current collection writes directly only to the selected local
-  or mounted folder and has no fallback spool.
+- [ ] Add first-party resumable, authenticated Orange transport with
+  count/hash/deletion verification; current collection can write directly to a
+  user-mounted folder but does not mount/authenticate/replay and has no fallback
+  spool.
 - [ ] Build leakage-safe multilingual/code-switch evaluation splits and
   human-review `spoken_verbatim` separately from `preferred_output`.
 - [ ] Compare vocabulary/correction/decoding baselines before selecting a local

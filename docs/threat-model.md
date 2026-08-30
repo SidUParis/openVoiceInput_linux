@@ -60,8 +60,10 @@ The current boundaries are:
 - The selected local or mounted filesystem is a user-chosen trust boundary.
   The collector creates `openvoiceinput-dataset-v1`, validates its marker, and
   atomically publishes complete records. It provides no application-level
-  encryption, upload, or Orange transport; filesystem and mount policy
-  determine effective visibility and at-rest protection.
+  encryption, application-owned upload, authentication, or Orange mounting;
+  filesystem and mount policy determine effective visibility and at-rest
+  protection. A user-managed SSHFS path therefore adds the remote host and
+  network mount to this trust boundary.
 - PulseAudio/PipeWire and PortAudio are host trust boundaries. The daemon may
   add input to one unambiguous output-only ALSA profile and bind its own stream
   to one verified physical source. It never directly changes mute, volume, or
@@ -208,8 +210,11 @@ rechecks the dataset identity and consent before rename. Once disabling or
 redirecting collection returns, an older queued/staged record cannot become
 published. Already published records are deliberately retained; uninstall
 also preserves the private setting and all user-selected datasets. The current
-feature implements no record deletion, review workflow, Orange transfer,
-cloud-dataset upload, model training, or application-level encryption.
+feature implements no record deletion, review workflow, application-owned
+Orange authentication/mounting or resumable transfer, cloud-dataset upload,
+model training, or application-level encryption. User-mounted storage remains
+inside the filesystem trust boundary described above; see
+[remote-dataset-storage.md](remote-dataset-storage.md).
 If the selected filesystem stalls or disappears during staging, best-effort
 cleanup may remove or leave the hidden staging directory and the unpublished
 record may be lost; an already atomically published record is not rolled back.
