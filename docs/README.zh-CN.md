@@ -3,7 +3,7 @@
 **按下快捷键，说话，识别文字直接出现在当前光标；不弹转写黑框，也不靠
 剪贴板或模拟粘贴。**
 
-[返回项目主页 / English README](../README.md)
+[返回中文主页](../README.md) · [English](../README.en.md)
 
 ![按下快捷键后，语音文字直接显示在当前光标](assets/hero-demo.gif)
 
@@ -279,7 +279,8 @@ dataset。源码或验证型 preview 安装可以从原解压目录执行：
 
 ## 进一步阅读
 
-- [项目主页 / English README](../README.md)
+- [中文项目主页](../README.md)
+- [English README](../README.en.md)
 - [架构](architecture.md)
 - [原型实现与运行边界](python-preedit-prototype.md)
 - [识别准确率与纠错设计](recognition-accuracy.md)
