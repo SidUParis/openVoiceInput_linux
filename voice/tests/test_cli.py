@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import stat
 
@@ -10,6 +11,8 @@ from murmur_voice import cli
 from murmur_voice import adaptive_runtime as adaptive_runtime_module
 from murmur_voice import session as session_module
 from murmur_voice.audio import AudioCapture, MicrophonePolicyError
+from murmur_voice.adaptive_runtime import save_adaptive_ledger
+from murmur_voice.adaptive_store import AdaptiveLedger, record_evidence
 from murmur_voice.config import (
     VoiceConfig,
     load_config,
@@ -25,6 +28,11 @@ class _InteractiveInput:
 
 
 class _VocabularyInput(io.StringIO):
+    def isatty(self):
+        return True
+
+
+class _AdaptivePairInput(io.StringIO):
     def isatty(self):
         return True
 
@@ -50,6 +58,20 @@ def test_configure_prompts_twice_without_echoing_or_accepting_key_on_argv(
     assert stat.S_IMODE(destination.stat().st_mode) == 0o600
     assert load_config(destination).api_key == "TOP-SECRET-TEST-KEY"
     assert "api-key" not in cli.build_parser().format_help()
+
+
+def test_configure_can_select_qwen_without_putting_key_on_argv(tmp_path, monkeypatch):
+    destination = tmp_path / "private" / "voice.json"
+    answers = iter(("QWEN-PRIVATE-KEY", "QWEN-PRIVATE-KEY"))
+    monkeypatch.setattr(cli.sys, "stdin", _InteractiveInput())
+    monkeypatch.setattr(cli.getpass, "getpass", lambda _prompt: next(answers))
+
+    assert cli._configure(destination, "qwen") == 0
+
+    config = load_config(destination)
+    assert config.provider == "qwen"
+    assert config.model == "qwen-audio-3.0-asr-flash-streaming"
+    assert "QWEN-PRIVATE-KEY" not in cli.build_parser().format_help()
 
 
 def test_verbose_daemon_keeps_websocket_header_logging_disabled(tmp_path, monkeypatch):
@@ -177,11 +199,72 @@ def test_vocabulary_terms_cannot_be_passed_on_command_line():
         parser.parse_args(["vocabulary", "--term", "PrivateName"])
 
 
+def test_adaptive_status_is_content_free_and_confirm_activates_candidate(
+    tmp_path, capsys, monkeypatch
+):
+    adaptive = tmp_path / "private" / "adaptive-corrections.json"
+    corrections = tmp_path / "private" / "corrections.json"
+    ledger = record_evidence(
+        AdaptiveLedger(),
+        "private wrong",
+        "private canonical",
+        state="candidate",
+        category="recognition",
+        evidence="medium",
+    )
+    save_adaptive_ledger(ledger, adaptive)
+
+    monkeypatch.setattr(
+        cli.sys,
+        "stdin",
+        _AdaptivePairInput("private wrong\nprivate canonical\n"),
+    )
+    assert cli.main(["adaptive-status", "--adaptive-corrections", str(adaptive)]) == 0
+    status_output = capsys.readouterr().out
+    status = json.loads(status_output)
+    assert status["statistics"]["candidate"] == 1
+    assert "private wrong" not in status_output
+    assert "private canonical" not in status_output
+
+    assert (
+        cli.main(
+            [
+                "adaptive-confirm",
+                "--adaptive-corrections",
+                str(adaptive),
+                "--corrections",
+                str(corrections),
+            ]
+        )
+        == 0
+    )
+    confirmation_output = capsys.readouterr().out
+    assert json.loads(confirmation_output)["activated_count"] == 1
+    assert "private wrong" not in confirmation_output
+    assert "private canonical" not in confirmation_output
+
+
+def test_adaptive_confirmation_text_cannot_be_passed_on_command_line():
+    parser = cli.build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "adaptive-confirm",
+                "--wrong",
+                "private wrong",
+                "--canonical",
+                "private canonical",
+            ]
+        )
+
+
 def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_path):
     corrections_path = tmp_path / "corrections.json"
     adaptive_path = tmp_path / "adaptive-corrections.json"
     data_collection_path = tmp_path / "data-collection.json"
     microphone_priority_path = tmp_path / "microphone-priority.json"
+    interaction_path = tmp_path / "interaction.json"
     parser = cli.build_parser()
 
     options = parser.parse_args(
@@ -195,6 +278,8 @@ def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_pat
             str(data_collection_path),
             "--microphone-priority",
             str(microphone_priority_path),
+            "--interaction",
+            str(interaction_path),
         ]
     )
 
@@ -202,6 +287,7 @@ def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_pat
     assert options.adaptive_corrections == adaptive_path
     assert options.data_collection == data_collection_path
     assert options.microphone_priority == microphone_priority_path
+    assert options.interaction == interaction_path
     with pytest.raises(SystemExit):
         parser.parse_args(["run", "--wrong", "private wrong form"])
     with pytest.raises(SystemExit):
@@ -303,8 +389,8 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
             return True
 
     class FakeServer:
-        def __init__(self, session, socket_path):
-            del session, socket_path
+        def __init__(self, session, socket_path, *, interaction=None):
+            del session, socket_path, interaction
 
         @staticmethod
         def serve_forever(signal_commands):
@@ -390,8 +476,8 @@ def test_invalid_optional_data_collection_config_does_not_block_daemon_start(
             del config, kwargs
 
     class FakeServer:
-        def __init__(self, session, socket_path):
-            del session, socket_path
+        def __init__(self, session, socket_path, *, interaction=None):
+            del session, socket_path, interaction
 
         @staticmethod
         def serve_forever(signal_commands):
@@ -454,8 +540,8 @@ def test_optional_data_writer_start_failure_does_not_block_daemon(
             captured.append(kwargs)
 
     class FakeServer:
-        def __init__(self, session, socket_path):
-            del session, socket_path
+        def __init__(self, session, socket_path, *, interaction=None):
+            del session, socket_path, interaction
 
         @staticmethod
         def serve_forever(signal_commands):

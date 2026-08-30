@@ -19,7 +19,7 @@ graphical/provider matrix is finished. The standalone Ubuntu 24.04 `amd64`
 - [x] Public product name and repository URLs are consistent.
 - [x] Voice daemon source is self-contained in this repository with MIT
       attribution for migrated Doubao Murmur files.
-- [x] Configuration requires only the user's own Volcengine API key after the user
+- [x] Configuration requires only the user's own selected-provider API key after the user
       has enabled the matching service in their account.
 - [ ] Alpha validation gap: install, upgrade, and uninstall have offline mock
       lifecycle coverage and prior same-machine coverage, but no fresh

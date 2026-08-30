@@ -12,14 +12,20 @@ from .config import (
     CorrectionPair,
 )
 
-ADAPTIVE_CORRECTIONS_SCHEMA_VERSION = 1
+ADAPTIVE_CORRECTIONS_SCHEMA_VERSION = 2
+LEGACY_ADAPTIVE_CORRECTIONS_SCHEMA_VERSION = 1
 MAX_ADAPTIVE_ENTRIES = 500
 MAX_ADAPTIVE_SUPPORT = 2_147_483_647
 
-AdaptiveState = Literal["active", "conflicted", "suspended", "archived"]
+AdaptiveState = Literal["candidate", "active", "conflicted", "suspended", "archived"]
 ADAPTIVE_STATES: frozenset[str] = frozenset(
-    {"active", "conflicted", "suspended", "archived"}
+    {"candidate", "active", "conflicted", "suspended", "archived"}
 )
+AdaptiveCategory = Literal["recognition", "terminology", "formatting"]
+AdaptiveEvidence = Literal["strong", "medium", "explicit"]
+ADAPTIVE_CATEGORIES = frozenset({"recognition", "terminology", "formatting"})
+ADAPTIVE_EVIDENCE = frozenset({"strong", "medium", "explicit"})
+MAX_ADAPTIVE_RESULT_COUNT = MAX_ADAPTIVE_ENTRIES
 
 
 class AdaptiveStoreError(ValueError):
@@ -34,6 +40,20 @@ class AdaptiveEntry:
     canonical: str
     state: AdaptiveState = "active"
     support: int = 1
+    category: AdaptiveCategory = "recognition"
+    evidence: AdaptiveEvidence = "strong"
+
+
+@dataclass(frozen=True, slots=True)
+class AdaptiveLastResult:
+    """Transcript-free persisted outcome for UI and CLI observability."""
+
+    reason_code: str
+    captured_count: int = 0
+    activated_count: int = 0
+    candidate_count: int = 0
+    conflicted_count: int = 0
+    replacement_hunks: int = 0
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -41,17 +61,29 @@ class AdaptiveLedger:
     """Versioned in-memory representation of the private learned ledger."""
 
     entries: tuple[AdaptiveEntry, ...] = field(default=(), repr=False)
+    last_result: AdaptiveLastResult | None = None
     version: int = ADAPTIVE_CORRECTIONS_SCHEMA_VERSION
 
 
 def parse_adaptive_ledger(document: Any) -> AdaptiveLedger:
     """Validate a decoded JSON-compatible ledger document."""
 
-    if not isinstance(document, dict) or set(document) != {"version", "entries"}:
+    if not isinstance(document, dict) or set(document) not in (
+        {"version", "entries"},
+        {"version", "entries", "last_result"},
+    ):
         raise AdaptiveStoreError("adaptive ledger has invalid top-level fields")
     version = document.get("version")
-    if type(version) is not int or version != ADAPTIVE_CORRECTIONS_SCHEMA_VERSION:
+    if type(version) is not int or version not in {
+        LEGACY_ADAPTIVE_CORRECTIONS_SCHEMA_VERSION,
+        ADAPTIVE_CORRECTIONS_SCHEMA_VERSION,
+    }:
         raise AdaptiveStoreError("adaptive ledger uses an unsupported schema")
+    if (
+        version == LEGACY_ADAPTIVE_CORRECTIONS_SCHEMA_VERSION
+        and "last_result" in document
+    ):
+        raise AdaptiveStoreError("adaptive ledger has invalid top-level fields")
     raw_entries = document.get("entries")
     if not isinstance(raw_entries, list):
         raise AdaptiveStoreError("adaptive ledger entries must be a list")
@@ -60,12 +92,10 @@ def parse_adaptive_ledger(document: Any) -> AdaptiveLedger:
 
     entries: list[AdaptiveEntry] = []
     for raw_entry in raw_entries:
-        if not isinstance(raw_entry, dict) or set(raw_entry) != {
-            "wrong",
-            "canonical",
-            "state",
-            "support",
-        }:
+        if not isinstance(raw_entry, dict) or set(raw_entry) not in (
+            {"wrong", "canonical", "state", "support"},
+            {"wrong", "canonical", "state", "support", "category", "evidence"},
+        ):
             raise AdaptiveStoreError("adaptive ledger entry has invalid fields")
         entries.append(
             _validated_entry(
@@ -74,10 +104,17 @@ def parse_adaptive_ledger(document: Any) -> AdaptiveLedger:
                     canonical=raw_entry.get("canonical"),
                     state=raw_entry.get("state"),
                     support=raw_entry.get("support"),
+                    category=raw_entry.get("category", "recognition"),
+                    evidence=raw_entry.get("evidence", "strong"),
                 )
             )
         )
-    ledger = AdaptiveLedger(entries=tuple(entries))
+    last_result = (
+        _validated_last_result(document.get("last_result"))
+        if "last_result" in document
+        else None
+    )
+    ledger = AdaptiveLedger(entries=tuple(entries), last_result=last_result)
     _validate_ledger_invariants(ledger)
     return ledger
 
@@ -86,18 +123,24 @@ def serialize_adaptive_ledger(ledger: AdaptiveLedger) -> dict[str, Any]:
     """Return a deterministic JSON-compatible representation of ``ledger``."""
 
     validated = _validated_ledger(ledger)
-    return {
+    document: dict[str, Any] = {
         "version": ADAPTIVE_CORRECTIONS_SCHEMA_VERSION,
-        "entries": [
-            {
-                "wrong": entry.wrong,
-                "canonical": entry.canonical,
-                "state": entry.state,
-                "support": entry.support,
-            }
-            for entry in validated.entries
-        ],
+        "entries": [],
     }
+    for entry in validated.entries:
+        serialized_entry: dict[str, Any] = {
+            "wrong": entry.wrong,
+            "canonical": entry.canonical,
+            "state": entry.state,
+            "support": entry.support,
+        }
+        if entry.category != "recognition" or entry.evidence != "strong":
+            serialized_entry["category"] = entry.category
+            serialized_entry["evidence"] = entry.evidence
+        document["entries"].append(serialized_entry)
+    if validated.last_result is not None:
+        document["last_result"] = _serialize_last_result(validated.last_result)
+    return document
 
 
 def record_correction(
@@ -113,9 +156,37 @@ def record_correction(
     explicit state when merely observed again.
     """
 
+    return record_evidence(
+        ledger,
+        wrong,
+        canonical,
+        state="active",
+        category="recognition",
+        evidence="strong",
+    )
+
+
+def record_evidence(
+    ledger: AdaptiveLedger,
+    wrong: str,
+    canonical: str,
+    *,
+    state: Literal["candidate", "active"],
+    category: AdaptiveCategory,
+    evidence: AdaptiveEvidence,
+) -> AdaptiveLedger:
+    """Record classified evidence without making medium evidence active."""
+
     validated = _validated_ledger(ledger)
     new_entry = _validated_entry(
-        AdaptiveEntry(wrong=wrong, canonical=canonical, state="active", support=1)
+        AdaptiveEntry(
+            wrong=wrong,
+            canonical=canonical,
+            state=state,
+            support=1,
+            category=category,
+            evidence=evidence,
+        )
     )
     wrong_key = normalized_key(new_entry.wrong)
     canonical_key = normalized_key(new_entry.canonical)
@@ -135,7 +206,7 @@ def record_correction(
     live_same_wrong_indexes = [
         index
         for index in same_wrong_indexes
-        if validated.entries[index].state in {"active", "conflicted"}
+        if validated.entries[index].state in {"candidate", "active", "conflicted"}
     ]
 
     entries = list(validated.entries)
@@ -145,7 +216,28 @@ def record_correction(
             existing,
             support=min(existing.support + 1, MAX_ADAPTIVE_SUPPORT),
         )
-        if entries[same_pair_index].state in {"active", "conflicted"} and (
+        if (
+            state == "active"
+            and entries[same_pair_index].state == "candidate"
+            and len(
+                {
+                    normalized_key(entries[index].canonical)
+                    for index in live_same_wrong_indexes
+                }
+            )
+            == 1
+        ):
+            entries[same_pair_index] = replace(
+                entries[same_pair_index],
+                state="active",
+                category=category,
+                evidence=evidence,
+            )
+        if entries[same_pair_index].state in {
+            "candidate",
+            "active",
+            "conflicted",
+        } and (
             len(
                 {
                     normalized_key(entries[index].canonical)
@@ -156,7 +248,7 @@ def record_correction(
         ):
             for index in live_same_wrong_indexes:
                 entries[index] = replace(entries[index], state="conflicted")
-        return AdaptiveLedger(entries=tuple(entries))
+        return AdaptiveLedger(entries=tuple(entries), last_result=validated.last_result)
 
     if live_same_wrong_indexes:
         for index in live_same_wrong_indexes:
@@ -165,12 +257,70 @@ def record_correction(
             # Preserve the safety fact even when there is no room to retain
             # the new alternative: the previously active mapping is no longer
             # safe to send to the provider.
-            return AdaptiveLedger(entries=tuple(entries))
+            return AdaptiveLedger(
+                entries=tuple(entries), last_result=validated.last_result
+            )
         new_entry = replace(new_entry, state="conflicted")
     elif len(entries) >= MAX_ADAPTIVE_ENTRIES:
         raise AdaptiveStoreError("adaptive ledger contains too many entries")
     entries.append(new_entry)
-    return AdaptiveLedger(entries=tuple(entries))
+    return AdaptiveLedger(entries=tuple(entries), last_result=validated.last_result)
+
+
+def activate_correction(
+    ledger: AdaptiveLedger,
+    wrong: str,
+    canonical: str,
+) -> AdaptiveLedger:
+    """Explicitly activate one retained choice and archive its alternatives."""
+
+    validated = _validated_ledger(ledger)
+    source = normalized_key(_validated_text(wrong))
+    target = normalized_key(_validated_text(canonical))
+    chosen = next(
+        (
+            index
+            for index, entry in enumerate(validated.entries)
+            if normalized_key(entry.wrong) == source
+            and normalized_key(entry.canonical) == target
+        ),
+        None,
+    )
+    if chosen is None:
+        raise AdaptiveStoreError("adaptive correction candidate was not found")
+    entries = list(validated.entries)
+    for index, entry in enumerate(entries):
+        if normalized_key(entry.wrong) != source:
+            continue
+        entries[index] = replace(
+            entry,
+            state="active" if index == chosen else "archived",
+            evidence="explicit" if index == chosen else entry.evidence,
+        )
+    return AdaptiveLedger(entries=tuple(entries), last_result=validated.last_result)
+
+
+def with_last_result(
+    ledger: AdaptiveLedger,
+    result: AdaptiveLastResult,
+) -> AdaptiveLedger:
+    """Attach one validated transcript-free diagnostic outcome."""
+
+    validated = _validated_ledger(ledger)
+    return AdaptiveLedger(
+        entries=validated.entries,
+        last_result=_validated_last_result(result),
+    )
+
+
+def adaptive_statistics(ledger: AdaptiveLedger) -> dict[str, int]:
+    """Return bounded lifecycle counts without exposing correction text."""
+
+    validated = _validated_ledger(ledger)
+    counts = {state: 0 for state in sorted(ADAPTIVE_STATES)}
+    for entry in validated.entries:
+        counts[entry.state] += 1
+    return {"total": len(validated.entries), **counts}
 
 
 def compile_provider_corrections(
@@ -324,7 +474,12 @@ def _validated_ledger(ledger: AdaptiveLedger) -> AdaptiveLedger:
     if len(ledger.entries) > MAX_ADAPTIVE_ENTRIES:
         raise AdaptiveStoreError("adaptive ledger contains too many entries")
     validated = AdaptiveLedger(
-        entries=tuple(_validated_entry(entry) for entry in ledger.entries)
+        entries=tuple(_validated_entry(entry) for entry in ledger.entries),
+        last_result=(
+            _validated_last_result(ledger.last_result)
+            if ledger.last_result is not None
+            else None
+        ),
     )
     _validate_ledger_invariants(validated)
     return validated
@@ -343,12 +498,75 @@ def _validated_entry(entry: AdaptiveEntry) -> AdaptiveEntry:
         or entry.support > MAX_ADAPTIVE_SUPPORT
     ):
         raise AdaptiveStoreError("adaptive ledger entry support is invalid")
+    if not isinstance(entry.category, str) or entry.category not in ADAPTIVE_CATEGORIES:
+        raise AdaptiveStoreError("adaptive ledger entry category is invalid")
+    if not isinstance(entry.evidence, str) or entry.evidence not in ADAPTIVE_EVIDENCE:
+        raise AdaptiveStoreError("adaptive ledger entry evidence is invalid")
     return AdaptiveEntry(
         wrong=wrong,
         canonical=canonical,
         state=entry.state,
         support=entry.support,
+        category=entry.category,
+        evidence=entry.evidence,
     )
+
+
+def _validated_last_result(value: Any) -> AdaptiveLastResult:
+    if isinstance(value, dict):
+        if set(value) != {
+            "reason_code",
+            "captured_count",
+            "activated_count",
+            "candidate_count",
+            "conflicted_count",
+            "replacement_hunks",
+        }:
+            raise AdaptiveStoreError("adaptive last result has invalid fields")
+        value = AdaptiveLastResult(
+            reason_code=value.get("reason_code"),
+            captured_count=value.get("captured_count"),
+            activated_count=value.get("activated_count"),
+            candidate_count=value.get("candidate_count"),
+            conflicted_count=value.get("conflicted_count"),
+            replacement_hunks=value.get("replacement_hunks"),
+        )
+    if not isinstance(value, AdaptiveLastResult):
+        raise AdaptiveStoreError("adaptive last result is invalid")
+    if (
+        not isinstance(value.reason_code, str)
+        or not 1 <= len(value.reason_code) <= 64
+        or any(
+            not (character.islower() or character.isdigit() or character == "-")
+            for character in value.reason_code
+        )
+    ):
+        raise AdaptiveStoreError("adaptive last result reason is invalid")
+    counts = (
+        value.captured_count,
+        value.activated_count,
+        value.candidate_count,
+        value.conflicted_count,
+        value.replacement_hunks,
+    )
+    if any(
+        type(count) is not int or count < 0 or count > MAX_ADAPTIVE_RESULT_COUNT
+        for count in counts
+    ):
+        raise AdaptiveStoreError("adaptive last result count is invalid")
+    return value
+
+
+def _serialize_last_result(value: AdaptiveLastResult) -> dict[str, Any]:
+    validated = _validated_last_result(value)
+    return {
+        "reason_code": validated.reason_code,
+        "captured_count": validated.captured_count,
+        "activated_count": validated.activated_count,
+        "candidate_count": validated.candidate_count,
+        "conflicted_count": validated.conflicted_count,
+        "replacement_hunks": validated.replacement_hunks,
+    }
 
 
 def _validate_ledger_invariants(ledger: AdaptiveLedger) -> None:

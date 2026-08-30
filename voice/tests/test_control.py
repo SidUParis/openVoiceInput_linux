@@ -59,6 +59,33 @@ class FakeSession:
         self.state = VoiceState.IDLE
 
 
+class FakeInteraction:
+    def __init__(self, session):
+        self.session = session
+        self.calls = []
+
+    def press(self, *, event_time=None):
+        self.calls.append(("press", event_time))
+        self.session.state = VoiceState.STARTING
+        return CommandReply(True, "started", self.session.state)
+
+    def release(self, *, event_time=None):
+        self.calls.append(("release", event_time))
+        self.session.state = VoiceState.STOPPING
+        return CommandReply(True, "stopping", self.session.state)
+
+    def cancel(self):
+        self.calls.append("cancel")
+        self.session.state = VoiceState.IDLE
+        return CommandReply(True, "cancelled", self.session.state)
+
+    def reset_for_explicit_command(self):
+        self.calls.append("reset")
+
+    def close(self):
+        self.calls.append("close")
+
+
 @pytest.fixture
 def runtime_dir(tmp_path, monkeypatch):
     path = tmp_path / "runtime"
@@ -101,6 +128,34 @@ def test_cli_commands_and_toggle_over_private_socket(runtime_dir):
     assert not thread.is_alive()
     assert session.closed
     assert not server.path.exists()
+
+
+def test_press_release_and_cancel_route_through_interaction_controller(runtime_dir):
+    session = FakeSession()
+    interaction = FakeInteraction(session)
+    server = ControlServer(session, interaction=interaction)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while not server.path.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert request_command("press")["state"] == "starting"
+    assert request_command("release")["state"] == "stopping"
+    assert request_command("cancel")["state"] == "idle"
+    assert request_command("toggle")["state"] == "starting"
+    assert request_command("shutdown")["code"] == "shutting-down"
+    thread.join(2)
+
+    assert [
+        call[0] if isinstance(call, tuple) else call for call in interaction.calls[:4]
+    ] == ["press", "release", "cancel", "reset"]
+    press_time = interaction.calls[0][1]
+    release_time = interaction.calls[1][1]
+    assert isinstance(press_time, float)
+    assert isinstance(release_time, float)
+    assert release_time >= press_time
+    assert interaction.calls.count("close") >= 1
 
 
 def test_oversize_and_unknown_commands_are_rejected(runtime_dir):

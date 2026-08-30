@@ -142,6 +142,18 @@ Each atomically published `utterances/<utterance_id>/` contains:
 - `spoken_verbatim.text` and `preferred_output.text`: both `null` and
   `unreviewed` until a separate human-review workflow exists.
 
+The immutable utterance record remains exactly `audio.wav` + `record.json`.
+After it is published, the dataset-level `usage/<utterance_id>.json` index adds
+only time, audio duration and non-whitespace character count for private
+dashboard totals.
+
+Dashboard aggregation runs outside the GTK thread and reads only the dataset
+marker plus `usage/<utterance_id>.json`. It never reads or displays
+`provider_final`, the two
+review labels, or audio. Disabling collection also disables the scan; an
+unavailable local or mounted destination produces an unknown/unavailable state,
+not a misleading zero, and does not stop ordinary dictation.
+
 The collection feature does not authenticate to or mount Orange, upload to
 Google Drive, train, fine-tune, or distil a model, or add application-level
 encryption. The normal ASR path still sends the audio to Volcengine as described

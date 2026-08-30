@@ -20,6 +20,7 @@ from murmur_voice.config import (
     load_vocabulary,
     load_vocabulary_import,
     save_api_key,
+    save_provider_config,
     save_corrections,
     save_vocabulary,
 )
@@ -87,6 +88,64 @@ def test_save_api_key_refuses_symlink_directory(tmp_path):
 
     with pytest.raises(ConfigError, match="user-owned"):
         save_api_key("test-key", link / "voice.json")
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    (
+        ("volcengine", None),
+        ("qwen", "qwen-audio-3.0-asr-flash-streaming"),
+        ("openai", "gpt-4o-mini-transcribe"),
+    ),
+)
+def test_provider_config_v2_round_trip_is_private(tmp_path, provider, model):
+    path = tmp_path / "private" / "voice.json"
+
+    save_provider_config("provider-secret", provider, model, path)
+
+    loaded = load_config(path)
+    assert loaded.provider == provider
+    assert loaded.model == model
+    assert loaded.api_key == "provider-secret"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert "provider-secret" not in repr(loaded)
+
+
+@pytest.mark.parametrize(
+    "document",
+    (
+        {"version": 1, "provider": "qwen", "api_key": "key", "model": None},
+        {"version": 2, "provider": "unknown", "api_key": "key", "model": None},
+        {"version": 2, "provider": "qwen", "api_key": "key", "model": "other"},
+        {"version": 2, "provider": "volcengine", "api_key": "key", "model": "x"},
+    ),
+)
+def test_provider_config_v2_rejects_unreviewed_values(tmp_path, document):
+    path = tmp_path / "voice.json"
+    _write(path, document)
+
+    with pytest.raises(ConfigError):
+        load_config(path)
+
+
+def test_qwen_and_openai_provider_settings_keep_terms_but_not_wrong_forms():
+    correction = CorrectionPair("奔驰 mark", "benchmark")
+    qwen = VoiceConfig(
+        "key",
+        hotwords=("Austral",),
+        corrections=(correction,),
+        provider="qwen",
+    ).provider_settings()
+    openai = VoiceConfig(
+        "key",
+        hotwords=("Austral",),
+        corrections=(correction,),
+        provider="openai",
+    ).provider_settings()
+
+    assert qwen["vocabulary"] == ("Austral", "benchmark")
+    assert qwen["language_hints"] == ("zh", "en", "fr")
+    assert openai["prompt_terms"] == ("Austral", "benchmark")
 
 
 def test_delete_api_key_removes_only_private_file_and_fsyncs_parent(

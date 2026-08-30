@@ -18,6 +18,7 @@ from .audio import AudioCapture, MicrophonePolicyError, resolve_input_device
 from .config import (
     MAX_VOCABULARY_ENTRIES,
     MAX_VOCABULARY_TERM_CHARACTERS,
+    MAX_CORRECTION_TEXT_CHARACTERS,
     ConfigError,
     default_adaptive_corrections_path,
     default_config_path,
@@ -26,6 +27,7 @@ from .config import (
     load_vocabulary_import,
     normalize_vocabulary_terms,
     save_api_key,
+    save_provider_config,
     save_vocabulary,
 )
 from .control import (
@@ -39,12 +41,16 @@ from .data_collection import (
     default_data_collection_config_path,
 )
 from .engine_restore import EngineRestoreState, RestoreError, restore_saved_engine
+from .interaction import (
+    InteractionController,
+    default_interaction_config_path,
+    load_interaction_config,
+)
 from .microphone_policy import (
     MicrophonePolicyConfig,
     default_microphone_policy_config_path,
     load_microphone_policy_config,
 )
-
 
 DATA_COLLECTION_CLOSE_TIMEOUT_SECONDS = 10.0
 
@@ -92,7 +98,7 @@ class _MicrophonePriorityResolver:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="murmur-voice-daemon",
-        description="Volcengine voice input through native IBus preedit",
+        description="Cloud ASR voice input through native IBus preedit",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -119,6 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=default_microphone_policy_config_path(),
     )
+    run_parser.add_argument(
+        "--interaction",
+        type=Path,
+        default=default_interaction_config_path(),
+    )
     run_parser.add_argument("--socket", type=Path)
     run_parser.add_argument("--verbose", action="store_true")
 
@@ -126,6 +137,16 @@ def build_parser() -> argparse.ArgumentParser:
         "configure", help="securely prompt for and store the API key"
     )
     configure_parser.add_argument("--config", type=Path, default=default_config_path())
+    configure_parser.add_argument(
+        "--provider",
+        choices=("volcengine", "qwen", "openai"),
+        default="volcengine",
+        help="reviewed ASR backend (default: volcengine)",
+    )
+    configure_parser.add_argument(
+        "--model",
+        help="reviewed provider model; omit to use the project default",
+    )
 
     vocabulary_parser = subparsers.add_parser(
         "vocabulary", help="replace the optional private personal vocabulary"
@@ -137,6 +158,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--import-file",
         type=Path,
         help="read a private UTF-8 file containing one term per line",
+    )
+
+    adaptive_status_parser = subparsers.add_parser(
+        "adaptive-status",
+        help="show transcript-free adaptive learning statistics",
+    )
+    adaptive_status_parser.add_argument(
+        "--adaptive-corrections",
+        type=Path,
+        default=default_adaptive_corrections_path(),
+    )
+
+    adaptive_confirm_parser = subparsers.add_parser(
+        "adaptive-confirm",
+        help="explicitly activate one retained adaptive candidate",
+    )
+    adaptive_confirm_parser.add_argument(
+        "--adaptive-corrections",
+        type=Path,
+        default=default_adaptive_corrections_path(),
+    )
+    adaptive_confirm_parser.add_argument(
+        "--corrections",
+        type=Path,
+        default=default_corrections_path(),
     )
 
     restore_parser = subparsers.add_parser(
@@ -161,9 +207,16 @@ def main(arguments: Sequence[str] | None = None) -> int:
     parser = build_parser()
     options = parser.parse_args(arguments)
     if options.command == "configure":
-        return _configure(options.config)
+        return _configure(options.config, options.provider, options.model)
     if options.command == "vocabulary":
         return _configure_vocabulary(options.vocabulary, options.import_file)
+    if options.command == "adaptive-status":
+        return _adaptive_status(options.adaptive_corrections)
+    if options.command == "adaptive-confirm":
+        return _adaptive_confirm(
+            options.adaptive_corrections,
+            options.corrections,
+        )
     if options.command == "restore-engine":
         return _restore_engine(options.state)
     if options.command == "run":
@@ -176,6 +229,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             adaptive_corrections_path=options.adaptive_corrections,
             data_collection_path=options.data_collection,
             microphone_policy_path=options.microphone_priority,
+            interaction_path=options.interaction,
         )
     try:
         response = request_command(options.command, options.socket)
@@ -186,17 +240,25 @@ def main(arguments: Sequence[str] | None = None) -> int:
     return 0 if response.get("ok") is True else 1
 
 
-def _configure(path: Path) -> int:
+def _configure(
+    path: Path,
+    provider: str = "volcengine",
+    model: str | None = None,
+) -> int:
     if not sys.stdin.isatty():
         print("configure requires an interactive TTY", file=sys.stderr)
         return 2
-    first = getpass.getpass("Volcengine API key: ")
+    first = getpass.getpass(f"{provider} API key: ")
     second = getpass.getpass("Confirm API key: ")
     if first != second:
         print("API keys did not match", file=sys.stderr)
         return 2
     try:
-        destination = save_api_key(first, path)
+        destination = (
+            save_api_key(first, path)
+            if provider == "volcengine" and model is None
+            else save_provider_config(first, provider, model, path)
+        )
     except ConfigError as error:
         print(str(error), file=sys.stderr)
         return 2
@@ -221,6 +283,55 @@ def _configure_vocabulary(path: Path, import_path: Path | None) -> int:
         print(str(error), file=sys.stderr)
         return 2
     print(f"Saved {len(terms)} private vocabulary entries to {destination}")
+    return 0
+
+
+def _adaptive_status(path: Path) -> int:
+    from .adaptive_runtime import adaptive_status_document
+
+    try:
+        document = adaptive_status_document(path)
+    except ConfigError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    print(json.dumps(document, ensure_ascii=False, separators=(",", ":")))
+    return 0
+
+
+def _adaptive_confirm(
+    adaptive_path: Path,
+    corrections_path: Path,
+) -> int:
+    from .adaptive_runtime import confirm_adaptive_correction
+
+    if not sys.stdin.isatty():
+        print("adaptive-confirm requires an interactive TTY", file=sys.stderr)
+        return 2
+    print("recognized as> ", end="", flush=True, file=sys.stderr)
+    wrong = sys.stdin.readline(MAX_CORRECTION_TEXT_CHARACTERS + 2).rstrip("\n")
+    print("preferred text> ", end="", flush=True, file=sys.stderr)
+    canonical = sys.stdin.readline(MAX_CORRECTION_TEXT_CHARACTERS + 2).rstrip("\n")
+    try:
+        result = confirm_adaptive_correction(
+            adaptive_path,
+            corrections_path,
+            wrong,
+            canonical,
+        )
+    except (ConfigError, ValueError):
+        print("adaptive correction could not be confirmed safely", file=sys.stderr)
+        return 2
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "reason_code": result.reason_code,
+                "activated_count": result.activated_count,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
     return 0
 
 
@@ -254,6 +365,7 @@ def _run(
     adaptive_corrections_path: Path | None = None,
     data_collection_path: Path | None = None,
     microphone_policy_path: Path | None = None,
+    interaction_path: Path | None = None,
 ) -> int:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -303,7 +415,8 @@ def _run(
             asr_client_factory=runtime.create_asr_client,
             audio_capture=AudioCapture(input_resolver=microphone_resolver),
             microphone_policy_validator=microphone_resolver.validate,
-            observation_handler=runtime.observe,
+            observation_handler=getattr(runtime, "observe_result", runtime.observe),
+            observation_result_handler=getattr(runtime, "record_external_result", None),
             data_collection_factory=(
                 data_collection_runtime.begin
                 if data_collection_runtime is not None
@@ -314,8 +427,27 @@ def _run(
                 if data_collection_runtime is not None
                 else None
             ),
+            data_collection_feedback_writer=(
+                getattr(data_collection_runtime, "record_feedback", None)
+                if data_collection_runtime is not None
+                else None
+            ),
         )
-        server = ControlServer(session, socket_path)
+        resolved_interaction_path = (
+            interaction_path or default_interaction_config_path()
+        )
+        # Reload on each new press so a settings change applies without a
+        # service restart. A malformed optional policy disables only the
+        # press/release path; legacy start/stop/toggle remains recoverable.
+        interaction = InteractionController(
+            session,
+            config_reader=lambda: load_interaction_config(resolved_interaction_path),
+        )
+        server = ControlServer(
+            session,
+            socket_path,
+            interaction=interaction,
+        )
     except (ConfigError, ControlError, ImportError, RuntimeError) as error:
         _close_data_collection_runtime(data_collection_runtime)
         # Configuration/control errors are authored locally and contain no key.

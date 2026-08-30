@@ -205,6 +205,13 @@ one atomic rename into `utterances/<utterance_id>`. The JSON identifies
 `preferred_output` null and unreviewed. This prevents an ASR result from being
 silently presented as a human-verified acoustic label or preferred text.
 
+After the unchanged two-file utterance pair is durable, the writer publishes a
+separate `usage/<utterance_id>.json` summary with no transcript. The GTK
+dashboard reads only these bounded private summaries on a worker thread. It
+does not enumerate utterance directories, read record labels/audio, or create a
+missing index while merely viewing statistics. Hidden interrupted summary
+staging is ignored.
+
 Configuration save and final publication share a short lock and the writer
 rechecks the dataset identity and consent before rename. Once disabling or
 redirecting collection returns, an older queued/staged record cannot become

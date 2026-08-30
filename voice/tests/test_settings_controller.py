@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import json
 import stat
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import pytest
 
+from murmur_voice.adaptive_runtime import save_adaptive_ledger
+from murmur_voice.adaptive_store import AdaptiveLedger, record_evidence
 from murmur_voice.config import (
     load_config,
     load_corrections as load_corrections_file,
     load_vocabulary,
 )
 from murmur_voice.data_collection import DataCollectionConfig
+from murmur_voice.interaction import InteractionConfig, load_interaction_config
 from murmur_voice.microphone_policy import (
     DEFAULT_MICROPHONE_PRIORITY,
     MicrophonePolicyConfig,
@@ -20,6 +25,7 @@ from murmur_voice.microphone_policy import (
 from murmur_voice.settings_controller import (
     SYSTEMCTL,
     VOICE_SERVICE,
+    DatasetStatistics,
     KeyState,
     ServiceSnapshot,
     SettingsController,
@@ -66,11 +72,38 @@ def _controller(tmp_path, runner=None, status_reader=None):
         ),
         "data_collection_path": tmp_path / "private" / "data-collection.json",
         "microphone_policy_path": tmp_path / "private" / "microphone-priority.json",
+        "interaction_path": tmp_path / "private" / "interaction.json",
         "runner": runner or RecordingRunner(),
     }
     if status_reader is not None:
         options["status_reader"] = status_reader
     return SettingsController(**options)
+
+
+def _write_usage_summary(
+    selected,
+    utterance_id,
+    *,
+    recorded_at,
+    duration_ms,
+    character_count,
+):
+    summary = selected / "openvoiceinput-dataset-v1" / "usage" / f"{utterance_id}.json"
+    summary.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "openvoiceinput-private-usage-summary",
+                "utterance_id": utterance_id,
+                "recorded_at_utc": recorded_at,
+                "audio_duration_ms": duration_ms,
+                "non_whitespace_character_count": character_count,
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary.chmod(0o600)
+    return summary
 
 
 def test_key_save_is_private_never_runs_service_or_contacts_provider(tmp_path):
@@ -99,6 +132,33 @@ def test_key_error_never_contains_the_submitted_key(tmp_path):
 
     assert secret not in str(captured.value)
     assert "that-must-not-appear" not in str(captured.value)
+
+
+def test_provider_selection_is_secret_free_and_key_replacement_preserves_it(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+
+    selected = controller.save_provider("qwen-secret", "qwen")
+
+    assert selected.provider == "qwen"
+    assert selected.model == "qwen-audio-3.0-asr-flash-streaming"
+    assert controller.provider_selection() == selected
+    assert "qwen-secret" not in repr(selected)
+    controller.save_key("replacement-secret")
+    loaded = load_config(tmp_path / "private" / "voice.json")
+    assert loaded.provider == "qwen"
+    assert loaded.api_key == "replacement-secret"
+    assert runner.calls == []
+
+
+def test_provider_selection_rejects_planned_backend_without_leaking_key(tmp_path):
+    controller = _controller(tmp_path)
+    secret = "minimax-secret-sentinel"
+
+    with pytest.raises(SettingsError) as captured:
+        controller.save_provider(secret, "minimax")
+
+    assert secret not in str(captured.value)
 
 
 def test_key_clear_requires_inactive_service_and_never_contacts_provider(tmp_path):
@@ -243,6 +303,49 @@ def test_correction_load_error_never_contains_existing_private_text(tmp_path):
     assert private_text not in str(captured.value)
     assert "must-not-appear" not in str(captured.value)
     assert runner.calls == []
+
+
+def test_adaptive_snapshot_exposes_counts_recent_reason_and_confirmable_candidate(
+    tmp_path,
+):
+    controller = _controller(tmp_path)
+    path = tmp_path / "private" / "adaptive-corrections.json"
+    ledger = record_evidence(
+        AdaptiveLedger(),
+        "Ostro",
+        "Austral",
+        state="candidate",
+        category="recognition",
+        evidence="medium",
+    )
+    save_adaptive_ledger(ledger, path)
+
+    snapshot = controller.load_adaptive_learning()
+
+    assert snapshot.statistics["candidate"] == 1
+    assert snapshot.last_result is None
+    assert len(snapshot.review_entries) == 1
+    assert snapshot.review_entries[0].state == "candidate"
+
+    assert controller.confirm_adaptive_learning("Ostro", "Austral") is True
+    confirmed = controller.load_adaptive_learning()
+    assert confirmed.statistics["active"] == 1
+    assert confirmed.statistics["candidate"] == 0
+    assert confirmed.last_result["reason_code"] == "explicitly-activated"
+
+
+def test_explicit_adaptive_feedback_is_available_when_auto_capture_is_absent(tmp_path):
+    controller = _controller(tmp_path)
+
+    reason = controller.submit_adaptive_feedback(
+        "Ostro uses openai",
+        "Austral uses OpenAI",
+    )
+
+    assert reason == "explicit-feedback-activated"
+    snapshot = controller.load_adaptive_learning()
+    assert snapshot.statistics["active"] == 2
+    assert snapshot.last_result["reason_code"] == "explicit-feedback-activated"
 
 
 def test_status_start_and_stop_use_only_fixed_argv_without_a_shell(tmp_path):
@@ -436,6 +539,133 @@ def test_data_collection_defaults_off_and_save_never_runs_service(tmp_path):
     assert saved.dataset_id is not None
     assert controller.load_data_collection() == saved
     assert runner.calls == []
+
+
+def test_interaction_defaults_and_save_are_private_local_and_hot_loaded(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+
+    assert controller.load_interaction() == InteractionConfig()
+
+    saved = controller.save_interaction("push_to_talk", 250, 90)
+    path = tmp_path / "private" / "interaction.json"
+
+    assert saved == InteractionConfig("push_to_talk", 250, 90)
+    assert load_interaction_config(path) == saved
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert runner.calls == []
+
+
+def test_interaction_rejects_invalid_mode_without_running_service(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+
+    with pytest.raises(SettingsError, match="could not be saved safely"):
+        controller.save_interaction("private-invalid-mode", 180, 120)
+
+    assert not (tmp_path / "private" / "interaction.json").exists()
+    assert runner.calls == []
+
+
+def test_dataset_statistics_are_disabled_without_touching_storage(tmp_path):
+    controller = _controller(tmp_path)
+
+    assert controller.load_dataset_statistics() == DatasetStatistics("disabled")
+
+
+def test_dataset_statistics_use_only_content_free_usage_summaries(tmp_path):
+    controller = _controller(tmp_path)
+    selected = tmp_path / "personal-asr-records"
+    selected.mkdir()
+    controller.save_data_collection(True, selected)
+    _write_usage_summary(
+        selected,
+        "utterance-today",
+        recorded_at="2026-08-31T00:05:00Z",
+        duration_ms=12_500,
+        character_count=88,
+    )
+    _write_usage_summary(
+        selected,
+        "utterance-yesterday",
+        recorded_at="2026-08-30T23:55:00Z",
+        duration_ms=7_500,
+        character_count=32,
+    )
+    utterances = selected / "openvoiceinput-dataset-v1" / "utterances"
+    transcript_trap = utterances / "utterance-today"
+    transcript_trap.mkdir()
+    # The scanner must not open this transcript-bearing record. A directory at
+    # the same path would fail immediately if it tried.
+    (transcript_trap / "record.json").mkdir()
+    (utterances / "legacy-record").mkdir()
+
+    statistics = controller.load_dataset_statistics(
+        now=datetime(2026, 8, 31, 1, 0, tzinfo=timezone.utc)
+    )
+
+    assert statistics == DatasetStatistics(
+        state="ready",
+        today_characters=88,
+        today_seconds=12.5,
+        today_utterances=1,
+        total_characters=120,
+        total_seconds=20.0,
+        total_utterances=2,
+        latest_recorded_at=datetime(2026, 8, 31, 0, 5, tzinfo=timezone.utc),
+    )
+
+
+def test_dataset_statistics_report_unavailable_and_never_recreate_mount(tmp_path):
+    controller = _controller(tmp_path)
+    selected = tmp_path / "mounted-records"
+    selected.mkdir()
+    controller.save_data_collection(True, selected)
+    dataset_root = selected / "openvoiceinput-dataset-v1"
+    moved = tmp_path / "disconnected-dataset"
+    dataset_root.rename(moved)
+
+    assert controller.load_dataset_statistics() == DatasetStatistics("unavailable")
+    assert not dataset_root.exists()
+
+
+def test_legacy_dataset_without_usage_index_is_not_backfilled(tmp_path):
+    controller = _controller(tmp_path)
+    selected = tmp_path / "personal-asr-records"
+    selected.mkdir()
+    controller.save_data_collection(True, selected)
+    usage_root = selected / "openvoiceinput-dataset-v1" / "usage"
+    usage_root.rmdir()
+    transcript_trap = (
+        selected
+        / "openvoiceinput-dataset-v1"
+        / "utterances"
+        / "legacy-record"
+        / "record.json"
+    )
+    transcript_trap.parent.mkdir()
+    transcript_trap.mkdir()
+
+    assert controller.load_dataset_statistics() == DatasetStatistics("unindexed")
+    assert not usage_root.exists()
+
+
+def test_dataset_statistics_skip_invalid_summary_without_private_output(tmp_path):
+    controller = _controller(tmp_path)
+    selected = tmp_path / "personal-asr-records"
+    selected.mkdir()
+    controller.save_data_collection(True, selected)
+    summary = selected / "openvoiceinput-dataset-v1" / "usage" / "invalid-record.json"
+    private_text = "private-transcript-that-must-not-appear"
+    summary.write_text(private_text, encoding="utf-8")
+    summary.chmod(0o600)
+
+    statistics = controller.load_dataset_statistics()
+
+    assert statistics.state == "limited"
+    assert statistics.invalid_summaries == 1
+    assert private_text not in repr(statistics)
 
 
 def test_data_collection_enable_requires_absolute_existing_folder(tmp_path):

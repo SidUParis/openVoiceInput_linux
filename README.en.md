@@ -19,7 +19,7 @@
 
 _This interaction concept animation uses synthetic text to illustrate the
 implemented caret-local flow. It is not a screen recording or ASR call; real
-dictation in this alpha uses the user's own Volcengine account._
+dictation uses the online provider selected by the user._
 
 > [!IMPORTANT]
 > This is the secondary English edition of a public alpha for **Ubuntu 24.04
@@ -47,6 +47,14 @@ system-wide shortcut automatically; bind any key you prefer to:
 murmur-voice-daemon toggle
 ```
 
+The settings window also offers push-to-talk. An integration with genuine
+key-down/key-up events calls `murmur-voice-daemon press` on press and
+`murmur-voice-daemon release` on release. The project does not hard-code Right
+Alt or any other key. Normal GNOME/KDE shortcuts provide an activation event
+and suit `toggle`; generic Wayland shortcuts do not guarantee global release,
+so push-to-talk requires a desktop, keyboard, or accessibility tool that
+really supplies both edges. The package does not scan all `/dev/input` devices.
+
 The `.deb` is the normal evaluation path. Maintainers and users who need to
 verify every bundled wheel, hash and SBOM can instead follow the
 [reproducible preview archive procedure](docs/offline-preview.md).
@@ -63,10 +71,12 @@ simulate typing.
 ### Learns a precise correction, not your whole document
 
 After a final commit, the engine can observe the same IBus field for at most
-five seconds. One strict replacement inside the committed span may become a
-private correction for a later dictation. It does not monitor global keys,
-AT-SPI, the clipboard, Rime history, or unrelated text. Applications without
-trustworthy IBus surrounding-text support simply do not learn.
+five seconds. One strong spelling or terminology replacement can activate;
+several independent edits are retained as review candidates, while conflicts
+stay isolated. Settings shows the latest reason and offers an explicit
+provider-text / preferred-text fallback for applications without trustworthy
+IBus surrounding-text support. It does not monitor global keys, AT-SPI, the
+clipboard, Rime history, or unrelated text.
 
 This event-driven observation is enabled by default after a nonempty final in
 the current alpha; the Settings window does not yet expose a disable switch.
@@ -80,6 +90,14 @@ local or already-mounted folder selected by the user. In this alpha the JSON
 contains an **unreviewed provider result**; user edits do not yet backfill the
 training record, and `spoken_verbatim` / `preferred_output` remain unset until
 a future review workflow.
+
+The immutable utterance directory remains the two-file `audio.wav` +
+`record.json` contract. Captured correction decisions are append-only events
+below `feedback/<utterance_id>/`; they do not rewrite the base record. A separate transcript-free
+`usage/<utterance_id>.json` index powers the dashboard's daily and cumulative
+counts. The dashboard reads that index in the background; it never opens or
+shows transcript labels. Collection-off does not scan an old destination, and
+a disconnected mount is shown as unavailable rather than as zero usage.
 
 ### A lightweight client, not a bundled model
 
@@ -97,10 +115,13 @@ installed.
 
 ## Cloud, privacy and cost
 
-The only ASR backend implemented today is **Volcengine BigModel ASR 2.0**. It
-requires internet access, an activated speech service and the user's own API
-key; usage is billed under that account. This project does not ship a shared
-key and does not yet provide local ASR.
+**Volcengine BigModel ASR 2.0** remains the default and the only provider path
+validated with a real key on the maintainer workstation. Alpha.5 also contains
+reviewed Qwen streaming and OpenAI batch transcription adapters; both have
+fake-transport protocol coverage but no real-key acceptance claim yet. MiniMax
+is visibly planned rather than backed by an invented undocumented endpoint.
+Every provider requires the user's own account and billing. The project ships
+no shared key and no local ASR; see [provider details](docs/provider-backends.md).
 
 The voice path is transcription, not generative writing. Provider-side DDC,
 punctuation, segmentation and inverse text normalization may clean a faithful
@@ -179,6 +200,8 @@ supports explicit commands:
 ```bash
 murmur-voice-daemon start
 murmur-voice-daemon stop
+murmur-voice-daemon press
+murmur-voice-daemon release
 murmur-voice-daemon cancel
 murmur-voice-daemon status
 ```

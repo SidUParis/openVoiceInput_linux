@@ -117,7 +117,7 @@ class DocumentationAssetTests(unittest.TestCase):
         width, height, depth, colour, compression, filtering, interlace = struct.unpack(
             ">IIBBBBB", chunks[0][1]
         )
-        self.assertEqual((width, height), (900, 820))
+        self.assertEqual((width, height), (1020, 900))
         self.assertEqual((depth, colour), (8, 2))
         self.assertEqual((compression, filtering, interlace), (0, 0, 0))
 

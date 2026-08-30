@@ -4,7 +4,7 @@ This directory contains the first self-contained voice-daemon MVP. It no
 longer imports or runs a separate Doubao Murmur checkout. The foreground
 daemon captures 16 kHz mono PCM, streams it to Volcengine bigmodel_async,
 sends cumulative hypotheses and one authoritative final to the existing
-org.murmur.IME.Preedit1 engine, briefly observes one same-focus correction,
+org.murmur.IME.Preedit1 engine, briefly observes bounded same-focus corrections,
 and then restores the previously selected IBus engine.
 
 There is no transcription window and no clipboard/paste fallback. Transcript
@@ -34,11 +34,13 @@ system PyGObject package:
     python3 -m venv --system-site-packages .venv
     PYTHONNOUSERSITE=1 .venv/bin/pip install -e '.[test]'
 
-## Private key-only configuration
+## Private provider configuration
 
-The fallback configuration contains only the Volcengine API key. Provider
-endpoint, 2.0 resource ID, two-pass recognition, DDC, ITN, punctuation,
-sentence settings, and 200 ms chunks use reviewed defaults.
+The legacy fallback configuration contains only the Volcengine API key. A
+version-2 private configuration additionally selects one reviewed provider and
+fixed model. Provider endpoints are not user-controlled. Volcengine's 2.0
+resource ID, two-pass recognition, DDC, ITN, punctuation, sentence settings,
+and 200 ms chunks continue to use reviewed defaults.
 
 Each user must first activate the matching BigModel streaming speech service
 in their own Volcengine project. Audio usage, quota, and billing belong to that
@@ -101,9 +103,10 @@ The daemon safely reloads the file before every new dictation. A change affects
 the next dictation without restarting the foreground process or installed user
 service; an invalid replacement fails closed before microphone/provider use.
 
-Each ASR request then sends only those explicit terms to Volcengine using the
-provider's documented `request.context` hotwords JSON string; empty lists omit
-`context`. Terms never come from command arguments, clipboard, selected text,
+Each ASR request then sends only those explicit terms through the selected
+provider's reviewed context mechanism. Volcengine receives its documented
+`request.context` hotwords JSON string; Qwen receives request vocabulary and
+OpenAI receives a prompt. Terms never come from command arguments, clipboard, selected text,
 typing history, documents, transcripts, or the Rime database, and they are
 never written to logs. Provider-side handling follows the user's Volcengine
 account policy.
@@ -141,14 +144,17 @@ new dictation, so changing them does not require a service restart.
 
 Each saved pair is sent with every new dictation in Volcengine's documented
 `request.context.correct_words` map. After a nonempty authoritative final, the
-current alpha enables a bounded five-second adaptive observation
-by default. If the same focused field supplies trustworthy IBus surrounding
-text and the user makes one conservative replacement, only that bounded pair,
-state, and support count may be saved in private
-`adaptive-corrections.json`. It does not retain a separate transcript,
-surrounding snapshot, edit stream, or audio. The settings window does not yet
-offer an adaptive disable/manage control. The client never runs a second local
-string replacement after ASR. Because Volcengine
+current alpha enables a bounded five-second adaptive observation by default.
+If the same focused field supplies trustworthy IBus surrounding text, one
+high-confidence replacement can activate immediately; multiple independent
+replacements become inactive review candidates. The private version-2
+`adaptive-corrections.json` contains only bounded pairs, classification,
+state, support, and a transcript-free recent result. Version-1 ledgers migrate
+safely. The settings window shows counts, reasons, review candidates, explicit
+confirmation, and a manual whole-utterance fallback for applications without
+surrounding-text support; only derived bounded pairs are persisted. The client
+never reads the clipboard or global keys and never runs a second local string
+replacement after ASR. Because the configured provider
 does not publish request-level pair limits or matching-boundary guarantees,
 this feature is labelled experimental and uses conservative local limits.
 
@@ -174,6 +180,13 @@ audio format/frame counts and hashes, provider/model identity, and three label
 roles. `provider_final` is `teacher-unreviewed`: it is a pseudo-label, not
 ground truth. `spoken_verbatim` and `preferred_output` are both null/unreviewed
 until a separate human-review workflow exists.
+
+After post-commit learning finishes, an enabled collection may add an atomic,
+append-only `feedback/<utterance_id>/<event_id>.json` event with bounded
+correction pairs, classifications, decisions, counts, and the result code.
+Every utterance directory remains exactly `audio.wav + record.json`; the writer
+never changes that base record, does not retain surrounding input-field text,
+and writes no feedback event when collection is disabled.
 
 The active recorder is bounded by the same 600-second audio limit, and the
 writer queue holds at most two completed records. WAV encoding, hashing, fsync,
@@ -208,8 +221,11 @@ From another process or a desktop shortcut:
     .venv/bin/murmur-voice-daemon toggle
     .venv/bin/murmur-voice-daemon start
     .venv/bin/murmur-voice-daemon stop
+    .venv/bin/murmur-voice-daemon press
+    .venv/bin/murmur-voice-daemon release
     .venv/bin/murmur-voice-daemon cancel
     .venv/bin/murmur-voice-daemon status
+    .venv/bin/murmur-voice-daemon adaptive-status
 
 Commands use a bounded mode-0600 Unix socket strictly below
 $XDG_RUNTIME_DIR; the daemon refuses missing, public, foreign-owned, or
@@ -219,6 +235,23 @@ out-of-tree runtime paths. Signals provide the same minimum control surface:
 - SIGUSR2: stop;
 - SIGHUP: cancel;
 - SIGINT or SIGTERM: cancel and shut down.
+
+`interaction.json` selects `toggle` (the default) or `push_to_talk`. The
+daemon reloads it on each new press. In push-to-talk mode a successful press
+owns the session it started and release stops only that session; repeated
+key-down is ignored, an accidental hold shorter than the configured threshold
+is cancelled, Escape/cancel clears ownership, and a bounded watchdog stops a
+session whose release was lost. A press during the adaptive-observation lease
+atomically finishes that lease before starting the next utterance.
+
+The package exposes these press/release commands as a minimal integration
+interface but deliberately does not choose or monitor a physical key. A
+normal desktop activation shortcut works for `toggle`. Push-to-talk requires
+an integration which can emit distinct key-down and key-up events. Generic
+Wayland global shortcuts do not reliably expose release; the daemon neither
+claims otherwise nor scans all evdev devices. X11-specific or compositor-
+specific helpers remain external integrations until they can be permissioned
+and tested independently.
 
 The microphone starts only after the focused engine accepts Acquire. Network
 work runs on a private asyncio thread in this separate daemon, never in the
@@ -302,8 +335,9 @@ dataset, or IBus engine.
 
 ## Deliberate MVP limits
 
-- No global-hotkey registration or floating recording indicator is included
-  yet. A desktop shortcut can bind the implemented toggle command.
+- No global-hotkey registration or floating recording indicator is included.
+  A desktop shortcut can bind `toggle`; press/release is available for tools
+  that genuinely provide both key edges.
 - The current murmur-voice prototype is voice-only. While temporarily
   selected, ordinary keys pass through, but stock ibus-rime does not compose
   Chinese. Combining Rime Ice and voice in one librime-capable engine remains

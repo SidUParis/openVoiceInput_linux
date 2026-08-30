@@ -5,6 +5,34 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.5] - 2026-08-31
+
+### Added
+
+- The public daemon now exposes configurable `toggle` and `push_to_talk`
+  interaction modes. The press/release state machine ignores key repeat,
+  cancels accidental short holds, bounds a lost release, clears ownership on
+  cancel/error, and safely starts a new utterance from the observation state.
+- The native settings window can select the interaction mode and its bounded
+  hold/release safety values without hard-coding a physical key. The packaged
+  user-service passes the private interaction policy explicitly.
+- Adaptive learning v2 captures several independent replacements as inactive
+  review candidates, activates one high-confidence replacement immediately,
+  persists transcript-free result reasons and counts, and provides explicit
+  confirmation plus a cross-application feedback entry in settings.
+- Opted-in datasets can receive append-only atomic
+  `feedback/<utterance_id>/<event_id>.json` events with bounded correction
+  decisions. Every utterance remains strictly `audio.wav + record.json`, the
+  base record is never changed, and disabled collection writes no feedback.
+- A provider-neutral ASR registry now keeps microphone, IBus, retention, and
+  session behavior independent of the cloud transport. Volcengine remains
+  the default; reviewed Qwen real-time and OpenAI batch adapters can be chosen
+  in settings or the CLI, while MiniMax stays visibly planned rather than
+  pretending to expose an undocumented speech-to-text API.
+- The home dashboard reports today's and cumulative character, duration, and
+  utterance counts from bounded `usage/*.json` summaries. It never opens an
+  audio file, `record.json`, or transcript to calculate those counters.
+
 ### Changed
 
 - The native GTK4 settings window now uses a Chinese-first, task-oriented
@@ -22,12 +50,39 @@ here. The project has not published a stable release yet.
 - AppStream metadata now includes the sanitized Chinese settings screenshot
   and the same native, lightweight-client boundary for graphical package
   browsers.
+- Shortcut documentation now distinguishes a cross-desktop activation command
+  from true key-down/key-up delivery: toggle works with normal GNOME/KDE
+  shortcuts, while push-to-talk requires an integration that exposes release.
+  The project does not claim a generic Wayland global-release hook or scan all
+  input devices.
+- Version-1 adaptive ledgers migrate safely to a five-state version-2 schema
+  (`candidate`, `active`, `conflicted`, `suspended`, `archived`). Manual rules,
+  conflict/cycle suppression, and the provider's bounded correction view remain
+  authoritative.
 
 ### Build and quality
 
 - Exact-commit Debian CI now rejects packages larger than 5 MiB or an
   `Installed-Size` above 10 MiB, so future UI work cannot silently replace the
   lightweight native client with a large runtime.
+
+### Known limitations
+
+- Qwen and OpenAI transports have comprehensive fake-protocol tests but have
+  not been exercised with real user keys in this release; MiniMax is not a
+  selectable backend. Volcengine remains the only physically validated
+  provider path on the maintainer workstation.
+- Generic desktop activation shortcuts support toggle mode. Push-to-talk needs
+  a desktop, keyboard, or helper that emits distinct press and release events;
+  the application does not claim a universal Wayland release hook.
+- Automatic correction still depends on the focused application exposing a
+  trustworthy post-commit edit. When it cannot, settings offers an explicit
+  provider-text / preferred-text fallback instead of reading the clipboard or
+  globally logging keys.
+- Dashboard counters begin with newly published usage summaries and remain
+  unavailable while collection is disabled or its mounted directory is
+  offline. Legacy transcript-bearing records are deliberately not scanned to
+  backfill statistics.
 
 ## [0.1.0-alpha.4] - 2026-08-30
 

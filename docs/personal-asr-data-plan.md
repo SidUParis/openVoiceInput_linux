@@ -5,7 +5,7 @@
 The first collection layer is implemented; model work is not. Collection is
 disabled by default and remains separate from adaptive correction. When a user
 explicitly enables it and chooses an existing absolute local or mounted folder,
-the daemon can retain each accepted utterance as a versioned WAV/JSON pair
+the daemon can retain each accepted utterance as a versioned WAV/JSON record
 under `openvoiceinput-dataset-v1`.
 
 This layer does not review labels, authenticate to or mount Orange, provide
@@ -58,6 +58,12 @@ and no-final sessions publish nothing. One random utterance directory contains:
 - Volcengine provider/model/resource identity;
 - the three text roles and review states described above.
 
+The immutable v1 utterance directory remains the established two-file
+`audio.wav` + `record.json` contract. After that pair is published, a separate
+dataset-level `usage/<utterance_id>.json` index stores only the utterance ID,
+timestamp, audio duration and non-whitespace character count. Existing training
+tools therefore do not see a third file inside an utterance record.
+
 The active recorder stores at most the 600-second product limit in bounded
 memory. A bounded background queue performs WAV encoding, hashing, sync, and
 publication. A record is first completed below `.pending` and atomically
@@ -74,6 +80,15 @@ The audio and manifest stay outside the public Git repository. Keys, tokens,
 desktop text surrounding the utterance, clipboard contents, global keyboard
 events, and Rime data are never dataset fields. The five-second adaptive
 ledger is not itself an audio dataset and must not be reinterpreted as one.
+
+The GTK dashboard reads only the dataset marker and bounded
+`usage/<utterance_id>.json`
+summaries on a background thread. It does not open `record.json`, audio, or
+display recent transcript text. Records created before the summary was added
+remain valid training candidates but are reported as unindexed rather than
+silently inspecting their labels. With collection disabled, the dashboard does
+not scan a previously selected folder; a disconnected mount is reported as
+unavailable rather than as zero records.
 
 Saving disable or a new destination shares the publication lock with the
 background writer. Once that settings save returns, older queued or staged,
@@ -107,7 +122,8 @@ pending item rather than drop valuable data silently.
 
 ## Work list before training
 
-1. **Implemented:** versioned, disabled-by-default WAV/JSON collection with the
+1. **Implemented:** versioned, disabled-by-default WAV/JSON collection with a
+   transcript-free usage summary and private aggregate dashboard, plus the
    three separate text roles, exact audio hashes, atomic publication, hot
    enable/disable/path reload, and no change to the provider stream.
 2. Stabilize schema-v1 migration/validation policy before declaring long-term

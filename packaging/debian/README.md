@@ -47,9 +47,10 @@ sudo apt remove open-voice-input-linux
 
 The package intentionally owns no file under `~/.config/murmur-ime` and no
 dataset directory. Install, upgrade, remove, and purge therefore neither read
-nor alter the API key, vocabulary, corrections, microphone policy, collection
-choice, or user-selected training data. The read-only pre-install shadow check
-tests fixed legacy unit, desktop-entry, and ownership-manifest pathnames but
+nor alter the API key, vocabulary, corrections, interaction mode, microphone
+policy, collection choice, or user-selected training data. The read-only
+pre-install shadow check tests fixed legacy unit, desktop-entry, and
+ownership-manifest pathnames but
 never opens a user file. The remaining minimal maintainer scripts call only
 Ubuntu's `deb-systemd-invoke --user`: install reloads running user managers and
 starts the microphone-free engine; upgrade restarts only enabled/active project

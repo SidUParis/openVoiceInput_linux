@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import json
+import os
+import stat
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from .adaptive_runtime import load_adaptive_ledger
+from .adaptive_runtime import (
+    adaptive_review_entries,
+    adaptive_status_document,
+    confirm_adaptive_correction,
+    load_adaptive_ledger,
+    MAX_EXPLICIT_FEEDBACK_TEXT_CHARACTERS,
+    submit_explicit_feedback,
+)
 from .config import (
     ConfigError,
     MAX_CORRECTION_PAIRS,
@@ -25,6 +36,7 @@ from .config import (
     normalize_vocabulary_terms,
     save_api_key,
     save_corrections as save_corrections_file,
+    save_provider_config,
     save_vocabulary,
 )
 from .control import ControlError, request_command
@@ -33,6 +45,12 @@ from .data_collection import (
     default_data_collection_config_path,
     load_data_collection_config,
     save_data_collection_config,
+)
+from .interaction import (
+    InteractionConfig,
+    default_interaction_config_path,
+    load_interaction_config,
+    save_interaction_config,
 )
 from .microphone_policy import (
     MicrophonePolicyConfig,
@@ -46,6 +64,12 @@ SYSTEMCTL = "/usr/bin/systemctl"
 SYSTEMCTL_TIMEOUT_SECONDS = 5.0
 CORRECTION_PAIR_LIMIT = MAX_CORRECTION_PAIRS
 CORRECTION_TEXT_LIMIT = MAX_CORRECTION_TEXT_CHARACTERS
+_DATASET_DIRECTORY = "openvoiceinput-dataset-v1"
+_DATASET_MARKER_KIND = "openvoiceinput-personal-asr-dataset"
+_USAGE_SUMMARY_KIND = "openvoiceinput-private-usage-summary"
+_USAGE_SUMMARY_MAX_BYTES = 16 * 1024
+_DATASET_STATISTICS_MAX_RECORDS = 100_000
+ADAPTIVE_FEEDBACK_TEXT_LIMIT = MAX_EXPLICIT_FEEDBACK_TEXT_CHARACTERS
 
 _ACTIVE_STATES = frozenset(
     {
@@ -61,7 +85,10 @@ _SESSION_STATES = frozenset({"idle", "starting", "recording", "stopping", "obser
 _STATUS_CODES = frozenset(
     {
         "adaptive-correction-failed",
+        "adaptive-correction-candidate",
+        "adaptive-correction-conflicted",
         "adaptive-correction-learned",
+        "adaptive-correction-skipped",
         "audio-backpressure",
         "capture-start-failed",
         "cancelled",
@@ -108,6 +135,45 @@ class ServiceSnapshot:
     status_code: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderSelection:
+    """Secret-free provider state safe to render in settings."""
+
+    provider: str
+    model: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetStatistics:
+    """Content-free counters derived only from local usage metadata."""
+
+    state: str
+    today_characters: int = 0
+    today_seconds: float = 0.0
+    today_utterances: int = 0
+    total_characters: int = 0
+    total_seconds: float = 0.0
+    total_utterances: int = 0
+    latest_recorded_at: datetime | None = None
+    invalid_summaries: int = 0
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class AdaptiveReviewEntry:
+    wrong: str
+    canonical: str
+    state: str
+    support: int
+    category: str
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class AdaptiveLearningSnapshot:
+    statistics: dict[str, int]
+    last_result: dict[str, Any] | None
+    review_entries: tuple[AdaptiveReviewEntry, ...]
+
+
 class CompletedProcessLike(Protocol):
     returncode: int
     stdout: str | bytes | None
@@ -129,6 +195,7 @@ class SettingsController:
         adaptive_corrections_path: str | Path | None = None,
         data_collection_path: str | Path | None = None,
         microphone_policy_path: str | Path | None = None,
+        interaction_path: str | Path | None = None,
         runner: Runner = subprocess.run,
         status_reader: StatusReader = request_command,
     ) -> None:
@@ -160,6 +227,11 @@ class SettingsController:
             if microphone_policy_path is not None
             else default_microphone_policy_config_path()
         )
+        self._interaction_path = (
+            Path(interaction_path)
+            if interaction_path is not None
+            else default_interaction_config_path()
+        )
         self._runner = runner
         self._status_reader = status_reader
 
@@ -173,6 +245,15 @@ class SettingsController:
                 return KeyState.MISSING
             return KeyState.INVALID
         return KeyState.READY
+
+    def provider_selection(self) -> ProviderSelection | None:
+        """Return the selected backend without ever returning its key."""
+
+        try:
+            config = load_config(self._config_path)
+        except ConfigError:
+            return None
+        return ProviderSelection(config.provider, config.model)
 
     def load_vocabulary(self) -> tuple[str, ...]:
         """Load the explicit private vocabulary for editing."""
@@ -195,13 +276,110 @@ class SettingsController:
             ) from error
         return tuple((pair.wrong, pair.canonical) for pair in pairs)
 
+    def load_adaptive_learning(self) -> AdaptiveLearningSnapshot:
+        """Load counts, recent reason, and locally reviewable candidates."""
+
+        try:
+            status = adaptive_status_document(self._adaptive_corrections_path)
+            entries = adaptive_review_entries(self._adaptive_corrections_path)
+        except ConfigError as error:
+            raise SettingsError(
+                "Adaptive learning information could not be loaded safely."
+            ) from error
+        return AdaptiveLearningSnapshot(
+            statistics=dict(status["statistics"]),
+            last_result=(
+                dict(status["last_result"])
+                if status["last_result"] is not None
+                else None
+            ),
+            review_entries=tuple(
+                AdaptiveReviewEntry(
+                    entry.wrong,
+                    entry.canonical,
+                    entry.state,
+                    entry.support,
+                    entry.category,
+                )
+                for entry in entries
+            ),
+        )
+
+    def confirm_adaptive_learning(self, wrong: str, canonical: str) -> bool:
+        """Explicitly activate one candidate without restarting the service."""
+
+        try:
+            result = confirm_adaptive_correction(
+                self._adaptive_corrections_path,
+                self._corrections_path,
+                wrong,
+                canonical,
+            )
+        except (ConfigError, ValueError) as error:
+            raise SettingsError(
+                "The adaptive correction could not be confirmed safely."
+            ) from error
+        return result.activated_count > 0
+
+    def submit_adaptive_feedback(
+        self,
+        provider_text: str,
+        preferred_text: str,
+    ) -> str:
+        """Submit an explicit whole-utterance edit when auto-capture is absent."""
+
+        try:
+            result = submit_explicit_feedback(
+                self._adaptive_corrections_path,
+                self._corrections_path,
+                self._vocabulary_path,
+                provider_text,
+                preferred_text,
+            )
+        except (ConfigError, ValueError) as error:
+            raise SettingsError(
+                "The explicit adaptive feedback could not be saved safely."
+            ) from error
+        return result.reason_code
+
     def save_key(self, api_key: str) -> None:
         """Persist a replacement key without testing it or restarting services."""
 
         try:
-            save_api_key(api_key, self._config_path)
+            try:
+                current = load_config(self._config_path)
+            except ConfigError:
+                current = None
+            if current is None or (
+                current.provider == "volcengine" and current.model is None
+            ):
+                save_api_key(api_key, self._config_path)
+            else:
+                save_provider_config(
+                    api_key,
+                    current.provider,
+                    current.model,
+                    self._config_path,
+                )
         except ConfigError as error:
             raise SettingsError("The API key could not be saved safely.") from error
+
+    def save_provider(
+        self,
+        api_key: str,
+        provider: str,
+        model: str | None = None,
+    ) -> ProviderSelection:
+        """Save one ready backend and its replacement key as one transaction."""
+
+        try:
+            save_provider_config(api_key, provider, model, self._config_path)
+            config = load_config(self._config_path)
+        except ConfigError as error:
+            raise SettingsError(
+                "The recognition provider could not be saved safely."
+            ) from error
+        return ProviderSelection(config.provider, config.model)
 
     def clear_key(self) -> bool:
         """Remove the local key only after proving the service is inactive."""
@@ -264,6 +442,115 @@ class SettingsController:
                 "The local data collection setting could not be loaded safely."
             ) from error
 
+    def load_dataset_statistics(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> DatasetStatistics:
+        """Aggregate content-free local usage summaries without opening transcripts."""
+
+        collection = self.load_data_collection()
+        if not collection.enabled:
+            return DatasetStatistics("disabled")
+        if collection.directory is None or collection.dataset_id is None:
+            return DatasetStatistics("unavailable")
+
+        dataset_root = collection.directory / _DATASET_DIRECTORY
+        try:
+            marker = _read_bounded_json(
+                dataset_root / "dataset.json",
+                _USAGE_SUMMARY_MAX_BYTES,
+            )
+            if marker != {
+                "schema_version": 1,
+                "kind": _DATASET_MARKER_KIND,
+                "dataset_id": collection.dataset_id,
+            }:
+                return DatasetStatistics("unavailable")
+            usage_root = dataset_root / "usage"
+            try:
+                usage_metadata = usage_root.lstat()
+            except FileNotFoundError:
+                # Datasets made before the private summary index remain valid.
+                # Do not inspect their transcript-bearing v1 records to backfill.
+                return DatasetStatistics("unindexed")
+            if (
+                not stat.S_ISDIR(usage_metadata.st_mode)
+                or usage_metadata.st_uid != os.getuid()
+                or stat.S_IMODE(usage_metadata.st_mode) != 0o700
+            ):
+                return DatasetStatistics("unavailable")
+        except (OSError, ValueError):
+            return DatasetStatistics("unavailable")
+
+        local_now = now or datetime.now().astimezone()
+        if local_now.tzinfo is None:
+            local_now = local_now.astimezone()
+        today = local_now.date()
+        today_characters = 0
+        today_seconds = 0.0
+        today_utterances = 0
+        total_characters = 0
+        total_seconds = 0.0
+        total_utterances = 0
+        latest_recorded_at: datetime | None = None
+        invalid_summaries = 0
+
+        try:
+            summaries = usage_root.iterdir()
+            for index, summary_path in enumerate(summaries):
+                if index >= _DATASET_STATISTICS_MAX_RECORDS:
+                    invalid_summaries += 1
+                    break
+                if summary_path.name.startswith("."):
+                    continue
+                if summary_path.suffix != ".json" or not _safe_summary_identifier(
+                    summary_path.stem
+                ):
+                    invalid_summaries += 1
+                    continue
+                try:
+                    summary = _read_bounded_json(
+                        summary_path,
+                        _USAGE_SUMMARY_MAX_BYTES,
+                    )
+                    recorded_at, duration_ms, character_count = _validate_usage_summary(
+                        summary,
+                        summary_path.stem,
+                    )
+                except (OSError, ValueError):
+                    invalid_summaries += 1
+                    continue
+                total_utterances += 1
+                total_characters += character_count
+                total_seconds += duration_ms / 1000
+                if latest_recorded_at is None or recorded_at > latest_recorded_at:
+                    latest_recorded_at = recorded_at
+                if recorded_at.astimezone(local_now.tzinfo).date() == today:
+                    today_utterances += 1
+                    today_characters += character_count
+                    today_seconds += duration_ms / 1000
+        except OSError:
+            return DatasetStatistics("unavailable")
+
+        if total_utterances:
+            state = "ready"
+        elif invalid_summaries:
+            state = "limited"
+        else:
+            state = "empty"
+        return DatasetStatistics(
+            state=state,
+            today_characters=today_characters,
+            today_seconds=today_seconds,
+            today_utterances=today_utterances,
+            total_characters=total_characters,
+            total_seconds=total_seconds,
+            total_utterances=total_utterances,
+            latest_recorded_at=latest_recorded_at,
+            invalid_summaries=invalid_summaries,
+        )
+
     def load_microphone_policy(self) -> MicrophonePolicyConfig:
         """Return the private, fixed-category input priority for presentation."""
 
@@ -272,6 +559,37 @@ class SettingsController:
         except ConfigError as error:
             raise SettingsError(
                 "The microphone priority setting could not be loaded safely."
+            ) from error
+
+    def load_interaction(self) -> InteractionConfig:
+        """Return the local press/release interaction preference."""
+
+        try:
+            return load_interaction_config(self._interaction_path)
+        except ConfigError as error:
+            raise SettingsError(
+                "The shortcut interaction setting could not be loaded safely."
+            ) from error
+
+    def save_interaction(
+        self,
+        interaction_mode: str,
+        minimum_hold_milliseconds: int,
+        release_timeout_seconds: int,
+    ) -> InteractionConfig:
+        """Save controls locally; the daemon hot-loads them on the next press."""
+
+        try:
+            save_interaction_config(
+                interaction_mode,
+                minimum_hold_milliseconds,
+                release_timeout_seconds,
+                self._interaction_path,
+            )
+            return load_interaction_config(self._interaction_path)
+        except (ConfigError, OSError) as error:
+            raise SettingsError(
+                "The shortcut interaction setting could not be saved safely."
             ) from error
 
     def save_microphone_priority(self, priority: Any) -> MicrophonePolicyConfig:
@@ -412,3 +730,79 @@ class SettingsController:
             )
         except (OSError, subprocess.SubprocessError) as error:
             raise SettingsError("The user service manager is unavailable.") from error
+
+
+def _read_bounded_json(path: Path, limit: int) -> Any:
+    """Read one small metadata file without following a final symlink."""
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+            or metadata.st_size > limit
+        ):
+            raise ValueError("metadata file is invalid")
+        with os.fdopen(descriptor, "rb", closefd=False) as source:
+            payload = source.read(limit + 1)
+        if len(payload) > limit:
+            raise ValueError("metadata file is too large")
+        return json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("metadata file is invalid") from error
+    finally:
+        os.close(descriptor)
+
+
+def _validate_usage_summary(
+    document: Any,
+    expected_utterance_id: str,
+) -> tuple[datetime, int, int]:
+    if not isinstance(document, dict) or set(document) != {
+        "schema_version",
+        "kind",
+        "utterance_id",
+        "recorded_at_utc",
+        "audio_duration_ms",
+        "non_whitespace_character_count",
+    }:
+        raise ValueError("usage summary is invalid")
+    if (
+        document["schema_version"] != 1
+        or document["kind"] != _USAGE_SUMMARY_KIND
+        or document["utterance_id"] != expected_utterance_id
+    ):
+        raise ValueError("usage summary identity is invalid")
+    duration_ms = document["audio_duration_ms"]
+    character_count = document["non_whitespace_character_count"]
+    if (
+        not isinstance(duration_ms, int)
+        or isinstance(duration_ms, bool)
+        or not 0 <= duration_ms <= 600_000
+        or not isinstance(character_count, int)
+        or isinstance(character_count, bool)
+        or not 0 <= character_count <= 1_000_000
+    ):
+        raise ValueError("usage summary counters are invalid")
+    raw_recorded_at = document["recorded_at_utc"]
+    if not isinstance(raw_recorded_at, str):
+        raise ValueError("usage summary timestamp is invalid")
+    try:
+        recorded_at = datetime.fromisoformat(raw_recorded_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("usage summary timestamp is invalid") from error
+    if recorded_at.tzinfo is None:
+        raise ValueError("usage summary timestamp is invalid")
+    return recorded_at, duration_ms, character_count
+
+
+def _safe_summary_identifier(value: str) -> bool:
+    return 1 <= len(value) <= 128 and all(
+        character.isascii() and (character.isalnum() or character in "-_")
+        for character in value
+    )

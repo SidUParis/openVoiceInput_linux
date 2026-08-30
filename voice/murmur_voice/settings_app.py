@@ -9,16 +9,26 @@ from collections.abc import Callable, Sequence
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .microphone_policy import (  # noqa: E402
     DEFAULT_MICROPHONE_PRIORITY,
     MICROPHONE_CATEGORIES,
 )
+from .interaction import (  # noqa: E402
+    DEFAULT_INTERACTION_MODE,
+    DEFAULT_MINIMUM_HOLD_MILLISECONDS,
+    DEFAULT_RELEASE_TIMEOUT_SECONDS,
+)
+from .providers import PROVIDER_DESCRIPTORS  # noqa: E402
 from .settings_controller import (  # noqa: E402
     CORRECTION_PAIR_LIMIT,
     CORRECTION_TEXT_LIMIT,
+    DatasetStatistics,
+    ADAPTIVE_FEEDBACK_TEXT_LIMIT,
+    AdaptiveLearningSnapshot,
     KeyState,
+    ProviderSelection,
     ServiceSnapshot,
     SettingsController,
     SettingsError,
@@ -39,6 +49,15 @@ _MICROPHONE_CATEGORY_DESCRIPTIONS = {
     "external": "其他 USB 或外接录音设备。",
     "built-in": "电脑自带的保底输入设备。",
 }
+
+_PROVIDERS_BY_ID = {
+    descriptor.provider_id: descriptor for descriptor in PROVIDER_DESCRIPTORS
+}
+_READY_PROVIDERS = tuple(
+    descriptor
+    for descriptor in PROVIDER_DESCRIPTORS
+    if descriptor.availability == "ready"
+)
 
 _SERVICE_LABELS = {
     "active": "运行中",
@@ -67,7 +86,10 @@ _STATUS_LABELS = {
     "microphone-unavailable": "没有可用麦克风，请重新连接或调整输入顺序",
     "microphone-policy-invalid": "麦克风顺序无效或不安全，请在设置中保存一个完整顺序",
     "adaptive-correction-failed": "自动纠错未能保存",
+    "adaptive-correction-candidate": "已捕获修改，等待你确认后启用",
+    "adaptive-correction-conflicted": "已捕获冲突修改，未自动启用",
     "adaptive-correction-learned": "已学习本次修改，后续听写会使用",
+    "adaptive-correction-skipped": "本次修改未生成全局纠错规则",
     "recognition-context-invalid": "识别上下文文件无效或不安全",
     "preedit-final-rejected": "当前输入框拒绝了最终文本",
     "preedit-lost": "已失去当前输入框焦点",
@@ -79,13 +101,38 @@ _STATUS_LABELS = {
     "start-timeout": "麦克风启动超时，请重试",
 }
 
+_ADAPTIVE_REASON_LABELS = {
+    "active-learned": "已自动启用高置信纠错",
+    "active-and-candidates-saved": "已启用明确项，其余已进入候选",
+    "active-suppressed": "规则已保留，但因冲突或覆盖关系未发送",
+    "candidates-saved": "多处修改已拆分为候选，等待确认",
+    "conflict-recorded": "发现同一误识别的不同写法，已暂停自动使用",
+    "diff-too-complex": "修改跨度过大，未在输入关键路径执行复杂比对",
+    "edit-outside-committed-span": "检测到听写结果之外的修改，未自动推断",
+    "explicitly-activated": "候选已由你明确确认",
+    "explicit-feedback-activated": "这次明确修改已拆分并启用",
+    "explicit-feedback-suppressed": "修改已保留，但安全规则阻止了自动下发",
+    "explicit-feedback-insertion-or-deletion": "修改主要是增删内容，未生成全局词汇规则",
+    "explicit-feedback-no-change": "两句内容相同，没有需要学习的修改",
+    "explicit-feedback-diff-too-complex": "两句差异跨度过大，未生成全局词汇规则",
+    "explicit-feedback-unsafe-or-broad-replacement": "修改更像整句润色，未生成全局词汇规则",
+    "insertion-or-deletion": "检测到增删内容；未当作全局词汇规则",
+    "no-change": "观察期内没有检测到修改",
+    "observation-handler-unavailable": "自动学习组件当前不可用",
+    "observation-timeout": "修改未在观察期内完成",
+    "selection-active": "结束时仍有文字被选中，未自动推断",
+    "surrounding-text-unavailable": "当前应用没有提供可信的修改文本",
+    "too-many-edits": "修改范围过多，未自动生成规则",
+    "unsafe-or-broad-replacement": "修改更像润色或宽泛重写，未生成全局规则",
+}
+
 _SETTINGS_CSS = """
 .settings-shell {
   background-color: @theme_bg_color;
 }
 
 .settings-sidebar-shell {
-  background-color: alpha(@theme_base_color, 0.72);
+  background-color: alpha(@theme_base_color, 0.82);
   border-right: 1px solid alpha(@theme_fg_color, 0.10);
 }
 
@@ -96,7 +143,7 @@ _SETTINGS_CSS = """
 }
 
 .settings-sidebar row:selected {
-  background-color: alpha(#3584e4, 0.16);
+  background-color: alpha(#1c71d8, 0.14);
 }
 
 .page-eyebrow {
@@ -112,24 +159,65 @@ _SETTINGS_CSS = """
 }
 
 .settings-card {
-  background-color: alpha(@theme_base_color, 0.94);
-  border: 1px solid alpha(@theme_fg_color, 0.10);
-  border-radius: 16px;
-  box-shadow: 0 2px 8px alpha(#000000, 0.08);
+  background-color: alpha(@theme_base_color, 0.96);
+  border: 1px solid alpha(@theme_fg_color, 0.09);
+  border-radius: 18px;
+  box-shadow: 0 3px 12px alpha(#000000, 0.07);
 }
 
 .hero-card {
-  background-color: alpha(#3584e4, 0.10);
-  border-color: alpha(#3584e4, 0.30);
+  background-image: linear-gradient(135deg, alpha(#1c71d8, 0.14), alpha(#62a0ea, 0.05));
+  border-color: alpha(#1c71d8, 0.24);
 }
 
-.status-tile {
+.status-tile,
+.metric-tile {
   background-color: alpha(@theme_fg_color, 0.055);
-  border-radius: 12px;
+  border-radius: 14px;
 }
 
 .status-value {
   font-weight: 700;
+}
+
+.metric-value {
+  font-size: 1.65rem;
+  font-weight: 800;
+}
+
+.metric-detail {
+  color: alpha(@theme_fg_color, 0.58);
+  font-size: 0.78rem;
+}
+
+.section-label {
+  color: alpha(@theme_fg_color, 0.72);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.quick-action {
+  background-color: alpha(@theme_fg_color, 0.035);
+  border: 1px solid alpha(@theme_fg_color, 0.09);
+  border-radius: 14px;
+  padding: 4px;
+}
+
+.quick-action:hover {
+  background-color: alpha(#1c71d8, 0.08);
+  border-color: alpha(#1c71d8, 0.22);
+}
+
+.success-text {
+  color: #2ec27e;
+}
+
+.warning-text {
+  color: #c88800;
+}
+
+.error-text {
+  color: #e01b24;
 }
 
 .soft-badge {
@@ -172,15 +260,20 @@ class SettingsWindow(Gtk.ApplicationWindow):
         controller: SettingsController | None = None,
         *,
         refresh_service_on_start: bool = True,
+        refresh_statistics_on_start: bool = True,
     ) -> None:
         super().__init__(application=application, title="Open Voice Input 设置")
-        self.set_default_size(900, 720)
-        self.set_size_request(720, 560)
+        self.set_default_size(1020, 900)
+        self.set_size_request(800, 620)
         self._controller = controller or SettingsController()
         self._service_busy = False
         self._collection_busy = False
+        self._statistics_busy = False
+        self._statistics_generation = 0
+        self._statistics_timeout_id = 0
         self._window_closed = False
         self._key_clear_armed = False
+        self._provider_selection = ProviderSelection("volcengine", None)
         self._correction_pairs: list[tuple[str, str]] = []
         self._microphone_priority: list[str] = list(DEFAULT_MICROPHONE_PRIORITY)
         self._data_collection_chooser: Gtk.FileChooserNative | None = None
@@ -217,8 +310,8 @@ class SettingsWindow(Gtk.ApplicationWindow):
 
         sidebar_shell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         sidebar_shell.add_css_class("settings-sidebar-shell")
-        sidebar_shell.set_size_request(188, -1)
-        sidebar_brand = Gtk.Label(label="设置", xalign=0)
+        sidebar_shell.set_size_request(196, -1)
+        sidebar_brand = Gtk.Label(label="工作台", xalign=0)
         sidebar_brand.add_css_class("title-3")
         sidebar_brand.set_margin_top(18)
         sidebar_brand.set_margin_start(16)
@@ -241,13 +334,18 @@ class SettingsWindow(Gtk.ApplicationWindow):
 
         overview_page = self._new_page(
             "overview",
-            "概览与服务",
-            "快速确认运行状态，并显式启动或停止语音服务。",
+            "首页",
+            "今天的使用概览、最近状态和常用入口都在这里。",
         )
         cloud_page = self._new_page(
             "cloud",
             "云端识别",
-            "管理火山引擎凭据与发送边界。",
+            "选择识别服务，并管理对应凭据与发送边界。",
+        )
+        interaction_page = self._new_page(
+            "interaction",
+            "快捷键与按住说话",
+            "选择点按切换或按住说话；具体按键始终由你或桌面环境决定。",
         )
         vocabulary_page = self._new_page(
             "vocabulary",
@@ -271,17 +369,17 @@ class SettingsWindow(Gtk.ApplicationWindow):
         )
 
         hero = self._append_card(overview_page, "hero-card")
-        hero_badge = Gtk.Label(label="轻量 · 原生 GTK4 · 不捆绑本地大模型")
+        hero_badge = Gtk.Label(label="IBus 原生 · 中文优先 · 轻量 GTK4")
         hero_badge.add_css_class("soft-badge")
         hero_badge.set_halign(Gtk.Align.START)
         hero.append(hero_badge)
-        hero_title = Gtk.Label(label="把声音直接写进当前输入框", xalign=0)
+        hero_title = Gtk.Label(label="让表达跟上你的思路", xalign=0)
         hero_title.add_css_class("title-1")
         hero.append(hero_title)
         hero_copy = Gtk.Label(
             label=(
                 "使用你设置的快捷键开始或结束听写。界面只负责小型本地配置与"
-                "状态控制，识别由你配置的云服务完成。"
+                "状态控制，识别结果直接进入当前光标；打开首页不会启动麦克风。"
             ),
             xalign=0,
             wrap=True,
@@ -289,10 +387,152 @@ class SettingsWindow(Gtk.ApplicationWindow):
         hero_copy.add_css_class("page-subtitle")
         hero.append(hero_copy)
 
+        today_card = self._append_card(overview_page)
+        today_heading_row = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=10,
+        )
+        today_heading_copy = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=4,
+        )
+        today_heading_copy.set_hexpand(True)
+        today_title = Gtk.Label(label="今天", xalign=0)
+        today_title.add_css_class("title-3")
+        today_heading_copy.append(today_title)
+        self.statistics_status_label = Gtk.Label(
+            label="正在准备本地统计…",
+            xalign=0,
+            wrap=True,
+        )
+        self.statistics_status_label.add_css_class("dim-label")
+        today_heading_copy.append(self.statistics_status_label)
+        today_heading_row.append(today_heading_copy)
+        self.refresh_statistics_button = Gtk.Button(
+            icon_name="view-refresh-symbolic",
+            tooltip_text="刷新本地使用统计",
+        )
+        self.refresh_statistics_button.add_css_class("flat")
+        self.refresh_statistics_button.connect(
+            "clicked", self._on_refresh_dataset_statistics
+        )
+        today_heading_row.append(self.refresh_statistics_button)
+        today_card.append(today_heading_row)
+
+        today_grid = Gtk.Grid(column_spacing=10, column_homogeneous=True)
+        self.today_characters_label = self._append_metric_tile(
+            today_grid,
+            0,
+            "今日字数",
+            "—",
+            "按非空白字符统计",
+        )
+        self.today_duration_label = self._append_metric_tile(
+            today_grid,
+            1,
+            "今日时长",
+            "—",
+            "已发布音频",
+        )
+        self.today_utterances_label = self._append_metric_tile(
+            today_grid,
+            2,
+            "听写次数",
+            "—",
+            "仅统计已发布记录",
+        )
+        today_card.append(today_grid)
+
+        cumulative_card = self._append_card(overview_page)
+        self._append_card_heading(
+            cumulative_card,
+            "累计使用",
+            "只汇总数据集根目录下不含正文的 usage 索引；不会打开或展示 transcript。",
+        )
+        cumulative_grid = Gtk.Grid(column_spacing=10, column_homogeneous=True)
+        self.total_characters_label = self._append_metric_tile(
+            cumulative_grid,
+            0,
+            "累计字数",
+            "—",
+            "隐私摘要覆盖范围内",
+        )
+        self.total_duration_label = self._append_metric_tile(
+            cumulative_grid,
+            1,
+            "累计时长",
+            "—",
+            "音频内容不会被读取",
+        )
+        self.total_utterances_label = self._append_metric_tile(
+            cumulative_grid,
+            2,
+            "累计听写",
+            "—",
+            "不包含暂存记录",
+        )
+        self.latest_activity_label = self._append_metric_tile(
+            cumulative_grid,
+            3,
+            "最近留存",
+            "—",
+            "只显示时间，不显示正文",
+        )
+        cumulative_card.append(cumulative_grid)
+
+        quick_card = self._append_card(overview_page)
+        self._append_card_heading(
+            quick_card,
+            "快捷操作",
+            "把常用设置放在手边；录音触发方式和识别服务可在后续版本扩展。",
+        )
+        quick_grid = Gtk.Grid(
+            column_spacing=10,
+            row_spacing=10,
+            column_homogeneous=True,
+        )
+        self._append_navigation_action(
+            quick_grid,
+            0,
+            0,
+            "format-text-symbolic",
+            "完善个人词表",
+            "姓名与常用术语",
+            "vocabulary",
+        )
+        self._append_navigation_action(
+            quick_grid,
+            1,
+            0,
+            "document-edit-symbolic",
+            "管理纠错学习",
+            "明确替换与自动学习",
+            "corrections",
+        )
+        self._append_navigation_action(
+            quick_grid,
+            0,
+            1,
+            "audio-input-microphone-symbolic",
+            "选择麦克风",
+            "调整输入设备顺序",
+            "microphones",
+        )
+        self._append_navigation_action(
+            quick_grid,
+            1,
+            1,
+            "folder-symbolic",
+            "查看数据留存",
+            "本地或已挂载目录",
+            "collection",
+        )
+        quick_card.append(quick_grid)
+
         status_card = self._append_card(overview_page)
         self._append_card_heading(
             status_card,
-            "当前状态",
+            "最近状态",
             "这里不显示密钥内容，也不会因为打开设置而启动录音。",
         )
         status_grid = Gtk.Grid(column_spacing=10, column_homogeneous=True)
@@ -343,12 +583,99 @@ class SettingsWindow(Gtk.ApplicationWindow):
             ),
         )
 
+        interaction_card = self._append_card(interaction_page)
+        self._append_card_heading(
+            interaction_card,
+            "交互模式",
+            "设置只决定按下与松开时的行为，不会抢占或硬编码任何物理按键。",
+        )
+        self.toggle_mode_button = Gtk.CheckButton(
+            label="点按切换：按一次开始，再按一次结束"
+        )
+        self.push_to_talk_mode_button = Gtk.CheckButton(
+            label="按住说话：按下开始，松开后生成最终文本"
+        )
+        self.push_to_talk_mode_button.set_group(self.toggle_mode_button)
+        self.toggle_mode_button.connect("toggled", self._on_interaction_mode_changed)
+        self.push_to_talk_mode_button.connect(
+            "toggled", self._on_interaction_mode_changed
+        )
+        interaction_card.append(self.toggle_mode_button)
+        interaction_card.append(self.push_to_talk_mode_button)
+
+        hold_grid = Gtk.Grid(column_spacing=12, row_spacing=8)
+        hold_grid.attach(Gtk.Label(label="过短按压取消（毫秒）", xalign=0), 0, 0, 1, 1)
+        self.minimum_hold_spin = Gtk.SpinButton(
+            adjustment=Gtk.Adjustment(
+                value=DEFAULT_MINIMUM_HOLD_MILLISECONDS,
+                lower=0,
+                upper=2000,
+                step_increment=10,
+                page_increment=100,
+                page_size=0,
+            ),
+            climb_rate=1,
+            digits=0,
+        )
+        hold_grid.attach(self.minimum_hold_spin, 1, 0, 1, 1)
+        hold_grid.attach(
+            Gtk.Label(label="松开丢失后自动停止（秒）", xalign=0), 0, 1, 1, 1
+        )
+        self.release_timeout_spin = Gtk.SpinButton(
+            adjustment=Gtk.Adjustment(
+                value=DEFAULT_RELEASE_TIMEOUT_SECONDS,
+                lower=5,
+                upper=600,
+                step_increment=5,
+                page_increment=30,
+                page_size=0,
+            ),
+            climb_rate=1,
+            digits=0,
+        )
+        hold_grid.attach(self.release_timeout_spin, 1, 1, 1, 1)
+        interaction_card.append(hold_grid)
+
+        self.interaction_boundary_label = Gtk.Label(
+            label=(
+                "通用桌面快捷键通常只提供一次激活事件，因此 X11 与 Wayland 都可把"
+                "自选快捷键绑定到 `murmur-voice-daemon toggle`。按住说话需要所选"
+                "桌面、键盘或辅助工具分别发送 `murmur-voice-daemon press` 与 "
+                "`murmur-voice-daemon release`；通用 Wayland 快捷键没有可靠的全局"
+                "松开事件，本程序不会假装已经获得它，也不会读取全部 /dev/input。"
+                "取消操作使用 `murmur-voice-daemon cancel`。"
+            ),
+            xalign=0,
+            wrap=True,
+            selectable=True,
+        )
+        self.interaction_boundary_label.add_css_class("dim-label")
+        interaction_card.append(self.interaction_boundary_label)
+        self.save_interaction_button = Gtk.Button(label="保存交互模式")
+        self.save_interaction_button.add_css_class("suggested-action")
+        self.save_interaction_button.set_halign(Gtk.Align.START)
+        self.save_interaction_button.connect("clicked", self._on_save_interaction)
+        interaction_card.append(self.save_interaction_button)
         provider_card = self._append_card(cloud_page)
         self._append_card_heading(
             provider_card,
-            "火山引擎 API Key",
-            "密钥只写入本机私有配置；窗口从不回填或显示已保存的内容。",
+            "识别服务与 API Key",
+            "服务与密钥作为一次设置原子保存；窗口从不回填或显示已保存的密钥。",
         )
+
+        provider_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        provider_row.append(Gtk.Label(label="识别服务", xalign=0))
+        self.provider_combo = Gtk.DropDown.new_from_strings(
+            [descriptor.display_name for descriptor in _READY_PROVIDERS]
+        )
+        self.provider_combo.set_hexpand(True)
+        self.provider_combo.connect("notify::selected", self._on_provider_changed)
+        provider_row.append(self.provider_combo)
+        provider_card.append(provider_row)
+
+        self.provider_description_label = Gtk.Label(xalign=0, wrap=True)
+        self.provider_description_label.add_css_class("dim-label")
+        provider_card.append(self.provider_description_label)
 
         self.key_status_label = Gtk.Label(xalign=0, wrap=True)
         self.key_status_label.add_css_class("status-value")
@@ -356,8 +683,9 @@ class SettingsWindow(Gtk.ApplicationWindow):
 
         self.remote_audio_notice_label = Gtk.Label(
             label=(
-                "只有明确开始听写后，麦克风音频才会流式发送至火山引擎并由你的账号"
-                "计费；取消听写无法撤回已经发送的音频片段。"
+                "只有明确开始听写后，麦克风音频才会发送至你选择的服务并由你的账号"
+                "计费；取消听写无法撤回已经发送的音频片段。MiniMax 仅保留为未来"
+                "接入点，尚未提供可选择的实现。"
             ),
             xalign=0,
             wrap=True,
@@ -372,7 +700,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         provider_card.append(self.key_entry)
 
         key_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.save_key_button = Gtk.Button(label="保存新 Key")
+        self.save_key_button = Gtk.Button(label="保存服务与新 Key")
         self.save_key_button.add_css_class("suggested-action")
         self.save_key_button.connect("clicked", self._on_save_key)
         key_actions.append(self.save_key_button)
@@ -390,8 +718,8 @@ class SettingsWindow(Gtk.ApplicationWindow):
         )
         self.vocabulary_help_label = Gtk.Label(
             label=(
-                "这些明确添加的词会随每次听写请求发送给火山引擎；不要在这里填写"
-                "密码或其他不必要的敏感信息。"
+                "这些明确添加的词会随每次听写请求发送给当前选择的识别服务；不要在这里填写"
+                "密码或其他不必要的敏感信息。不同服务对提示词的支持程度可能不同。"
             ),
             xalign=0,
             wrap=True,
@@ -425,8 +753,11 @@ class SettingsWindow(Gtk.ApplicationWindow):
 
         self.corrections_help_label = Gtk.Label(
             label=(
-                "每个已保存的纠错对都会随听写请求发送给火山引擎。听写结束后的 5 秒"
-                "观察窗口只会学习边界明确的单处替换；含糊或冲突的修改不会启用。"
+                "下一次听写会按当前识别服务应用这些信息：火山引擎可接收完整替换映射；"
+                "Qwen 与 OpenAI 只会把标准写法作为上下文提示，不保证执行逐项替换。"
+                "自动学习会拆分多处"
+                "替换：高置信单项可立即启用，中等置信与冲突项只进入本地候选，"
+                "不会把整句润色误当成全局规则。"
             ),
             xalign=0,
             wrap=True,
@@ -471,6 +802,65 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.save_corrections_button.set_halign(Gtk.Align.START)
         self.save_corrections_button.connect("clicked", self._on_save_corrections)
         corrections_card.append(self.save_corrections_button)
+
+        adaptive_card = self._append_card(corrections_page)
+        self._append_card_heading(
+            adaptive_card,
+            "自动学习记录",
+            "每次都会给出结果；候选只有在你确认后才会启用。",
+        )
+        adaptive_grid = Gtk.Grid(column_spacing=10, column_homogeneous=True)
+        self.adaptive_active_label = self._append_status_tile(
+            adaptive_grid, 0, "已启用", "0"
+        )
+        self.adaptive_candidate_label = self._append_status_tile(
+            adaptive_grid, 1, "待确认", "0"
+        )
+        self.adaptive_conflicted_label = self._append_status_tile(
+            adaptive_grid, 2, "冲突", "0"
+        )
+        adaptive_card.append(adaptive_grid)
+        self.adaptive_recent_label = Gtk.Label(
+            label="最近结果：尚无学习记录", xalign=0, wrap=True
+        )
+        self.adaptive_recent_label.add_css_class("dim-label")
+        adaptive_card.append(self.adaptive_recent_label)
+        fallback_label = Gtk.Label(
+            label=(
+                "当前应用无法自动读取修改时，可在这里提交“识别原文”和“修改后整句”。"
+                "窗口只保存拆出的短纠错对，不保存输入框周围的其他文字。"
+            ),
+            xalign=0,
+            wrap=True,
+        )
+        fallback_label.add_css_class("dim-label")
+        adaptive_card.append(fallback_label)
+        fallback_grid = Gtk.Grid(column_spacing=8, row_spacing=6)
+        fallback_grid.attach(Gtk.Label(label="识别原文", xalign=0), 0, 0, 1, 1)
+        fallback_grid.attach(Gtk.Label(label="修改后整句", xalign=0), 1, 0, 1, 1)
+        self.adaptive_provider_entry = Gtk.Entry(placeholder_text="云端返回的这一句")
+        self.adaptive_provider_entry.set_max_length(ADAPTIVE_FEEDBACK_TEXT_LIMIT)
+        self.adaptive_provider_entry.set_hexpand(True)
+        fallback_grid.attach(self.adaptive_provider_entry, 0, 1, 1, 1)
+        self.adaptive_preferred_entry = Gtk.Entry(
+            placeholder_text="你最终希望得到的这一句"
+        )
+        self.adaptive_preferred_entry.set_max_length(ADAPTIVE_FEEDBACK_TEXT_LIMIT)
+        self.adaptive_preferred_entry.set_hexpand(True)
+        fallback_grid.attach(self.adaptive_preferred_entry, 1, 1, 1, 1)
+        self.submit_adaptive_feedback_button = Gtk.Button(label="分析并学习这次修改")
+        self.submit_adaptive_feedback_button.connect(
+            "clicked", self._on_submit_adaptive_feedback
+        )
+        fallback_grid.attach(self.submit_adaptive_feedback_button, 2, 1, 1, 1)
+        adaptive_card.append(fallback_grid)
+        self.adaptive_review_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.adaptive_review_list.add_css_class("boxed-list")
+        adaptive_card.append(self.adaptive_review_list)
+        self.refresh_adaptive_button = Gtk.Button(label="刷新学习记录")
+        self.refresh_adaptive_button.set_halign(Gtk.Align.START)
+        self.refresh_adaptive_button.connect("clicked", self._on_refresh_adaptive)
+        adaptive_card.append(self.refresh_adaptive_button)
 
         microphone_card = self._append_card(microphone_page)
         self._append_card_heading(
@@ -517,7 +907,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
 
         self.data_collection_notice_label = Gtk.Label(
             label=(
-                "默认关闭。只有在留存已开启、火山引擎最终结果已成功确认时，软件才会在所选"
+                "默认关闭。只有在留存已开启、当前识别服务的最终结果已成功确认时，软件才会在所选"
                 "绝对 POSIX 路径的 openvoiceinput-dataset-v1 下保存 WAV 与 "
                 "provider_final（未经复核的伪标签）。目录可以是本地磁盘，也可以是"
                 "操作系统已经挂载的远程文件系统（例如 SSHFS）。本程序不会连接或"
@@ -584,6 +974,10 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.settings_stack.set_visible_child_name("overview")
 
         self._load_local_settings()
+        if refresh_statistics_on_start:
+            self.refresh_dataset_statistics()
+        else:
+            self._set_statistics_busy(False)
         if refresh_service_on_start:
             self.refresh_service_status()
         else:
@@ -660,9 +1054,91 @@ class SettingsWindow(Gtk.ApplicationWindow):
         grid.attach(tile, column, 0, 1, 1)
         return value_label
 
+    @staticmethod
+    def _append_metric_tile(
+        grid: Gtk.Grid,
+        column: int,
+        title: str,
+        value: str,
+        detail: str,
+    ) -> Gtk.Label:
+        tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        tile.add_css_class("metric-tile")
+        title_label = Gtk.Label(label=title, xalign=0)
+        title_label.add_css_class("section-label")
+        title_label.set_margin_top(13)
+        title_label.set_margin_start(13)
+        title_label.set_margin_end(13)
+        tile.append(title_label)
+        value_label = Gtk.Label(
+            label=value,
+            xalign=0,
+            ellipsize=Pango.EllipsizeMode.END,
+        )
+        value_label.add_css_class("metric-value")
+        value_label.set_margin_start(13)
+        value_label.set_margin_end(13)
+        tile.append(value_label)
+        detail_label = Gtk.Label(label=detail, xalign=0, wrap=True)
+        detail_label.add_css_class("metric-detail")
+        detail_label.set_margin_bottom(13)
+        detail_label.set_margin_start(13)
+        detail_label.set_margin_end(13)
+        tile.append(detail_label)
+        grid.attach(tile, column, 0, 1, 1)
+        return value_label
+
+    def _append_navigation_action(
+        self,
+        grid: Gtk.Grid,
+        column: int,
+        row: int,
+        icon_name: str,
+        title: str,
+        detail: str,
+        page_name: str,
+    ) -> None:
+        button = Gtk.Button()
+        button.add_css_class("quick-action")
+        content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        content.set_margin_top(10)
+        content.set_margin_bottom(10)
+        content.set_margin_start(10)
+        content.set_margin_end(10)
+        icon = Gtk.Image.new_from_icon_name(icon_name)
+        icon.set_pixel_size(22)
+        content.append(icon)
+        copy = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        copy.set_hexpand(True)
+        heading = Gtk.Label(label=title, xalign=0)
+        heading.add_css_class("status-value")
+        copy.append(heading)
+        description = Gtk.Label(
+            label=detail,
+            xalign=0,
+            ellipsize=Pango.EllipsizeMode.END,
+        )
+        description.add_css_class("dim-label")
+        copy.append(description)
+        content.append(copy)
+        arrow = Gtk.Image.new_from_icon_name("go-next-symbolic")
+        content.append(arrow)
+        button.set_child(content)
+        button.connect("clicked", self._on_navigation_action, page_name)
+        grid.attach(button, column, row, 1, 1)
+
+    def _on_navigation_action(self, button: Gtk.Button, page_name: str) -> None:
+        del button
+        self.settings_stack.set_visible_child_name(page_name)
+
     def _load_local_settings(self) -> None:
         state = self._controller.key_state()
         self._set_key_state(state)
+        provider_loader = getattr(self._controller, "provider_selection", None)
+        selection = provider_loader() if callable(provider_loader) else None
+        if selection is None:
+            selection = ProviderSelection("volcengine", None)
+        self._set_provider_selection(selection)
         try:
             terms = self._controller.load_vocabulary()
         except SettingsError as error:
@@ -675,6 +1151,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self._show_error(str(error))
         else:
             self._replace_correction_rows(pairs)
+        self.refresh_adaptive_learning(silent=True)
         try:
             microphone_policy = self._controller.load_microphone_policy()
         except SettingsError as error:
@@ -682,12 +1159,39 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self._show_error(str(error))
         else:
             self._replace_microphone_priority_rows(microphone_policy.priority)
+        load_interaction = getattr(self._controller, "load_interaction", None)
+        if load_interaction is None:
+            self._set_interaction_controls(
+                DEFAULT_INTERACTION_MODE,
+                DEFAULT_MINIMUM_HOLD_MILLISECONDS,
+                DEFAULT_RELEASE_TIMEOUT_SECONDS,
+            )
+        else:
+            try:
+                interaction = load_interaction()
+            except SettingsError as error:
+                self._set_interaction_controls(
+                    DEFAULT_INTERACTION_MODE,
+                    DEFAULT_MINIMUM_HOLD_MILLISECONDS,
+                    DEFAULT_RELEASE_TIMEOUT_SECONDS,
+                )
+                self._show_error(str(error))
+            else:
+                self._set_interaction_controls(
+                    interaction.interaction_mode,
+                    interaction.minimum_hold_milliseconds,
+                    interaction.release_timeout_seconds,
+                )
         try:
             collection = self._controller.load_data_collection()
         except SettingsError as error:
             self.data_collection_check.set_active(False)
             self.data_collection_directory_entry.set_text("")
-            self.overview_collection_status_label.set_text("关闭（读取失败）")
+            self.overview_collection_status_label.set_text("配置不可用")
+            self._set_label_tone(
+                self.overview_collection_status_label,
+                "error-text",
+            )
             self._show_error(str(error))
         else:
             self.data_collection_check.set_active(collection.enabled)
@@ -698,6 +1202,92 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self.overview_collection_status_label.set_text(
                 "已开启" if collection.enabled else "已关闭（默认）"
             )
+            self._set_label_tone(
+                self.overview_collection_status_label,
+                "success-text" if collection.enabled else None,
+            )
+
+    def refresh_adaptive_learning(self, *, silent: bool = False) -> None:
+        loader = getattr(self._controller, "load_adaptive_learning", None)
+        if not callable(loader):
+            # Keeps third-party/test controllers compatible with the new view.
+            self._replace_adaptive_learning(
+                AdaptiveLearningSnapshot(
+                    statistics={
+                        "active": 0,
+                        "candidate": 0,
+                        "conflicted": 0,
+                        "suspended": 0,
+                        "archived": 0,
+                        "total": 0,
+                    },
+                    last_result=None,
+                    review_entries=(),
+                )
+            )
+            return
+        try:
+            snapshot = loader()
+        except SettingsError as error:
+            if not silent:
+                self._show_error(str(error))
+        except Exception:
+            if not silent:
+                self._show_error("无法安全读取自动学习记录。")
+        else:
+            self._replace_adaptive_learning(snapshot)
+
+    def _replace_adaptive_learning(self, snapshot: AdaptiveLearningSnapshot) -> None:
+        statistics = snapshot.statistics
+        self.adaptive_active_label.set_text(str(statistics.get("active", 0)))
+        self.adaptive_candidate_label.set_text(str(statistics.get("candidate", 0)))
+        self.adaptive_conflicted_label.set_text(str(statistics.get("conflicted", 0)))
+        recent = snapshot.last_result
+        if recent is None:
+            self.adaptive_recent_label.set_text("最近结果：尚无学习记录")
+        else:
+            reason = str(recent.get("reason_code", "unknown"))
+            explanation = _ADAPTIVE_REASON_LABELS.get(reason, "已记录，等待刷新")
+            self.adaptive_recent_label.set_text(f"最近结果：{explanation}")
+
+        child = self.adaptive_review_list.get_first_child()
+        while child is not None:
+            next_child = child.get_next_sibling()
+            self.adaptive_review_list.remove(child)
+            child = next_child
+        for entry in snapshot.review_entries:
+            row = Gtk.ListBoxRow()
+            content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            content.set_margin_top(6)
+            content.set_margin_bottom(6)
+            content.set_margin_start(8)
+            content.set_margin_end(8)
+            text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            text.set_hexpand(True)
+            text.append(
+                Gtk.Label(
+                    label=f"{entry.wrong}  →  {entry.canonical}",
+                    xalign=0,
+                    wrap=True,
+                )
+            )
+            text.append(
+                Gtk.Label(
+                    label=f"状态：{entry.state} · 已观察 {entry.support} 次",
+                    xalign=0,
+                )
+            )
+            content.append(text)
+            confirm = Gtk.Button(label="确认启用")
+            confirm.connect(
+                "clicked",
+                self._on_confirm_adaptive,
+                entry.wrong,
+                entry.canonical,
+            )
+            content.append(confirm)
+            row.set_child(content)
+            self.adaptive_review_list.append(row)
 
     def _set_key_state(self, state: KeyState) -> None:
         labels = {
@@ -712,10 +1302,117 @@ class SettingsWindow(Gtk.ApplicationWindow):
         }
         self.key_status_label.set_text(labels[state])
         self.overview_key_status_label.set_text(overview_labels[state])
+        self._set_label_tone(
+            self.overview_key_status_label,
+            {
+                KeyState.MISSING: "warning-text",
+                KeyState.READY: "success-text",
+                KeyState.INVALID: "error-text",
+            }[state],
+        )
+
+    def _set_interaction_controls(
+        self,
+        mode: str,
+        minimum_hold_milliseconds: int,
+        release_timeout_seconds: int,
+    ) -> None:
+        push_to_talk = mode == "push_to_talk"
+        self.push_to_talk_mode_button.set_active(push_to_talk)
+        self.toggle_mode_button.set_active(not push_to_talk)
+        self.minimum_hold_spin.set_value(float(minimum_hold_milliseconds))
+        self.release_timeout_spin.set_value(float(release_timeout_seconds))
+        self._update_interaction_control_sensitivity()
+
+    def _on_interaction_mode_changed(self, button: Gtk.CheckButton) -> None:
+        del button
+        self._update_interaction_control_sensitivity()
+
+    def _update_interaction_control_sensitivity(self) -> None:
+        push_to_talk = self.push_to_talk_mode_button.get_active()
+        self.minimum_hold_spin.set_sensitive(push_to_talk)
+        self.release_timeout_spin.set_sensitive(push_to_talk)
+
+    def _on_save_interaction(self, button: Gtk.Button) -> None:
+        del button
+        self.save_interaction()
+
+    def save_interaction(self) -> None:
+        mode = (
+            "push_to_talk" if self.push_to_talk_mode_button.get_active() else "toggle"
+        )
+        try:
+            saved = self._controller.save_interaction(
+                mode,
+                self.minimum_hold_spin.get_value_as_int(),
+                self.release_timeout_spin.get_value_as_int(),
+            )
+        except SettingsError as error:
+            self._show_error(str(error))
+        except Exception:
+            self._show_error("无法安全保存快捷键交互模式。")
+        else:
+            self._set_interaction_controls(
+                saved.interaction_mode,
+                saved.minimum_hold_milliseconds,
+                saved.release_timeout_seconds,
+            )
+            if saved.interaction_mode == "push_to_talk":
+                self._show_message(
+                    "已保存按住说话模式。下一次按下会读取新设置；请确认你的按键集成"
+                    "能够分别发送 press 与 release。"
+                )
+            else:
+                self._show_message(
+                    "已保存点按切换模式。下一次按键会读取新设置，无需重启服务。"
+                )
 
     def _on_save_key(self, button: Gtk.Button) -> None:
         del button
         self.save_key()
+
+    def _selected_provider_id(self) -> str:
+        selected = self.provider_combo.get_selected()
+        if 0 <= selected < len(_READY_PROVIDERS):
+            return _READY_PROVIDERS[selected].provider_id
+        return "volcengine"
+
+    def _on_provider_changed(
+        self,
+        combo: Gtk.DropDown,
+        _parameter: object | None = None,
+    ) -> None:
+        del combo, _parameter
+        provider = self._selected_provider_id()
+        descriptor = _PROVIDERS_BY_ID.get(provider)
+        if descriptor is None or descriptor.availability != "ready":
+            self.provider_description_label.set_text("该识别服务当前不可用。")
+            return
+        model = (
+            self._provider_selection.model
+            if self._provider_selection.provider == provider
+            else None
+        )
+        model_copy = f" 当前模型：{model}。" if model else ""
+        self.provider_description_label.set_text(
+            f"{descriptor.description}{model_copy} 更换服务需要同时输入该服务的新 Key。"
+        )
+
+    def _set_provider_selection(self, selection: ProviderSelection) -> None:
+        descriptor = _PROVIDERS_BY_ID.get(selection.provider)
+        if descriptor is None or descriptor.availability != "ready":
+            selection = ProviderSelection("volcengine", None)
+        self._provider_selection = selection
+        selected = next(
+            (
+                index
+                for index, descriptor in enumerate(_READY_PROVIDERS)
+                if descriptor.provider_id == selection.provider
+            ),
+            0,
+        )
+        self.provider_combo.set_selected(selected)
+        self._on_provider_changed(self.provider_combo)
 
     def save_key(self) -> None:
         self._reset_key_clear_confirmation()
@@ -724,7 +1421,18 @@ class SettingsWindow(Gtk.ApplicationWindow):
             if not api_key.strip():
                 self._show_error("请先输入新的 API Key。")
                 return
-            self._controller.save_key(api_key)
+            provider = self._selected_provider_id()
+            model = (
+                self._provider_selection.model
+                if self._provider_selection.provider == provider
+                else None
+            )
+            saver = getattr(self._controller, "save_provider", None)
+            if callable(saver):
+                selection = saver(api_key, provider, model)
+                self._set_provider_selection(selection)
+            else:
+                self._controller.save_key(api_key)
         except SettingsError as error:
             self._show_error(str(error))
         except Exception:
@@ -875,6 +1583,60 @@ class SettingsWindow(Gtk.ApplicationWindow):
         else:
             self._replace_correction_rows(normalized_pairs)
             self._show_message(f"已保存 {count} 条明确纠错。{APPLY_NOTICE}")
+
+    def _on_refresh_adaptive(self, button: Gtk.Button) -> None:
+        del button
+        self.refresh_adaptive_learning()
+
+    def _on_confirm_adaptive(
+        self,
+        button: Gtk.Button,
+        wrong: str,
+        canonical: str,
+    ) -> None:
+        del button
+        confirmer = getattr(self._controller, "confirm_adaptive_learning", None)
+        if not callable(confirmer):
+            self._show_error("当前设置控制器不支持确认自动纠错。")
+            return
+        try:
+            active = confirmer(wrong, canonical)
+        except SettingsError as error:
+            self._show_error(str(error))
+            return
+        except Exception:
+            self._show_error("无法安全确认这条自动纠错。")
+            return
+        self.refresh_adaptive_learning(silent=True)
+        if active:
+            self._show_message("已确认并启用；下一次听写会自动读取。")
+        else:
+            self._show_message("已确认，但因明确规则覆盖或安全冲突暂未发送。")
+
+    def _on_submit_adaptive_feedback(self, button: Gtk.Button) -> None:
+        del button
+        provider_text = self.adaptive_provider_entry.get_text().strip()
+        preferred_text = self.adaptive_preferred_entry.get_text().strip()
+        if not provider_text or not preferred_text:
+            self._show_error("请同时填写识别原文和修改后整句。")
+            return
+        submitter = getattr(self._controller, "submit_adaptive_feedback", None)
+        if not callable(submitter):
+            self._show_error("当前设置控制器不支持显式纠错反馈。")
+            return
+        try:
+            reason = submitter(provider_text, preferred_text)
+        except SettingsError as error:
+            self._show_error(str(error))
+            return
+        except Exception:
+            self._show_error("无法安全保存这次纠错反馈。")
+            return
+        self.adaptive_provider_entry.set_text("")
+        self.adaptive_preferred_entry.set_text("")
+        self.refresh_adaptive_learning(silent=True)
+        label = _ADAPTIVE_REASON_LABELS.get(reason, "已分析并安全记录")
+        self._show_message(f"{label}；下一次听写会自动读取可用规则。")
 
     def _replace_microphone_priority_rows(self, priority: Sequence[str]) -> None:
         normalized = tuple(priority)
@@ -1080,6 +1842,10 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.overview_collection_status_label.set_text(
             "已开启" if collection.enabled else "已关闭（默认）"
         )
+        self._set_label_tone(
+            self.overview_collection_status_label,
+            "success-text" if collection.enabled else None,
+        )
         if collection.enabled:
             self._show_message(
                 "已为所选目录开启 WAV 与未经复核的 provider_final 留存。每次新听写"
@@ -1090,10 +1856,213 @@ class SettingsWindow(Gtk.ApplicationWindow):
                 "本地训练数据留存已关闭。当前或排队中但尚未发布的记录不会写入；"
                 "已经发布的记录会继续保留。"
             )
+        self._invalidate_and_refresh_dataset_statistics()
+
+    def _on_refresh_dataset_statistics(self, button: Gtk.Button) -> None:
+        del button
+        self.refresh_dataset_statistics()
+
+    def _invalidate_and_refresh_dataset_statistics(self) -> None:
+        self._statistics_generation += 1
+        if self._statistics_busy:
+            self.statistics_status_label.set_text(
+                "留存设置已改变；当前后台读取结束后会自动刷新。"
+            )
+            return
+        self.refresh_dataset_statistics()
+
+    def refresh_dataset_statistics(self) -> None:
+        """Load bounded, content-free dataset counters outside the GTK thread."""
+
+        if self._statistics_busy:
+            return
+        self._statistics_generation += 1
+        generation = self._statistics_generation
+        self._set_statistics_busy(True)
+        self.statistics_status_label.set_text("正在后台读取本地隐私统计摘要…")
+        self._set_statistics_tone(None)
+        self._statistics_timeout_id = GLib.timeout_add_seconds(
+            4,
+            self._mark_statistics_slow,
+            generation,
+        )
+
+        def worker() -> None:
+            try:
+                statistics = self._controller.load_dataset_statistics()
+            except SettingsError:
+                statistics = DatasetStatistics("unavailable")
+            except Exception:
+                statistics = DatasetStatistics("unavailable")
+            GLib.idle_add(
+                self._finish_dataset_statistics,
+                generation,
+                statistics,
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _mark_statistics_slow(self, generation: int) -> bool:
+        self._statistics_timeout_id = 0
+        if (
+            self._window_closed
+            or not self._statistics_busy
+            or generation != self._statistics_generation
+        ):
+            return GLib.SOURCE_REMOVE
+        self.statistics_status_label.set_text(
+            "存储响应较慢，可能是远程挂载断线；首页仍可正常使用。"
+        )
+        self._set_statistics_tone("warning-text")
+        return GLib.SOURCE_REMOVE
+
+    def _finish_dataset_statistics(
+        self,
+        generation: int,
+        statistics: DatasetStatistics,
+    ) -> bool:
+        if self._statistics_timeout_id:
+            GLib.source_remove(self._statistics_timeout_id)
+            self._statistics_timeout_id = 0
+        if self._window_closed:
+            self._statistics_busy = False
+            return GLib.SOURCE_REMOVE
+        if generation != self._statistics_generation:
+            self._set_statistics_busy(False)
+            GLib.idle_add(self.refresh_dataset_statistics)
+            return GLib.SOURCE_REMOVE
+        self._set_statistics_busy(False)
+        self._apply_dataset_statistics(statistics)
+        return GLib.SOURCE_REMOVE
+
+    def _set_statistics_busy(self, busy: bool) -> None:
+        self._statistics_busy = busy
+        self.refresh_statistics_button.set_sensitive(not busy)
+
+    def _apply_dataset_statistics(self, statistics: DatasetStatistics) -> None:
+        values = (
+            self.today_characters_label,
+            self.today_duration_label,
+            self.today_utterances_label,
+            self.total_characters_label,
+            self.total_duration_label,
+            self.total_utterances_label,
+            self.latest_activity_label,
+        )
+        if statistics.state == "disabled":
+            for label in values:
+                label.set_text("—")
+            self.statistics_status_label.set_text(
+                "数据留存已关闭；首页不会扫描以前选择过的目录。"
+            )
+            self._set_statistics_tone(None)
+            return
+        if statistics.state == "unavailable":
+            for label in values:
+                label.set_text("—")
+            self.statistics_status_label.set_text(
+                "存储当前不可用；请检查本地目录或远程挂载，普通听写仍可继续。"
+            )
+            self.overview_collection_status_label.set_text("已开启 · 存储不可用")
+            self._set_label_tone(
+                self.overview_collection_status_label,
+                "warning-text",
+            )
+            self._set_statistics_tone("warning-text")
+            return
+        if statistics.state == "unindexed":
+            for label in values:
+                label.set_text("—")
+            self.statistics_status_label.set_text(
+                "这是较早版本的数据集，尚无独立 usage 索引；首页不会读取 "
+                "record.json 来回填，新版记录会自动加入统计。"
+            )
+            self.overview_collection_status_label.set_text("已开启 · 等待统计索引")
+            self._set_label_tone(
+                self.overview_collection_status_label,
+                "warning-text",
+            )
+            self._set_statistics_tone("warning-text")
+            return
+
+        self.today_characters_label.set_text(f"{statistics.today_characters:,}")
+        self.today_duration_label.set_text(
+            self._format_usage_duration(statistics.today_seconds)
+        )
+        self.today_utterances_label.set_text(f"{statistics.today_utterances:,}")
+        self.total_characters_label.set_text(f"{statistics.total_characters:,}")
+        self.total_duration_label.set_text(
+            self._format_usage_duration(statistics.total_seconds)
+        )
+        self.total_utterances_label.set_text(f"{statistics.total_utterances:,}")
+        if statistics.latest_recorded_at is None:
+            self.latest_activity_label.set_text("暂无")
+        else:
+            self.latest_activity_label.set_text(
+                statistics.latest_recorded_at.astimezone().strftime("%m月%d日 %H:%M")
+            )
+        self.overview_collection_status_label.set_text("已开启 · 存储可用")
+        self._set_label_tone(
+            self.overview_collection_status_label,
+            "success-text",
+        )
+
+        skipped = statistics.invalid_summaries
+        if statistics.state == "empty":
+            message = "还没有可统计的已发布记录；第一次成功留存后会自动出现。"
+            tone = None
+        elif statistics.state == "limited":
+            message = (
+                f"发现 {skipped:,} 条旧版或无效记录。为保护正文，首页不会打开它们的 "
+                "record.json；新版记录将自动加入统计。"
+            )
+            tone = "warning-text"
+        elif skipped:
+            message = (
+                f"已汇总 {statistics.total_utterances:,} 条隐私摘要；另有 {skipped:,} 条"
+                "旧版或无效记录未纳入，转写正文没有被读取。"
+            )
+            tone = "warning-text"
+        else:
+            message = (
+                f"已汇总 {statistics.total_utterances:,} 条本地隐私摘要；未读取或展示"
+                "任何转写正文。"
+            )
+            tone = "success-text"
+        self.statistics_status_label.set_text(message)
+        self._set_statistics_tone(tone)
+
+    def _set_statistics_tone(self, tone: str | None) -> None:
+        for css_class in ("success-text", "warning-text", "error-text"):
+            self.statistics_status_label.remove_css_class(css_class)
+        if tone is not None:
+            self.statistics_status_label.add_css_class(tone)
+
+    @staticmethod
+    def _set_label_tone(label: Gtk.Label, tone: str | None) -> None:
+        for css_class in ("success-text", "warning-text", "error-text"):
+            label.remove_css_class(css_class)
+        if tone is not None:
+            label.add_css_class(tone)
+
+    @staticmethod
+    def _format_usage_duration(seconds: float) -> str:
+        rounded = max(0, round(seconds))
+        if rounded < 60:
+            return f"{rounded} 秒"
+        hours, remainder = divmod(rounded, 3600)
+        minutes = remainder // 60
+        if hours:
+            return f"{hours} 小时 {minutes} 分"
+        return f"{minutes} 分钟"
 
     def _on_close_request(self, window: Gtk.Window) -> bool:
         del window
         self._window_closed = True
+        self._statistics_generation += 1
+        if self._statistics_timeout_id:
+            GLib.source_remove(self._statistics_timeout_id)
+            self._statistics_timeout_id = 0
         chooser = self._data_collection_chooser
         self._data_collection_chooser = None
         if chooser is not None:
@@ -1176,6 +2145,14 @@ class SettingsWindow(Gtk.ApplicationWindow):
         service = _SERVICE_LABELS.get(snapshot.active_state, "暂时不可用")
         parts = [f"语音服务：{service}"]
         self.overview_service_status_label.set_text(service)
+        self._set_label_tone(
+            self.overview_service_status_label,
+            {
+                "active": "success-text",
+                "failed": "error-text",
+                "unknown": "warning-text",
+            }.get(snapshot.active_state),
+        )
         if snapshot.session_state is not None:
             parts.append(_SESSION_LABELS.get(snapshot.session_state, "听写状态未知"))
         detail = _STATUS_LABELS.get(snapshot.status_code or "")

@@ -7,12 +7,17 @@ from murmur_voice.adaptive_store import (
     MAX_ADAPTIVE_ENTRIES,
     AdaptiveEntry,
     AdaptiveLedger,
+    AdaptiveLastResult,
     AdaptiveStoreError,
+    activate_correction,
+    adaptive_statistics,
     compile_provider_corrections,
     normalized_key,
     parse_adaptive_ledger,
     record_correction,
+    record_evidence,
     serialize_adaptive_ledger,
+    with_last_result,
 )
 from murmur_voice.config import MAX_CORRECTION_PAIRS, CorrectionPair
 
@@ -239,7 +244,7 @@ def test_normalized_key_uses_nfkc_casefold_and_collapsed_whitespace():
         {},
         {"version": 1, "entries": [], "extra": True},
         {"version": True, "entries": []},
-        {"version": 2, "entries": []},
+        {"version": 3, "entries": []},
         {"version": 1, "entries": {}},
         {
             "version": 1,
@@ -351,6 +356,102 @@ def test_compiler_suppresses_divergent_active_canonicals_even_if_file_was_edited
     )
 
     assert compile_provider_corrections((), ledger) == ()
+
+
+def test_v1_ledger_migrates_in_memory_without_activating_new_rules():
+    legacy = {
+        "version": 1,
+        "entries": [
+            {
+                "wrong": "legacy wrong",
+                "canonical": "legacy right",
+                "state": "active",
+                "support": 2,
+            }
+        ],
+    }
+
+    ledger = parse_adaptive_ledger(legacy)
+
+    assert ledger.version == ADAPTIVE_CORRECTIONS_SCHEMA_VERSION
+    assert ledger.entries == (AdaptiveEntry("legacy wrong", "legacy right", support=2),)
+    assert serialize_adaptive_ledger(ledger)["version"] == 2
+
+
+def test_medium_evidence_stays_candidate_until_explicit_confirmation():
+    ledger = record_evidence(
+        AdaptiveLedger(),
+        "Ostro",
+        "Austral",
+        state="candidate",
+        category="recognition",
+        evidence="medium",
+    )
+
+    assert ledger.entries[0].state == "candidate"
+    assert compile_provider_corrections((), ledger) == ()
+
+    confirmed = activate_correction(ledger, "ostro", "AUSTRAL")
+    assert confirmed.entries[0].state == "active"
+    assert confirmed.entries[0].evidence == "explicit"
+    assert compile_provider_corrections((), confirmed) == (
+        CorrectionPair("Ostro", "Austral"),
+    )
+
+
+def test_explicit_choice_archives_conflicting_alternatives():
+    ledger = record_evidence(
+        AdaptiveLedger(),
+        "same",
+        "first",
+        state="candidate",
+        category="recognition",
+        evidence="medium",
+    )
+    ledger = record_evidence(
+        ledger,
+        "same",
+        "second",
+        state="candidate",
+        category="recognition",
+        evidence="medium",
+    )
+    assert [entry.state for entry in ledger.entries] == ["conflicted", "conflicted"]
+
+    resolved = activate_correction(ledger, "same", "second")
+    assert [entry.state for entry in resolved.entries] == ["archived", "active"]
+
+
+def test_last_result_round_trip_and_statistics_are_content_free():
+    ledger = record_evidence(
+        AdaptiveLedger(),
+        "private wrong",
+        "private right",
+        state="candidate",
+        category="terminology",
+        evidence="medium",
+    )
+    ledger = with_last_result(
+        ledger,
+        AdaptiveLastResult(
+            "candidates-saved",
+            captured_count=1,
+            candidate_count=1,
+            replacement_hunks=2,
+        ),
+    )
+
+    restored = parse_adaptive_ledger(serialize_adaptive_ledger(ledger))
+
+    assert restored == ledger
+    assert adaptive_statistics(restored) == {
+        "total": 1,
+        "active": 0,
+        "archived": 0,
+        "candidate": 1,
+        "conflicted": 0,
+        "suspended": 0,
+    }
 
 
 def test_new_entry_is_refused_only_after_ledger_capacity_is_reached():
