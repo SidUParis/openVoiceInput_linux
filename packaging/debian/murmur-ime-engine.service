@@ -1,0 +1,26 @@
+[Unit]
+Description=Open Voice Input Linux inline IBus preedit engine
+Documentation=https://github.com/SidUParis/openVoiceInput_linux
+After=graphical-session.target
+PartOf=graphical-session.target
+StartLimitIntervalSec=10
+StartLimitBurst=10
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/murmur-ime-engine
+Restart=always
+RestartSec=2
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONNOUSERSITE=1
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=graphical-session.target

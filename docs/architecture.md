@@ -60,8 +60,9 @@ The implemented developer-preview daemon runs in the foreground, owns one
 dictation utterance at a time, accepts bounded commands on a private Unix
 socket, and calls the engine's session D-Bus service. The optional source-tree
 installer supervises it with a hardened systemd user unit and a dedicated
-virtual environment. Distribution-native packaging and D-Bus activation are
-not implemented yet.
+virtual environment. The standalone Ubuntu 24.04 `amd64` `.deb` instead
+installs an isolated root-owned Python import tree and hardened systemd user
+units from system paths. Production D-Bus activation is not implemented yet.
 
 Responsibilities:
 
@@ -176,7 +177,27 @@ behavior.
 
 ## Packaging
 
-The initial package target is Debian/Ubuntu. IBus engines and D-Bus activation
+The implemented standalone package target is Ubuntu 24.04 `amd64` with its
+system CPython 3.12. The `.deb` installs audited launchers in `/usr/bin`, the
+application modules plus four hash-locked Python runtime dependencies below
+`/usr/lib/open-voice-input-linux/python`, and package-installed user units below
+`/usr/lib/systemd/user`. A package-owned
+`graphical-session.target.wants/murmur-ime-engine.service` link starts only the
+microphone-free IBus engine for graphical sessions. The voice unit remains an
+explicit per-user opt-in through settings.
+
+The package owns no file below `$XDG_CONFIG_HOME/murmur-ime` and no dataset
+directory. Removal stops both packaged units before their launchers disappear,
+but preserves every user key, vocabulary, correction ledger, microphone
+policy, collection choice, and external dataset. The older source-preview
+installer places higher-precedence units below `$XDG_CONFIG_HOME/systemd/user`
+and code below `$XDG_DATA_HOME/murmur-ime`; package pre-installation therefore
+refuses a detected legacy installation and directs that desktop user to the
+trusted source-preview uninstaller first. That migration preserves the same
+private configuration and external data.
+
+This is a directly downloadable alpha `.deb`, not a signed APT repository or
+a broad Debian-family support claim. IBus engines and D-Bus activation
 integrate poorly with a fully sandboxed Flatpak, so Flatpak is not the primary
 distribution format for the combined engine. A separately delivered
 compatibility Flatpak may remain a controller/indicator for the daemon's
@@ -184,7 +205,7 @@ bounded control interface; it does not own audio capture, provider access,
 microphone routing, or dataset publication and is not the package for this
 engine/daemon implementation.
 
-Open Voice Input Linux will keep packaged Rime data in
+The future combined Rime-capable package will keep packaged Rime data in
 `/usr/share/murmur-ime/rime-data` and mutable user data in
 `$XDG_DATA_HOME/murmur-ime/rime`. It must never concurrently open the stock
 ibus-rime database under `~/.config/ibus/rime`. Importing existing preferences

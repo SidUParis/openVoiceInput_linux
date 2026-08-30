@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Open Voice Input Linux
+Name[zh_CN]=Open Voice Input Linux 设置
+GenericName=Voice Input Settings
+GenericName[zh_CN]=语音输入设置
+Comment=Configure local voice input and recognition preferences
+Comment[zh_CN]=配置语音输入、麦克风、纠错与训练数据保存
+Exec=/usr/bin/open-voice-input-settings
+Icon=io.github.SidUParis.OpenVoiceInputLinux.Settings
+Terminal=false
+DBusActivatable=false
+Categories=Settings;Accessibility;
+StartupNotify=true
+StartupWMClass=io.github.SidUParis.OpenVoiceInputLinux.Settings

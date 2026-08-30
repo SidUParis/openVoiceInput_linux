@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+    remove|purge|disappear|abort-install|abort-upgrade)
+        # Forget removed unit definitions in every currently running user
+        # manager. No home directory or application configuration is opened.
+        deb-systemd-invoke --user daemon-reload >/dev/null 2>&1 || true
+        ;;
+esac
+
+exit 0

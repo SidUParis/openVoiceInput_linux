@@ -1,0 +1,23 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: openVoiceInput_linux
+Source: https://github.com/SidUParis/openVoiceInput_linux
+
+Files: *
+Copyright: 2026 Open Voice Input Linux contributors
+License: GPL-3.0-only
+ The complete GPL-3.0-only text is installed at
+ /usr/share/common-licenses/GPL-3.
+
+Files: packaging/debian/io.github.SidUParis.OpenVoiceInputLinux.metainfo.xml
+Copyright: 2026 Open Voice Input Linux contributors
+License: CC0-1.0
+ The complete CC0-1.0 text is installed at
+ /usr/share/common-licenses/CC0-1.0.
+
+Files: usr/lib/open-voice-input-linux/python/*
+Copyright: See the license metadata embedded in each vendored wheel .dist-info
+ directory and /usr/share/doc/open-voice-input-linux/THIRD-PARTY-NOTICES.
+License: multiple
+ sounddevice is MIT; websockets is BSD-3-Clause; cffi is MIT; pycparser is BSD.
+ The bundled files are byte-for-byte members of the wheels identified in
+ BUILD-INFO and verified against the repository runtime hash lock.

@@ -34,6 +34,7 @@ jobs:
           sudo apt-get install --yes \
             dbus-daemon \
             desktop-file-utils \
+            fonts-noto-cjk \
             gir1.2-ibus-1.0 \
             gir1.2-gtk-4.0 \
             ibus \
@@ -48,13 +49,24 @@ jobs:
       - name: Create isolated test environment
         run: |
           python3 -m venv --system-site-packages .venv
-          .venv/bin/python -m pip install --disable-pip-version-check ruff==0.15.4
+          .venv/bin/python -m pip install --disable-pip-version-check \
+            Pillow==12.1.1 \
+            ruff==0.15.4
       - name: Static checks
         run: |
           .venv/bin/ruff check engine scripts
           .venv/bin/ruff format --check engine scripts
           .venv/bin/python -m compileall -q engine scripts
           git diff --check
+      - name: Regenerate deterministic documentation visuals
+        run: |
+          generated_assets=$(mktemp -d \
+            "$RUNNER_TEMP/openvoice-doc-assets.XXXXXX")
+          .venv/bin/python -I scripts/generate_hero_demo.py \
+            --output-directory "$generated_assets"
+          for asset in hero-demo.gif hero-demo-poster.png social-preview.png; do
+            cmp -- "docs/assets/$asset" "$generated_assets/$asset"
+          done
       - name: Engine tests
         run: |
           PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=engine \
@@ -119,8 +131,13 @@ jobs:
       - name: Shell syntax
         run: |
           bash -n \
+            packaging/debian/postinst \
+            packaging/debian/postrm \
+            packaging/debian/preinst \
+            packaging/debian/prerm \
             packaging/murmur-voice-daemon \
             packaging/open-voice-input-settings \
+            scripts/build-deb.sh \
             scripts/build-preview-bundle.sh \
             scripts/install-user.sh \
             scripts/uninstall-user.sh
@@ -183,7 +200,7 @@ jobs:
 
   preview-bundle:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -192,12 +209,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
+            appstream \
             desktop-file-utils \
+            gir1.2-ibus-1.0 \
             gir1.2-gtk-4.0 \
+            hicolor-icon-theme \
+            ibus \
+            ibus-gtk4 \
             libportaudio2 \
             python3-gi \
             python3-venv \
-            util-linux
+            util-linux \
+            xvfb
           python3 -m venv .venv
       - name: Build clean offline preview bundle twice
         run: |
@@ -250,6 +273,203 @@ jobs:
             --source-repository . \
             --source-ref "$GITHUB_SHA"
           (cd dist && sha256sum --check *.tar.gz.sha256)
+      - name: Build exact-revision Debian package twice
+        run: |
+          preview_extract_dir=$(mktemp -d \
+            "$RUNNER_TEMP/openvoice-preview-extract.XXXXXX")
+          deb_reproducibility_dir=$(mktemp -d \
+            "$RUNNER_TEMP/openvoice-deb-repro.XXXXXX")
+          mapfile -t preview_archives < <(
+            find dist -maxdepth 1 -type f -name '*.tar.gz' -print
+          )
+          if ((${#preview_archives[@]} != 1)); then
+            printf '%s\n' 'expected exactly one verified preview archive' >&2
+            exit 1
+          fi
+          tar -xzf "${preview_archives[0]}" -C "$preview_extract_dir"
+          mapfile -t preview_roots < <(
+            find "$preview_extract_dir" -mindepth 1 -maxdepth 1 \
+              -type d -print
+          )
+          if ((${#preview_roots[@]} != 1)) \
+            || [[ ! -d ${preview_roots[0]}/wheelhouse ]]; then
+            printf '%s\n' 'verified preview did not extract one wheelhouse' >&2
+            exit 1
+          fi
+
+          ./scripts/build-deb.sh \
+            --ref "$GITHUB_SHA" \
+            --wheelhouse "${preview_roots[0]}/wheelhouse" \
+            --output-dir dist
+          ./scripts/build-deb.sh \
+            --ref "$GITHUB_SHA" \
+            --wheelhouse "${preview_roots[0]}/wheelhouse" \
+            --output-dir "$deb_reproducibility_dir"
+
+          mapfile -t primary_debs < <(
+            find dist -maxdepth 1 -type f -name '*.deb' -print
+          )
+          mapfile -t repeated_debs < <(
+            find "$deb_reproducibility_dir" -maxdepth 1 \
+              -type f -name '*.deb' -print
+          )
+          if ((${#primary_debs[@]} != 1 || ${#repeated_debs[@]} != 1)); then
+            printf '%s\n' 'expected one Debian package from each build' >&2
+            exit 1
+          fi
+          primary_checksum=${primary_debs[0]}.sha256
+          repeated_checksum=${repeated_debs[0]}.sha256
+          if [[ ! -f $primary_checksum || -L $primary_checksum \
+            || ! -f $repeated_checksum || -L $repeated_checksum ]]; then
+            printf '%s\n' 'a Debian package checksum is missing or unsafe' >&2
+            exit 1
+          fi
+          if [[ ${primary_debs[0]##*/} != ${repeated_debs[0]##*/} \
+            || ${primary_checksum##*/} != ${repeated_checksum##*/} ]]; then
+            printf '%s\n' 'repeated Debian artifact names differ' >&2
+            exit 1
+          fi
+          cmp -- "${primary_debs[0]}" "${repeated_debs[0]}"
+          cmp -- "$primary_checksum" "$repeated_checksum"
+          (cd dist && sha256sum --check *.deb.sha256)
+          git diff --exit-code
+      - name: Verify Debian metadata and payload
+        run: |
+          mapfile -t debs < <(
+            find dist -maxdepth 1 -type f -name '*.deb' -print
+          )
+          if ((${#debs[@]} != 1)); then
+            printf '%s\n' 'expected exactly one Debian package' >&2
+            exit 1
+          fi
+          deb=${debs[0]}
+          source_epoch=$(git show -s --format=%ct "$GITHUB_SHA")
+          short_commit=$(git rev-parse --short=12 "$GITHUB_SHA")
+          expected_version=$(
+            python3 -I scripts/build_deb_support.py version \
+              --pyproject voice/pyproject.toml \
+              --source-epoch "$source_epoch" \
+              --short-commit "$short_commit"
+          )
+          [[ $(dpkg-deb -f "$deb" Package) == open-voice-input-linux ]]
+          [[ $(dpkg-deb -f "$deb" Version) == "$expected_version" ]]
+          [[ $(dpkg-deb -f "$deb" Architecture) == amd64 ]]
+          [[ ${deb##*/} == \
+            "open-voice-input-linux_${expected_version}_amd64.deb" ]]
+          depends=$(dpkg-deb -f "$deb" Depends)
+          for dependency in python3 python3-gi gir1.2-ibus-1.0 \
+            gir1.2-gtk-4.0 ibus ibus-gtk4 init-system-helpers \
+            libportaudio2 libusb-1.0-0; do
+            if [[ $depends != *"$dependency"* ]]; then
+              printf 'missing runtime dependency in control: %s\n' \
+                "$dependency" >&2
+              exit 1
+            fi
+          done
+
+          inspection_dir=$(mktemp -d \
+            "$RUNNER_TEMP/openvoice-deb-inspect.XXXXXX")
+          dpkg-deb --extract "$deb" "$inspection_dir/payload"
+          dpkg-deb --control "$deb" "$inspection_dir/control"
+          payload=$inspection_dir/payload
+          for path in \
+            usr/bin/murmur-ime-engine \
+            usr/bin/murmur-voice-daemon \
+            usr/bin/open-voice-input-settings; do
+            [[ -x $payload/$path && ! -L $payload/$path ]]
+          done
+          for path in \
+            usr/lib/systemd/user/murmur-ime-engine.service \
+            usr/lib/systemd/user/murmur-ime-voice.service \
+            usr/share/applications/io.github.SidUParis.OpenVoiceInputLinux.Settings.desktop \
+            usr/share/metainfo/io.github.SidUParis.OpenVoiceInputLinux.metainfo.xml \
+            usr/share/doc/open-voice-input-linux/BUILD-INFO \
+            usr/share/doc/open-voice-input-linux/SBOM.cdx.json; do
+            [[ -f $payload/$path && ! -L $payload/$path ]]
+          done
+          engine_wants=$payload/usr/lib/systemd/user/graphical-session.target.wants/murmur-ime-engine.service
+          [[ -L $engine_wants ]]
+          [[ $(readlink "$engine_wants") == ../murmur-ime-engine.service ]]
+          voice_wants=$payload/usr/lib/systemd/user/graphical-session.target.wants/murmur-ime-voice.service
+          [[ ! -e $voice_wants && ! -L $voice_wants ]]
+          grep -Fx "source_commit=$GITHUB_SHA" \
+            "$payload/usr/share/doc/open-voice-input-linux/BUILD-INFO"
+          desktop-file-validate \
+            "$payload/usr/share/applications/io.github.SidUParis.OpenVoiceInputLinux.Settings.desktop"
+          appstreamcli validate --no-net \
+            "$payload/usr/share/metainfo/io.github.SidUParis.OpenVoiceInputLinux.metainfo.xml"
+          python3 -I - "$payload" "$GITHUB_SHA" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          payload = Path(sys.argv[1])
+          commit = sys.argv[2]
+          private_names = {
+              "adaptive-corrections.json",
+              "corrections.json",
+              "data-collection.json",
+              "microphone-priority.json",
+              "vocabulary.json",
+              "voice.json",
+          }
+          observed_private = sorted(
+              path.relative_to(payload).as_posix()
+              for path in payload.rglob("*")
+              if path.name in private_names
+          )
+          if observed_private:
+              raise SystemExit(f"private configuration packaged: {observed_private}")
+
+          sbom_path = (
+              payload
+              / "usr/share/doc/open-voice-input-linux/SBOM.cdx.json"
+          )
+          sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+          properties = sbom["metadata"]["component"]["properties"]
+          expected = {"name": "openvoiceinput:source-commit", "value": commit}
+          if expected not in properties:
+              raise SystemExit("Debian SBOM does not identify the source commit")
+          PY
+      - name: Install, smoke-test, and remove Debian package
+        run: |
+          mapfile -t debs < <(
+            find dist -maxdepth 1 -type f -name '*.deb' -print
+          )
+          if ((${#debs[@]} != 1)); then
+            printf '%s\n' 'expected exactly one Debian package' >&2
+            exit 1
+          fi
+          [[ ! -e $HOME/.config/murmur-ime ]]
+          sudo env DEBIAN_FRONTEND=noninteractive \
+            apt-get install --yes "./${debs[0]}"
+          [[ $(dpkg-query --show --showformat='${db:Status-Status}' \
+            open-voice-input-linux) == installed ]]
+          [[ $(command -v murmur-ime-engine) == /usr/bin/murmur-ime-engine ]]
+          [[ $(command -v murmur-voice-daemon) == /usr/bin/murmur-voice-daemon ]]
+          [[ $(command -v open-voice-input-settings) == \
+            /usr/bin/open-voice-input-settings ]]
+          timeout 20s murmur-ime-engine --version
+          timeout 20s murmur-voice-daemon --help >/dev/null
+          timeout 20s xvfb-run -a open-voice-input-settings --help >/dev/null
+          voice_wants=/usr/lib/systemd/user/graphical-session.target.wants/murmur-ime-voice.service
+          [[ ! -e $voice_wants && ! -L $voice_wants ]]
+          [[ ! -e $HOME/.config/murmur-ime ]]
+
+          sudo env DEBIAN_FRONTEND=noninteractive \
+            apt-get remove --yes open-voice-input-linux
+          hash -r
+          ! command -v murmur-ime-engine
+          ! command -v murmur-voice-daemon
+          ! command -v open-voice-input-settings
+          [[ ! -e /usr/lib/open-voice-input-linux ]]
+          engine_wants=/usr/lib/systemd/user/graphical-session.target.wants/murmur-ime-engine.service
+          [[ ! -e $engine_wants && ! -L $engine_wants ]]
+          desktop=/usr/share/applications/io.github.SidUParis.OpenVoiceInputLinux.Settings.desktop
+          metainfo=/usr/share/metainfo/io.github.SidUParis.OpenVoiceInputLinux.metainfo.xml
+          [[ ! -e $desktop && ! -L $desktop ]]
+          [[ ! -e $metainfo && ! -L $metainfo ]]
+          [[ ! -e $HOME/.config/murmur-ime ]]
       - name: Upload offline Ubuntu x86_64 preview
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -258,6 +478,8 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256
+            dist/*.deb
+            dist/*.deb.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

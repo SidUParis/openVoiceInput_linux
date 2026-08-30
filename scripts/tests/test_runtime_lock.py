@@ -94,7 +94,7 @@ class PreviewRuntimeLockTests(unittest.TestCase):
         self.assertIn('mktemp "$output_dir/.${bundle_name}.tar.gz.tmp.', script)
         self.assertIn("os.fsync(descriptor)", script)
 
-    def test_ci_builds_the_exact_revision_twice_without_checkout_credentials(
+    def test_ci_builds_each_release_artifact_twice_without_checkout_credentials(
         self,
     ) -> None:
         workflow = (REPOSITORY / ".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -103,10 +103,12 @@ class PreviewRuntimeLockTests(unittest.TestCase):
         )
         self.assertEqual(workflow.count("persist-credentials: false"), 4)
         self.assertEqual(workflow.count("./scripts/build-preview-bundle.sh"), 2)
-        self.assertEqual(workflow.count('--ref "$GITHUB_SHA"'), 2)
+        self.assertEqual(workflow.count("./scripts/build-deb.sh"), 2)
+        self.assertEqual(workflow.count('--ref "$GITHUB_SHA"'), 4)
         self.assertIn('--source-ref "$GITHUB_SHA"', workflow)
         self.assertIn("filecmp.cmp(", workflow)
         self.assertIn("repeated preview build is not byte-identical", workflow)
+        self.assertIn('cmp -- "${primary_debs[0]}" "${repeated_debs[0]}"', workflow)
         self.assertIn("unexpected preview assets", workflow)
         self.assertIn("git diff --exit-code", workflow)
 

@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" = configure ]; then
+    # Apply the newly installed unit definitions to every currently running
+    # user manager. The Debian helper respects policy-rc.d and safely skips
+    # machines without a live user manager.
+    deb-systemd-invoke --user daemon-reload >/dev/null 2>&1 || true
+    if [ -n "${2:-}" ]; then
+        # restart starts only units which are enabled or already active. Thus
+        # an intentionally disabled voice daemon remains disabled on upgrade.
+        deb-systemd-invoke --user restart \
+            murmur-ime-engine.service murmur-ime-voice.service \
+            >/dev/null 2>&1 || true
+    else
+        # The package-owned graphical-session wants link enables only the
+        # microphone-free IBus engine. Voice remains explicit user opt-in.
+        deb-systemd-invoke --user start murmur-ime-engine.service \
+            >/dev/null 2>&1 || true
+    fi
+fi
+
+exit 0

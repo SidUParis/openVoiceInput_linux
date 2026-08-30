@@ -1,0 +1,72 @@
+name: Compatibility report
+description: Report one tested desktop, application, and microphone combination
+title: "[Compatibility]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing. Use invented text only. Never attach an API key, recording, private dictation, personal vocabulary, dataset record, or unredacted log.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.x.y or a full commit SHA
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Distribution and architecture
+      placeholder: Ubuntu 24.04 x86_64
+    validations:
+      required: true
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop, display server, and IBus version
+      placeholder: GNOME 46, Wayland, IBus 1.5.29
+    validations:
+      required: true
+  - type: input
+    id: application
+    attributes:
+      label: Application and toolkit when known
+      placeholder: Firefox 141, GTK; VS Code 1.xx, Electron
+    validations:
+      required: true
+  - type: dropdown
+    id: microphone
+    attributes:
+      label: Microphone category
+      options:
+        - Built-in
+        - Headset
+        - DJI receiver
+        - Other external USB microphone
+        - Virtual or remote microphone
+        - Unknown
+    validations:
+      required: true
+  - type: checkboxes
+    id: results
+    attributes:
+      label: Observed results
+      options:
+        - label: The settings application opened.
+        - label: Dictation started and stopped normally.
+        - label: Partial text appeared at the active caret.
+        - label: Final text was committed exactly once.
+        - label: The previous IBus engine was restored.
+        - label: Cancel did not commit text.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Non-sensitive notes
+      description: Describe failures with invented text. Redact usernames, paths, account identifiers, device serials, and provider responses.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Privacy check
+      options:
+        - label: I included no key, recording, private dictation, personal vocabulary, dataset record, device serial, or sensitive log.
+          required: true

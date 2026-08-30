@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.SidUParis.OpenVoiceInputLinux</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>Open Voice Input Linux</name>
+  <name xml:lang="zh-CN">Open Voice Input Linux</name>
+  <summary>Native inline IBus voice input for Linux</summary>
+  <summary xml:lang="zh-CN">在当前光标处原生输入文字的 Linux 语音输入法</summary>
+  <description>
+    <p>
+      Open Voice Input Linux sends live speech recognition text to the focused
+      IBus input context without using the clipboard or simulated paste.
+    </p>
+    <p>
+      This Ubuntu 24.04 preview supports adaptive terminology corrections,
+      per-utterance microphone selection, and optional user-owned ASR data
+      collection. Recognition currently uses the user's Volcengine account.
+    </p>
+    <p xml:lang="zh-CN">
+      Open Voice Input Linux 将实时语音识别结果直接写入当前 IBus 输入位置，
+      不依赖剪贴板或模拟粘贴。
+    </p>
+    <p xml:lang="zh-CN">
+      当前 Ubuntu 24.04 预览版支持术语纠错学习、逐句动态选择麦克风和可选的
+      用户自有 ASR 数据收集；在线识别目前使用用户自己的火山引擎账号。
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.SidUParis.OpenVoiceInputLinux.Settings.desktop</launchable>
+  <provides>
+    <binary>murmur-voice-daemon</binary>
+    <binary>open-voice-input-settings</binary>
+  </provides>
+  <url type="homepage">https://github.com/SidUParis/openVoiceInput_linux</url>
+  <url type="bugtracker">https://github.com/SidUParis/openVoiceInput_linux/issues</url>
+  <developer id="io.github.siduparis">
+    <name>Open Voice Input Linux contributors</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0-alpha.4" date="2026-08-30">
+      <description>
+        <p>
+          Ubuntu 24.04 alpha with a standalone Debian package and a
+          Chinese-first project landing page.
+        </p>
+      </description>
+    </release>
+  </releases>
+</component>

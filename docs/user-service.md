@@ -1,4 +1,68 @@
-# Per-user engine and voice service
+# User services and installation layouts
+
+Both install layouts run the engine and voice daemon as the desktop user. They
+share the same private XDG configuration and external dataset schema, but they
+must not be installed on top of one another because per-user unit files take
+precedence over package-installed user units under `/usr/lib/systemd/user`.
+
+## Standalone Ubuntu `.deb` (normal installation)
+
+The Ubuntu 24.04 `amd64` package installs root-owned application code and
+locked Python dependencies below `/usr/lib/open-voice-input-linux/python`,
+global commands in `/usr/bin`, and systemd user units in
+`/usr/lib/systemd/user`. Install a downloaded, verified artifact with:
+
+```bash
+sudo apt install ./open-voice-input-linux_*_amd64.deb
+```
+
+The package-owned graphical-session link starts the microphone-free IBus
+engine. It does not enable the voice service or open a microphone. Launch
+**Open Voice Input Linux** from the desktop menu (or run
+`open-voice-input-settings`), save the provider key locally, and choose the
+explicit enable/start action. A terminal alternative is:
+
+```bash
+murmur-voice-daemon configure \
+  --config "${XDG_CONFIG_HOME:-$HOME/.config}/murmur-ime/voice.json"
+systemctl --user enable --now murmur-ime-voice.service
+```
+
+The `.deb` still does not bundle a global shortcut. Bind the desktop shortcut
+of your choice to `murmur-voice-daemon toggle`. Read-only diagnostics use the
+same units and global launcher:
+
+```bash
+systemctl --user status murmur-ime-engine.service murmur-ime-voice.service
+journalctl --user -u murmur-ime-voice.service
+murmur-voice-daemon status
+```
+
+Package pre-installation refuses a detected legacy source-preview installation
+at the standard per-user unit, desktop-entry, or ownership-manifest paths. Run
+`scripts/uninstall-user.sh` from the current or matching verified preview
+bundle as that desktop user, then retry the package. This removes only the
+legacy managed code and units; it preserves private configuration and external
+datasets. Users who installed the source preview below nonstandard XDG roots
+should run the same trusted uninstaller first and confirm the loaded unit paths:
+
+```bash
+systemctl --user show murmur-ime-engine.service murmur-ime-voice.service \
+  --property=FragmentPath
+```
+
+Remove the packaged application with:
+
+```bash
+sudo apt remove open-voice-input-linux
+```
+
+Removal stops both project units before removing their launchers. Remove and
+purge do not claim `$XDG_CONFIG_HOME/murmur-ime` or any selected dataset, so
+keys, vocabulary, correction state, microphone/collection choices, and
+collected records remain until the user deliberately deletes them.
+
+## Source/offline per-user installer
 
 The source-tree installer provides a reversible development installation of
 both the inline-preedit engine and the standalone voice daemon. It uses only
@@ -50,7 +114,8 @@ API-key file.
 
 ## First configuration and startup
 
-Installed files use these XDG-relative locations:
+For this source/offline layout, installed files use these XDG-relative
+locations:
 
 - code and managed virtual environment:
   `$XDG_DATA_HOME/murmur-ime/`;
@@ -316,7 +381,7 @@ systemctl --user restart murmur-ime-engine.service murmur-ime-voice.service
 
 Do not import API keys through the systemd environment.
 
-## Uninstall
+## Remove the source/offline per-user installation
 
 ```bash
 ./scripts/uninstall-user.sh

@@ -4,8 +4,10 @@ The source tree vendors no third-party Python package or Rime data. The
 target-specific offline preview archive includes four third-party runtime
 wheels whose versions and exact wheel hashes are recorded in
 `packaging/requirements-preview-ubuntu-24.04-x86_64-cp312.txt`.
-Distribution packages must resolve system dependencies through the target
-distribution and preserve their own licence files.
+The standalone Ubuntu 24.04 `.deb` safely unpacks those same locked wheels into
+its private root-owned import tree and declares the remaining system
+dependencies through package metadata. It preserves the bundled licences and
+notices; it does not vendor or pin Ubuntu packages.
 
 ## Direct runtime dependencies
 
@@ -37,8 +39,8 @@ The offline preview installer requires the bundle's `BUNDLE-INFO`, canonical
 SBOM, target lock, and exact wheelhouse, and uses `pip --no-index`. A plain
 source checkout does not contain that release metadata: use the explicit
 `--allow-network` developer mode there, or build a complete preview bundle.
-Distribution packages must provide pinned dependencies themselves and must not
-use that development escape hatch.
+The `.deb` builder consumes the same fixed runtime lock and never uses that
+development escape hatch.
 
 Offline installation passes every wheelhouse wheel as an explicit path with
 `--ignore-installed --no-deps`. Thus a compatible but older `sounddevice`,
@@ -80,8 +82,27 @@ That SBOM deliberately describes **only files in the bundled Python
 wheelhouse**. Ubuntu packages and libraries such as Python, IBus, GTK,
 PyGObject, PortAudio, and the build/test tools below are prerequisites or build
 inputs, not payloads in the preview archive, so they are not falsely presented
-as bundled CycloneDX components. A future Debian package or signed system image
-must produce its own broader installation-level SBOM.
+as bundled CycloneDX components.
+
+## Standalone `.deb` SBOM scope
+
+The Ubuntu 24.04 `amd64` package contains a second deterministic CycloneDX 1.5
+document. Its metadata component identifies `open-voice-input-linux`, the exact
+40-character source commit, the Debian package version, and the fixed target.
+Its component list identifies the four bundled Python runtime wheels with
+their locked versions, Package URLs, and whole-wheel SHA-256 values. Matching
+`BUILD-INFO` also records the source epoch and runtime-lock digest.
+
+This package SBOM is deliberately **package scoped, not operating-system
+scoped**. It does not claim that Ubuntu's Python, IBus, GTK, PyGObject,
+PortAudio, libusb, PulseAudio utilities, systemd, or their transitive packages
+are bundled, hashed, or pinned. Those packages remain declared external
+dependencies resolved by APT. It is also not a per-file hash manifest for the
+application source; the exact commit provenance plus the checksum of the
+completed `.deb` cover the released package bytes. A signed repository or
+system image would need a separately locked build environment and a broader
+installation-level inventory before making an operating-system reproducibility
+claim.
 
 ## Test and build tools
 
@@ -108,10 +129,11 @@ isolated Python and pip modes with a fixed file-creation mask. This does not
 make the whole installation reproducible: Ubuntu system packages, CPython and
 pip come from the build/target hosts and are not vendored or pinned by this
 archive.
-Debian/Ubuntu packaging must pin the distribution package versions it builds
-against, record all build inputs and hashes, and extend the wheelhouse SBOM to
-cover that system payload before the first signed distribution-native package
-or system image. A signature on the source/offline alpha preview does not claim
-that broader operating-system reproducibility. Rime Ice remains external until
-a pinned version and checksum can be packaged without writing to the user's
-stock Rime database.
+The standalone `.deb` likewise records its exact source commit and locked
+Python-wheel inputs, normalizes package timestamps, and is compared byte for
+byte when rebuilt on the supported CI runner. That same-runner check does not
+pin the Ubuntu build toolchain or imply that independently provisioned hosts
+produce identical operating-system bits. A signature on either alpha artifact
+does not claim broader operating-system reproducibility. Rime Ice remains
+external until a pinned version and checksum can be packaged without writing
+to the user's stock Rime database.

@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+    remove|deconfigure)
+        # Stop before dpkg removes the launchers. In particular this prevents
+        # Restart= policies from leaving a failed restart loop behind.
+        deb-systemd-invoke --user stop \
+            murmur-ime-voice.service murmur-ime-engine.service \
+            >/dev/null 2>&1 || true
+        ;;
+esac
+
+exit 0
