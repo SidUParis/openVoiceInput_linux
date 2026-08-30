@@ -123,11 +123,35 @@ class DocumentationAssetTests(unittest.TestCase):
 
     def test_user_documents_embed_the_sanitized_screenshot(self) -> None:
         readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
+        english = (REPOSITORY / "README.en.md").read_text(encoding="utf-8")
         chinese = (REPOSITORY / "docs/README.zh-CN.md").read_text(encoding="utf-8")
         self.assertIn("docs/assets/settings-window.png", readme)
+        self.assertIn("docs/assets/settings-window.png", english)
         self.assertIn("assets/settings-window.png", chinese)
-        self.assertIn("empty temporary profile", readme)
+        self.assertIn("空临时配置", readme)
+        self.assertIn("empty temporary profile", english)
         self.assertIn("空临时配置", chinese)
+
+    def test_repository_landing_page_is_chinese_first(self) -> None:
+        readme = (REPOSITORY / "README.md").read_text(encoding="utf-8")
+        english = (REPOSITORY / "README.en.md").read_text(encoding="utf-8")
+
+        self.assertIn("[English](README.en.md)", readme)
+        self.assertIn("[简体中文](README.md)", english)
+        self.assertIn("## 一分钟安装", readme)
+        self.assertNotIn("## Install on Ubuntu", readme)
+        self.assertIn("## Install on Ubuntu", english)
+
+        sections = [line for line in readme.splitlines() if line.startswith("## ")]
+        self.assertGreaterEqual(len(sections), 8)
+        self.assertEqual(sections[0], "## 一分钟安装")
+        self.assertTrue(
+            all(
+                any("\u4e00" <= character <= "\u9fff" for character in section)
+                for section in sections
+            ),
+            "every main README section heading must remain Chinese-first",
+        )
 
     def test_generated_hero_assets_have_bounded_publishable_dimensions(self) -> None:
         self.assertTrue(HERO_ANIMATION.is_file())
