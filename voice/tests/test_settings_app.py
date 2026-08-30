@@ -16,6 +16,10 @@ if not Gtk.init_check():
     pytest.skip("a GTK display is not available", allow_module_level=True)
 
 from murmur_voice.data_collection import DataCollectionConfig  # noqa: E402
+from murmur_voice.microphone_policy import (  # noqa: E402
+    DEFAULT_MICROPHONE_PRIORITY,
+    MicrophonePolicyConfig,
+)
 from murmur_voice.settings_app import APPLY_NOTICE, SettingsWindow  # noqa: E402
 from murmur_voice.settings_controller import (  # noqa: E402
     CORRECTION_TEXT_LIMIT,
@@ -30,6 +34,7 @@ class FakeController:
         self.saved_key = None
         self.saved_vocabulary = None
         self.saved_corrections = None
+        self.saved_microphone_priority = None
         self.saved_data_collection = None
         self.service_actions = []
         self.key_error = None
@@ -39,6 +44,8 @@ class FakeController:
         self.vocabulary_error = None
         self.corrections_error = None
         self.loaded_corrections = (("existing mistake", "existing canonical form"),)
+        self.microphone_policy_error = None
+        self.loaded_microphone_policy = MicrophonePolicyConfig()
         self.data_collection_error = None
         self.loaded_data_collection = DataCollectionConfig()
 
@@ -81,6 +88,18 @@ class FakeController:
             normalized.append(pair)
         self.loaded_corrections = tuple(normalized)
         return len(normalized)
+
+    def load_microphone_policy(self):
+        if self.microphone_policy_error is not None:
+            raise self.microphone_policy_error
+        return self.loaded_microphone_policy
+
+    def save_microphone_priority(self, priority):
+        if self.microphone_policy_error is not None:
+            raise self.microphone_policy_error
+        self.saved_microphone_priority = tuple(priority)
+        self.loaded_microphone_policy = MicrophonePolicyConfig(priority=tuple(priority))
+        return self.loaded_microphone_policy
 
     def load_data_collection(self):
         if self.data_collection_error is not None:
@@ -423,6 +442,18 @@ def test_microphone_unavailable_status_has_actionable_label(window):
     assert "reconnect or select an input" in label
 
 
+def test_microphone_policy_invalid_status_has_repair_action(window):
+    settings_window, _ = window
+
+    settings_window._set_service_snapshot(
+        ServiceSnapshot("active", "idle", "microphone-policy-invalid")
+    )
+
+    label = settings_window.service_status_label.get_text()
+    assert "microphone priority is invalid or unsafe" in label
+    assert "open settings and save a complete order" in label
+
+
 def test_local_collection_is_off_by_default_and_discloses_exact_scope(window):
     settings_window, _ = window
 
@@ -512,15 +543,114 @@ def test_folder_chooser_response_sets_only_a_local_filesystem_path(window, tmp_p
     assert settings_window._data_collection_chooser is None
 
 
-def test_microphone_note_is_per_dictation_and_does_not_claim_global_routing(window):
+def test_microphone_note_discloses_dynamic_and_audio_routing_boundaries(window):
     settings_window, _ = window
 
     notice = settings_window.microphone_selection_notice_label.get_text()
 
-    assert "Before each dictation" in notice
-    assert "DJI Mic Mini 2" in notice
-    assert "playback" in notice
-    assert "system-wide default changes are not requested" in notice
+    assert "Before each new dictation" in notice
+    assert "falls through this order" in notice
+    assert "never switches mid-stream" in notice
+    assert "never moves the playback sink" in notice
+    assert "requests set-default-source" in notice
+    assert "Host audio policy may recompute a default" in notice
+    assert "A2DP is not a headset microphone" in notice
+    assert "call profiles are not switched automatically" in notice
+
+
+def test_microphone_priority_defaults_to_all_four_ranked_categories(window):
+    settings_window, _ = window
+
+    assert tuple(settings_window._microphone_priority) == (DEFAULT_MICROPHONE_PRIORITY)
+    rows = _listbox_rows(settings_window.microphone_priority_list)
+    labels = [
+        widget.get_text()
+        for row in rows
+        for widget in _descendants(row)
+        if isinstance(widget, Gtk.Label)
+    ]
+
+    assert len(rows) == 4
+    assert "DJI Mic Mini 2 receiver" in labels
+    assert "Headset microphone" in labels
+    assert "Other external microphone" in labels
+    assert "Built-in computer microphone" in labels
+
+    first_buttons = [
+        widget for widget in _descendants(rows[0]) if isinstance(widget, Gtk.Button)
+    ]
+    last_buttons = [
+        widget for widget in _descendants(rows[-1]) if isinstance(widget, Gtk.Button)
+    ]
+    assert (
+        next(
+            button for button in first_buttons if button.get_label() == "Move up"
+        ).get_sensitive()
+        is False
+    )
+    assert (
+        next(
+            button for button in last_buttons if button.get_label() == "Move down"
+        ).get_sensitive()
+        is False
+    )
+
+
+def test_microphone_priority_reorder_and_save_are_local_and_hot_loaded(window):
+    settings_window, controller = window
+    first_row = _listbox_rows(settings_window.microphone_priority_list)[0]
+    move_down = next(
+        widget
+        for widget in _descendants(first_row)
+        if isinstance(widget, Gtk.Button) and widget.get_label() == "Move down"
+    )
+
+    move_down.emit("clicked")
+
+    assert tuple(settings_window._microphone_priority) == (
+        "headset",
+        "dji",
+        "external",
+        "built-in",
+    )
+    assert controller.saved_microphone_priority is None
+    assert "future dictations" in settings_window.message_label.get_text()
+
+    settings_window.save_microphone_priority()
+
+    assert controller.saved_microphone_priority == (
+        "headset",
+        "dji",
+        "external",
+        "built-in",
+    )
+    message = settings_window.message_label.get_text()
+    assert "next dictation reevaluates all usable inputs" in message
+    assert "active utterance keeps its current microphone" in message
+    assert controller.service_actions == []
+
+
+def test_microphone_priority_load_failure_shows_error_and_safe_default(application):
+    controller = FakeController()
+    controller.microphone_policy_error = SettingsError(
+        "The microphone priority setting could not be loaded safely."
+    )
+    settings_window = SettingsWindow(
+        application,
+        controller,
+        refresh_service_on_start=False,
+    )
+    try:
+        assert tuple(settings_window._microphone_priority) == (
+            DEFAULT_MICROPHONE_PRIORITY
+        )
+        assert "could not be loaded safely" in (
+            settings_window.message_label.get_text()
+        )
+        assert controller.saved_microphone_priority is None
+        assert controller.service_actions == []
+    finally:
+        settings_window.close()
 
 
 @pytest.mark.parametrize(

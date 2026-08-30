@@ -64,7 +64,7 @@ class InstallerHarness:
             self.wheelhouse / filename
             for filename in (
                 "cffi-2.1.1-py3-none-any.whl",
-                "murmur_ime_voice-0.1.0a2-py3-none-any.whl",
+                "murmur_ime_voice-0.1.0a3-py3-none-any.whl",
                 "pycparser-3.0-py3-none-any.whl",
                 "sounddevice-0.5.6-py3-none-any.whl",
                 "websockets-17.0.1-py3-none-any.whl",
@@ -344,7 +344,7 @@ class InstallerHarness:
               chmod 0755 "$launcher"
               site=$(dirname -- "$0")/../lib/python3.12/site-packages/murmur_voice
               mkdir -p "$site"
-              printf '%s\n' '__version__ = "0.1.0a2"' >"$site/__init__.py"
+              printf '%s\n' '__version__ = "0.1.0a3"' >"$site/__init__.py"
               touch "$(dirname -- "$0")/../.mock-local-wheels-installed"
               exit 0
             fi
@@ -909,6 +909,11 @@ class UserInstallTests(unittest.TestCase):
         self.assertIn("--data-collection", unit)
         self.assertIn(
             str(self.harness.config / "murmur-ime/data-collection.json"),
+            unit,
+        )
+        self.assertIn("--microphone-priority", unit)
+        self.assertIn(
+            str(self.harness.config / "murmur-ime/microphone-priority.json"),
             unit,
         )
         engine_unit = (
@@ -1965,6 +1970,16 @@ class UserInstallTests(unittest.TestCase):
         )
         data_collection.write_text(data_collection_payload, encoding="utf-8")
         data_collection.chmod(0o600)
+        microphone_priority = config.parent / "microphone-priority.json"
+        microphone_priority_payload = (
+            '{"version":1,"priority":["headset","dji","external",'
+            '"built-in"],"preferred_sources":{}}\n'
+        )
+        microphone_priority.write_text(
+            microphone_priority_payload,
+            encoding="utf-8",
+        )
+        microphone_priority.chmod(0o600)
         install_result = self.harness.run(
             INSTALLER, "--wheelhouse", str(self.harness.wheelhouse)
         )
@@ -2002,6 +2017,11 @@ class UserInstallTests(unittest.TestCase):
         self.assertEqual(
             data_collection.read_text(encoding="utf-8"), data_collection_payload
         )
+        self.assertEqual(
+            microphone_priority.read_text(encoding="utf-8"),
+            microphone_priority_payload,
+        )
+        self.assertEqual(microphone_priority.stat().st_mode & 0o777, 0o600)
         self.assertEqual(audio.read_bytes(), b"unchanged-dataset-sentinel")
         self.assertIn("dataset", result.stdout)
         self.assertFalse((self.harness.data / "murmur-ime/voice-venv").exists())

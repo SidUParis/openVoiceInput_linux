@@ -66,10 +66,15 @@
   application text; it receives only the bounded observation snapshot returned
   by the focused IBus engine.
 - D-Bus methods validate caller identity, utterance ID, sizes, and state order.
-- DJI link probing is bounded and read-only. Its result may select only the
-  daemon's next stream: it must not change a playback sink or system default,
-  and unknown status must preserve existing system behavior. No
-  mid-utterance handoff is required or claimed.
+- Microphone category priority is private, allowlisted, and loaded before each
+  dictation. Missing configuration has a documented default; an existing
+  invalid/unsafe file fails before audio/provider activity instead of silently
+  changing the user's choice. DJI probing is bounded and read-only. Its result
+  can affect only eligibility for the daemon's next stream: it must not move a
+  playback sink or request/set a system default, and unknown status must not
+  promote DJI ahead of a known-working alternative. Host policy may still
+  recompute a default after conservative profile recovery. No mid-utterance
+  handoff is required or claimed.
 
 ## Non-goals for the MVP
 

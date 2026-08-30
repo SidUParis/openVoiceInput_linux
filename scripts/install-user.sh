@@ -127,6 +127,7 @@ voice_vocabulary="$config_home/murmur-ime/vocabulary.json"
 voice_corrections="$config_home/murmur-ime/corrections.json"
 voice_adaptive_corrections="$config_home/murmur-ime/adaptive-corrections.json"
 voice_data_collection="$config_home/murmur-ime/data-collection.json"
+voice_microphone_priority="$config_home/murmur-ime/microphone-priority.json"
 voice_launcher="$install_root/murmur-voice-daemon"
 runtime_root=${XDG_RUNTIME_DIR:-}
 
@@ -715,7 +716,8 @@ python3 -I "$script_dir/render_systemd_units.py" \
   --set "VOICE_VOCABULARY=$voice_vocabulary" \
   --set "VOICE_CORRECTIONS=$voice_corrections" \
   --set "VOICE_ADAPTIVE_CORRECTIONS=$voice_adaptive_corrections" \
-  --set "VOICE_DATA_COLLECTION=$voice_data_collection"
+  --set "VOICE_DATA_COLLECTION=$voice_data_collection" \
+  --set "VOICE_MICROPHONE_PRIORITY=$voice_microphone_priority"
 chmod 0644 "$stage_engine_unit" "$stage_voice_unit"
 
 service_active murmur-ime-engine.service && engine_was_active=true

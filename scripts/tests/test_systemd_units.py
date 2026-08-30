@@ -55,6 +55,7 @@ class SystemdUnitTests(unittest.TestCase):
                 "VOICE_CORRECTIONS": "/tmp/corrections.json",
                 "VOICE_ADAPTIVE_CORRECTIONS": "/tmp/adaptive-corrections.json",
                 "VOICE_DATA_COLLECTION": "/tmp/data-collection.json",
+                "VOICE_MICROPHONE_PRIORITY": "/tmp/microphone-priority.json",
             },
         )
 
@@ -78,6 +79,10 @@ class SystemdUnitTests(unittest.TestCase):
         )
         self.assertIn(
             '--data-collection "/tmp/data-collection.json"',
+            voice_unit,
+        )
+        self.assertIn(
+            '--microphone-priority "/tmp/microphone-priority.json"',
             voice_unit,
         )
         self.assertIn("UMask=0077", voice_unit)

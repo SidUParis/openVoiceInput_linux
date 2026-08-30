@@ -11,6 +11,12 @@ from murmur_voice.config import (
     load_vocabulary,
 )
 from murmur_voice.data_collection import DataCollectionConfig
+from murmur_voice.microphone_policy import (
+    DEFAULT_MICROPHONE_PRIORITY,
+    MicrophonePolicyConfig,
+    load_microphone_policy_config,
+    save_microphone_policy_config,
+)
 from murmur_voice.settings_controller import (
     SYSTEMCTL,
     VOICE_SERVICE,
@@ -59,6 +65,7 @@ def _controller(tmp_path, runner=None, status_reader=None):
             tmp_path / "private" / "adaptive-corrections.json"
         ),
         "data_collection_path": tmp_path / "private" / "data-collection.json",
+        "microphone_policy_path": tmp_path / "private" / "microphone-priority.json",
         "runner": runner or RecordingRunner(),
     }
     if status_reader is not None:
@@ -284,6 +291,22 @@ def test_microphone_unavailable_status_is_allowlisted(tmp_path):
     )
 
 
+def test_microphone_policy_invalid_status_is_allowlisted(tmp_path):
+    controller = _controller(
+        tmp_path,
+        RecordingRunner(active_state="active"),
+        lambda command: {
+            "ok": False,
+            "state": "idle",
+            "code": "microphone-policy-invalid",
+        },
+    )
+
+    assert controller.service_status() == ServiceSnapshot(
+        "active", "idle", "microphone-policy-invalid"
+    )
+
+
 def test_observing_and_adaptive_status_are_allowlisted(tmp_path):
     controller = _controller(
         tmp_path,
@@ -451,6 +474,92 @@ def test_invalid_optional_data_collection_does_not_block_service_start(tmp_path)
     data_collection_path = tmp_path / "private" / "data-collection.json"
     data_collection_path.write_text("{invalid", encoding="utf-8")
     data_collection_path.chmod(0o600)
+
+    controller.start_service()
+
+    assert [call[0] for call in runner.calls] == [
+        (SYSTEMCTL, "--user", "enable", "--now", VOICE_SERVICE),
+    ]
+
+
+def test_microphone_priority_defaults_and_save_are_private_and_local(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+
+    assert controller.load_microphone_policy() == MicrophonePolicyConfig()
+
+    priority = ("headset", "dji", "external", "built-in")
+    saved = controller.save_microphone_priority(priority)
+    path = tmp_path / "private" / "microphone-priority.json"
+
+    assert saved.priority == priority
+    assert load_microphone_policy_config(path) == saved
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert runner.calls == []
+
+
+def test_microphone_priority_rejects_incomplete_or_duplicate_categories(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+
+    for invalid in (
+        ("dji", "headset", "built-in"),
+        ("dji", "headset", "external", "external"),
+        (*DEFAULT_MICROPHONE_PRIORITY, "unknown"),
+    ):
+        with pytest.raises(SettingsError, match="could not be saved safely"):
+            controller.save_microphone_priority(invalid)
+
+    assert not (tmp_path / "private" / "microphone-priority.json").exists()
+    assert runner.calls == []
+
+
+def test_microphone_priority_save_preserves_same_category_source_preferences(
+    tmp_path,
+):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+    path = tmp_path / "private" / "microphone-priority.json"
+    headset_source = "alsa_input.usb-Poly_Poly_V4320-00.mono-fallback"
+    save_microphone_policy_config(
+        DEFAULT_MICROPHONE_PRIORITY,
+        path,
+        preferred_sources={"headset": headset_source},
+    )
+    previous_preferences = load_microphone_policy_config(path).preferred_sources
+
+    saved = controller.save_microphone_priority(
+        ("headset", "dji", "external", "built-in")
+    )
+
+    assert saved.preferred_sources == previous_preferences
+    assert saved.priority == ("headset", "dji", "external", "built-in")
+    assert runner.calls == []
+
+
+def test_invalid_microphone_priority_is_reported_but_does_not_block_service_start(
+    tmp_path,
+):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+    controller.save_key("test-key")
+    path = tmp_path / "private" / "microphone-priority.json"
+    private_text = "private-microphone-setting-that-must-not-appear"
+    path.write_text(private_text, encoding="utf-8")
+    path.chmod(0o600)
+
+    with pytest.raises(SettingsError, match="could not be loaded safely") as captured:
+        controller.load_microphone_policy()
+
+    assert private_text not in str(captured.value)
+    assert path.read_text(encoding="utf-8") == private_text
+
+    repaired = controller.save_microphone_priority(DEFAULT_MICROPHONE_PRIORITY)
+
+    assert repaired == MicrophonePolicyConfig()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert private_text not in path.read_text(encoding="utf-8")
 
     controller.start_service()
 

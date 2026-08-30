@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any
 
-from .audio import AudioCapture, AudioDeviceError
+from .audio import AudioCapture, AudioDeviceError, MicrophonePolicyError
 from .config import ConfigError, VoiceConfig
 from .data_collection import DataCollectionError
 from .preedit import AcquireResult, PreeditClient
@@ -63,6 +63,7 @@ class VoiceSession:
         observation_seconds: float = ADAPTIVE_OBSERVATION_SECONDS,
         data_collection_factory: Any | None = None,
         data_collection_status_reader: Any | None = None,
+        microphone_policy_validator: Any | None = None,
     ) -> None:
         if asr_client_factory is not None:
             self._asr_factory = asr_client_factory
@@ -83,6 +84,7 @@ class VoiceSession:
         self._observation_seconds = max(0.1, min(30.0, float(observation_seconds)))
         self._data_collection_factory = data_collection_factory
         self._data_collection_status_reader = data_collection_status_reader
+        self._microphone_policy_validator = microphone_policy_validator
 
         self._lock = threading.RLock()
         self._state = VoiceState.IDLE
@@ -132,6 +134,21 @@ class VoiceSession:
                 return CommandReply(False, "daemon-closed", self._state)
             if self._state is not VoiceState.IDLE:
                 return CommandReply(False, "session-active", self._state)
+
+            if self._microphone_policy_validator is not None:
+                try:
+                    self._microphone_policy_validator()
+                except Exception:
+                    # The dedicated validator never forwards private file
+                    # content. Fail before acquiring preedit focus, probing or
+                    # repairing audio profiles, or constructing a provider.
+                    logger.error("Microphone priority could not be loaded safely")
+                    self._last_error_code = "microphone-policy-invalid"
+                    return CommandReply(
+                        False,
+                        "microphone-policy-invalid",
+                        self._state,
+                    )
 
             utterance_id = str(self._utterance_factory())
             start_deadline = self._monotonic() + self._start_timeout_seconds
@@ -222,6 +239,10 @@ class VoiceSession:
                 logger.error("Recognition context could not be loaded safely")
                 self._abort_locked("recognition-context-invalid")
                 return CommandReply(False, "recognition-context-invalid", self._state)
+            except MicrophonePolicyError:
+                logger.error("Microphone priority could not be loaded safely")
+                self._abort_locked("microphone-policy-invalid")
+                return CommandReply(False, "microphone-policy-invalid", self._state)
             except AudioDeviceError:
                 logger.error("No usable microphone is available")
                 self._abort_locked("microphone-unavailable")

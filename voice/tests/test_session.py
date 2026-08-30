@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from murmur_voice.audio import AudioDeviceError
+from murmur_voice.audio import AudioDeviceError, MicrophonePolicyError
 from murmur_voice.config import ConfigError, VoiceConfig
 from murmur_voice.preedit import AcquireResult, ObservationSnapshot
 from murmur_voice.session import (
@@ -307,6 +307,59 @@ def test_rejected_preedit_never_starts_microphone_or_network():
     assert reply.code == "preedit-rejected"
     assert asr.connected == 0 and audio.started == 0
     assert order == ["preedit-acquire"]
+
+
+def test_invalid_microphone_policy_fails_before_preedit_provider_or_audio():
+    order = []
+    audio = FakeAudio(order)
+    preedit = FakePreedit(order)
+
+    def invalid_policy():
+        order.append("policy-validate")
+        raise MicrophonePolicyError("private details must not appear")
+
+    def provider_factory():
+        raise AssertionError("provider factory must not run")
+
+    session = VoiceSession(
+        VoiceConfig("test-key"),
+        asr_client_factory=provider_factory,
+        audio_capture=audio,
+        preedit_client=preedit,
+        microphone_policy_validator=invalid_policy,
+    )
+
+    reply = session.start()
+
+    assert reply.ok is False
+    assert reply.code == "microphone-policy-invalid"
+    assert reply.state is VoiceState.IDLE
+    assert order == ["policy-validate"]
+    assert preedit.calls == []
+    assert audio.started == 0 and audio.stopped == 0
+    assert session.status().code == "microphone-policy-invalid"
+
+
+def test_policy_failure_during_audio_prepare_keeps_fixed_status_code():
+    session, asr, audio, preedit, timers, order = _session()
+
+    def fail_prepare():
+        order.append("audio-prepare")
+        raise MicrophonePolicyError("simulated invalid policy")
+
+    audio.prepare = fail_prepare
+    reply = session.start()
+
+    assert not reply.ok
+    assert reply.code == "microphone-policy-invalid"
+    assert asr.connected == 0 and audio.started == 0
+    assert order == [
+        "preedit-acquire",
+        "audio-prepare",
+        "audio-stop",
+        "asr-disconnect",
+    ]
+    assert session.status().code == "microphone-policy-invalid"
 
 
 def test_microphone_preflight_failure_never_connects_provider():

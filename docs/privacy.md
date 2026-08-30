@@ -46,6 +46,10 @@ streamed to the Volcengine BigModel ASR service configured by the user.
 - The local-collection choice is stored separately in private
   `data-collection.json`. A missing file means disabled; saving the setting is
   applied at the next dictation without restarting the service.
+- The complete microphone category ordering and optional exact-source
+  preferences are stored separately in private `microphone-priority.json`.
+  They are reloaded before each dictation, are never sent to the recognition
+  provider, and do not contain audio or transcript text.
 - API keys, live transcripts, vocabulary, manual/adaptive corrections, remote
   payloads, selected dataset paths, audio, and DJI status frames are not
   written to logs. An explicitly enabled dataset is the sole intentional local
@@ -149,17 +153,24 @@ Disabling collection and changing its destination take effect for the next
 utterance without a service restart. A disable that has returned also prevents
 older queued or staged, unpublished records from being published. Already
 published records remain until the user deliberately removes them. The
-uninstaller preserves both `data-collection.json` and every dataset in a
-user-selected directory. Orange transport, label review, deletion tooling, and
+uninstaller preserves `microphone-priority.json`, `data-collection.json`, and
+every dataset in a user-selected directory. Orange transport, label review,
+deletion tooling, and
 model training remain future work. See
 [personal-asr-data-plan.md](personal-asr-data-plan.md).
 
-## DJI Mic Mini 2 link probe
+## Microphone priority and DJI link probe
 
-Before a new dictation, a bounded USB status probe may distinguish a linked DJI
-Mic Mini 2 transmitter from its still-enumerated but silent receiver. A proven
-online link selects DJI for that new daemon stream; proven offline selects only
-an unambiguous non-DJI fallback; an unknown result preserves existing system
-behavior. The probe does not retain or log USB frames or identifiers. It never
-changes a playback sink or requests a system default-source change. There is no
-mid-utterance handoff: a link change is considered at the next dictation.
+The private microphone policy contains category order and optional exact Pulse
+source names, not audio. It is reloaded for each new dictation. The recommended
+default is `DJI > headset > other external > built-in`; users can reorder it.
+Missing policy uses that default, while an existing invalid/unsafe file rejects
+the next dictation start rather than silently changing the user's source choice.
+
+A bounded USB status probe may distinguish a linked DJI Mic Mini 2 transmitter
+from its still-enumerated but silent receiver. Proven online makes DJI eligible
+at its configured position; proven offline excludes it; unknown does not promote
+it ahead of a known-working alternative. The probe does not retain or log USB
+frames or identifiers. Selection never changes a playback sink or requests a
+system default-source change. There is no mid-utterance handoff: link or device
+changes are considered at the next dictation.

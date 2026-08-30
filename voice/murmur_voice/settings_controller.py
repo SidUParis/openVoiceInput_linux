@@ -34,6 +34,12 @@ from .data_collection import (
     load_data_collection_config,
     save_data_collection_config,
 )
+from .microphone_policy import (
+    MicrophonePolicyConfig,
+    default_microphone_policy_config_path,
+    load_microphone_policy_config,
+    save_microphone_policy_config,
+)
 
 VOICE_SERVICE = "murmur-ime-voice.service"
 SYSTEMCTL = "/usr/bin/systemctl"
@@ -65,6 +71,7 @@ _STATUS_CODES = frozenset(
         "data-collection-unavailable",
         "final-timeout",
         "microphone-unavailable",
+        "microphone-policy-invalid",
         "none",
         "preedit-final-rejected",
         "preedit-lost",
@@ -121,6 +128,7 @@ class SettingsController:
         corrections_path: str | Path | None = None,
         adaptive_corrections_path: str | Path | None = None,
         data_collection_path: str | Path | None = None,
+        microphone_policy_path: str | Path | None = None,
         runner: Runner = subprocess.run,
         status_reader: StatusReader = request_command,
     ) -> None:
@@ -146,6 +154,11 @@ class SettingsController:
             Path(data_collection_path)
             if data_collection_path is not None
             else default_data_collection_config_path()
+        )
+        self._microphone_policy_path = (
+            Path(microphone_policy_path)
+            if microphone_policy_path is not None
+            else default_microphone_policy_config_path()
         )
         self._runner = runner
         self._status_reader = status_reader
@@ -249,6 +262,40 @@ class SettingsController:
         except ConfigError as error:
             raise SettingsError(
                 "The local data collection setting could not be loaded safely."
+            ) from error
+
+    def load_microphone_policy(self) -> MicrophonePolicyConfig:
+        """Return the private, fixed-category input priority for presentation."""
+
+        try:
+            return load_microphone_policy_config(self._microphone_policy_path)
+        except ConfigError as error:
+            raise SettingsError(
+                "The microphone priority setting could not be loaded safely."
+            ) from error
+
+    def save_microphone_priority(self, priority: Any) -> MicrophonePolicyConfig:
+        """Save one complete category order without touching audio or services."""
+
+        try:
+            current = load_microphone_policy_config(self._microphone_policy_path)
+        except ConfigError:
+            # This is an explicit Save action over a setting the UI already
+            # reported as invalid. A complete allowlisted order repairs it;
+            # unparseable per-device preferences cannot be preserved.
+            preferred_sources = ()
+        else:
+            preferred_sources = current.preferred_sources
+        try:
+            save_microphone_policy_config(
+                priority,
+                self._microphone_policy_path,
+                preferred_sources=preferred_sources,
+            )
+            return load_microphone_policy_config(self._microphone_policy_path)
+        except (ConfigError, OSError) as error:
+            raise SettingsError(
+                "The microphone priority setting could not be saved safely."
             ) from error
 
     def save_data_collection(
