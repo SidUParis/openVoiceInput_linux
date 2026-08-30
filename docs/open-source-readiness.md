@@ -41,16 +41,23 @@ distribution package, or the missing graphical/provider matrix is finished.
 - [x] The Ubuntu 24.04/CPython 3.12 preview pins and hashes every bundled
       runtime wheel and its build backend, emits a deterministic CycloneDX 1.5
       SBOM, and independently recomputes that inventory during verification.
-- [x] A bounded native GTK4 settings window stores only private key,
-      vocabulary, and explicit-correction files and never preloads or logs the
-      provider key.
+- [x] A bounded native GTK4 settings window manages private key, vocabulary,
+      explicit-correction, and default-off local-collection choices. It never
+      preloads or logs the provider key; it displays the selected dataset path
+      locally but never logs the path, audio, or transcript.
+- [x] The optional collector is covered with fake/bounded tests for opt-in,
+      accepted-final-only WAV/JSON publication, background failure, disable
+      revocation, and private config; tests do not record real audio or write to
+      a user-selected dataset.
 - [x] The settings window has a validated desktop-menu entry and local SVG
       icon covered by the transactional ownership manifest and uninstall.
 - [ ] Alpha validation gap: a fresh graphical machine with a physical
       microphone, provider account, logind/systemd user session, and
       representative application matrix has not been tested. The prior
       same-machine lifecycle record and isolated real-IBus smoke do not claim
-      that evidence; the alpha release notes must disclose this limitation.
+      that evidence. Physical DJI online/offline selection and a real mounted
+      collection destination also remain outside the automated matrix; the
+      alpha release notes must disclose this limitation.
 - [x] All provider keys used during pre-release development were disabled after
       a fresh replacement key was installed and validated on 2026-08-26.
 - [x] `main` requires the `security`, `engine`, `voice`, and `preview-bundle`
@@ -84,3 +91,5 @@ distribution package, or the missing graphical/provider matrix is finished.
 - Additional ASR providers.
 - Distribution-native Debian and Arch repositories.
 - Optional managed hotword-table tooling.
+- Local label-review/delete tooling, resumable Orange transport, and any model
+  training or distillation pipeline.

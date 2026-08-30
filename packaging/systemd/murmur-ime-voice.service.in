@@ -9,12 +9,12 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
-ExecStart=@VOICE_EXEC@ run --config @VOICE_CONFIG@ --vocabulary @VOICE_VOCABULARY@ --corrections @VOICE_CORRECTIONS@ --adaptive-corrections @VOICE_ADAPTIVE_CORRECTIONS@
+ExecStart=@VOICE_EXEC@ run --config @VOICE_CONFIG@ --vocabulary @VOICE_VOCABULARY@ --corrections @VOICE_CORRECTIONS@ --adaptive-corrections @VOICE_ADAPTIVE_CORRECTIONS@ --data-collection @VOICE_DATA_COLLECTION@
 ExecStopPost=@VOICE_EXEC@ restore-engine
 Restart=on-failure
 RestartPreventExitStatus=2
 RestartSec=2
-TimeoutStopSec=10
+TimeoutStopSec=30
 UMask=0077
 RuntimeDirectory=murmur-ime
 RuntimeDirectoryMode=0700

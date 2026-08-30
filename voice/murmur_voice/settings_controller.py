@@ -28,6 +28,12 @@ from .config import (
     save_vocabulary,
 )
 from .control import ControlError, request_command
+from .data_collection import (
+    DataCollectionConfig,
+    default_data_collection_config_path,
+    load_data_collection_config,
+    save_data_collection_config,
+)
 
 VOICE_SERVICE = "murmur-ime-voice.service"
 SYSTEMCTL = "/usr/bin/systemctl"
@@ -55,6 +61,8 @@ _STATUS_CODES = frozenset(
         "cancelled",
         "daemon-closed",
         "daemon-shutdown",
+        "data-collection-failed",
+        "data-collection-unavailable",
         "final-timeout",
         "microphone-unavailable",
         "none",
@@ -112,6 +120,7 @@ class SettingsController:
         vocabulary_path: str | Path | None = None,
         corrections_path: str | Path | None = None,
         adaptive_corrections_path: str | Path | None = None,
+        data_collection_path: str | Path | None = None,
         runner: Runner = subprocess.run,
         status_reader: StatusReader = request_command,
     ) -> None:
@@ -132,6 +141,11 @@ class SettingsController:
             Path(adaptive_corrections_path)
             if adaptive_corrections_path is not None
             else default_adaptive_corrections_path()
+        )
+        self._data_collection_path = (
+            Path(data_collection_path)
+            if data_collection_path is not None
+            else default_data_collection_config_path()
         )
         self._runner = runner
         self._status_reader = status_reader
@@ -226,6 +240,44 @@ class SettingsController:
                 "The explicit corrections could not be saved safely."
             ) from error
         return len(normalized)
+
+    def load_data_collection(self) -> DataCollectionConfig:
+        """Return only the explicit local-retention choice and selected path."""
+
+        try:
+            return load_data_collection_config(self._data_collection_path)
+        except ConfigError as error:
+            raise SettingsError(
+                "The local data collection setting could not be loaded safely."
+            ) from error
+
+    def save_data_collection(
+        self,
+        enabled: bool,
+        directory: str | Path | None,
+    ) -> DataCollectionConfig:
+        """Save an opt-in choice without starting audio or contacting a provider."""
+
+        selected = Path(directory) if directory is not None and str(directory) else None
+        if enabled and (selected is None or not selected.is_absolute()):
+            raise SettingsError(
+                "Choose an absolute storage folder before enabling local collection."
+            )
+        if enabled and (not selected.exists() or not selected.is_dir()):
+            raise SettingsError(
+                "The selected local data collection folder is unavailable."
+            )
+        try:
+            save_data_collection_config(
+                enabled,
+                selected,
+                self._data_collection_path,
+            )
+            return load_data_collection_config(self._data_collection_path)
+        except (ConfigError, OSError) as error:
+            raise SettingsError(
+                "The local data collection setting could not be saved safely."
+            ) from error
 
     def service_status(self) -> ServiceSnapshot:
         """Read service state and, when available, the bounded daemon status."""

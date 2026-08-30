@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 gi = pytest.importorskip("gi")
@@ -8,11 +10,12 @@ try:
 except ValueError:
     pytest.skip("GTK4 introspection data is not installed", allow_module_level=True)
 
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import Gio, Gtk  # noqa: E402
 
 if not Gtk.init_check():
     pytest.skip("a GTK display is not available", allow_module_level=True)
 
+from murmur_voice.data_collection import DataCollectionConfig  # noqa: E402
 from murmur_voice.settings_app import APPLY_NOTICE, SettingsWindow  # noqa: E402
 from murmur_voice.settings_controller import (  # noqa: E402
     CORRECTION_TEXT_LIMIT,
@@ -27,6 +30,7 @@ class FakeController:
         self.saved_key = None
         self.saved_vocabulary = None
         self.saved_corrections = None
+        self.saved_data_collection = None
         self.service_actions = []
         self.key_error = None
         self.clear_key_error = None
@@ -35,6 +39,8 @@ class FakeController:
         self.vocabulary_error = None
         self.corrections_error = None
         self.loaded_corrections = (("existing mistake", "existing canonical form"),)
+        self.data_collection_error = None
+        self.loaded_data_collection = DataCollectionConfig()
 
     def key_state(self):
         return KeyState.READY
@@ -75,6 +81,21 @@ class FakeController:
             normalized.append(pair)
         self.loaded_corrections = tuple(normalized)
         return len(normalized)
+
+    def load_data_collection(self):
+        if self.data_collection_error is not None:
+            raise self.data_collection_error
+        return self.loaded_data_collection
+
+    def save_data_collection(self, enabled, directory):
+        if self.data_collection_error is not None:
+            raise self.data_collection_error
+        self.saved_data_collection = (enabled, directory)
+        self.loaded_data_collection = DataCollectionConfig(
+            enabled=enabled,
+            directory=Path(directory) if directory is not None else None,
+        )
+        return self.loaded_data_collection
 
     def service_status(self):
         self.service_actions.append("status")
@@ -400,3 +421,122 @@ def test_microphone_unavailable_status_has_actionable_label(window):
     label = settings_window.service_status_label.get_text()
     assert "no usable microphone" in label
     assert "reconnect or select an input" in label
+
+
+def test_local_collection_is_off_by_default_and_discloses_exact_scope(window):
+    settings_window, _ = window
+
+    notice = settings_window.data_collection_notice_label.get_text()
+
+    assert settings_window.data_collection_check.get_active() is False
+    assert settings_window.data_collection_directory_entry.get_text() == ""
+    assert settings_window.data_collection_directory_entry.get_editable() is False
+    assert "Off by default" in notice
+    assert "authoritative Volcengine final" in notice
+    assert "WAV" in notice
+    assert "unreviewed pseudo-label" in notice
+    assert "Volcengine" in notice
+    assert "openvoiceinput-dataset-v1" in notice
+    assert "spoken_verbatim and preferred_output remain empty" in notice
+    assert "uploads" in notice
+    assert "trains a model" in notice
+    assert "unpublished queued records" in notice
+    assert "already published records are retained" in notice
+    assert settings_window.choose_data_collection_directory_button.get_label() == (
+        "Choose folder…"
+    )
+
+
+def test_data_collection_save_is_explicit_local_and_never_starts_service(
+    window, tmp_path
+):
+    settings_window, controller = window
+    selected = tmp_path / "personal-asr-records"
+    selected.mkdir()
+    settings_window.data_collection_check.set_active(True)
+    settings_window.data_collection_directory_entry.set_text(str(selected))
+
+    settings_window.save_data_collection()
+
+    assert controller.saved_data_collection == (True, str(selected))
+    assert settings_window.data_collection_check.get_active() is True
+    assert settings_window.data_collection_directory_entry.get_text() == str(selected)
+    assert "collection is enabled" in settings_window.message_label.get_text()
+    assert controller.service_actions == []
+
+
+def test_data_collection_save_error_does_not_start_service_or_echo_path(
+    window, tmp_path
+):
+    settings_window, controller = window
+    private_path = tmp_path / "private-path-that-must-not-appear"
+    controller.data_collection_error = SettingsError(
+        "The selected local data collection folder is unavailable."
+    )
+    settings_window.data_collection_check.set_active(True)
+    settings_window.data_collection_directory_entry.set_text(str(private_path))
+
+    settings_window.save_data_collection()
+
+    message = settings_window.message_label.get_text()
+    assert "unavailable" in message
+    assert str(private_path) not in message
+    assert controller.saved_data_collection is None
+    assert controller.service_actions == []
+
+
+def test_folder_chooser_response_sets_only_a_local_filesystem_path(window, tmp_path):
+    settings_window, _ = window
+    selected = tmp_path / "chosen-records"
+    selected.mkdir()
+
+    class FakeChooser:
+        def __init__(self):
+            self.destroyed = False
+
+        def get_file(self):
+            return Gio.File.new_for_path(str(selected))
+
+        def destroy(self):
+            self.destroyed = True
+
+    chooser = FakeChooser()
+    settings_window._data_collection_chooser = chooser
+
+    settings_window._on_data_collection_directory_response(
+        chooser, Gtk.ResponseType.ACCEPT
+    )
+
+    assert settings_window.data_collection_directory_entry.get_text() == str(selected)
+    assert chooser.destroyed is True
+    assert settings_window._data_collection_chooser is None
+
+
+def test_microphone_note_is_per_dictation_and_does_not_claim_global_routing(window):
+    settings_window, _ = window
+
+    notice = settings_window.microphone_selection_notice_label.get_text()
+
+    assert "Before each dictation" in notice
+    assert "DJI Mic Mini 2" in notice
+    assert "playback" in notice
+    assert "system-wide default changes are not requested" in notice
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    (
+        ("data-collection-failed", "dictation still completed"),
+        ("data-collection-unavailable", "dictation continues"),
+    ),
+)
+def test_optional_collection_status_is_visible_without_marking_service_stopped(
+    window, code, expected
+):
+    settings_window, _ = window
+
+    settings_window._set_service_snapshot(ServiceSnapshot("active", "idle", code))
+
+    label = settings_window.service_status_label.get_text()
+    assert "Service status: running" in label
+    assert expected in label

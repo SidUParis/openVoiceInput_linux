@@ -11,7 +11,11 @@ committing a live hypothesis.
 
 Audio is captured as 16 kHz, mono, signed 16-bit PCM: 32,000 bytes per second,
 about 1.92 MB per minute before protocol overhead. In healthy streaming use,
-audio is sent continuously rather than retained for the whole utterance.
+audio is sent continuously. With default-off local collection disabled, it is
+not retained for the whole utterance. When collection is explicitly enabled,
+the exact current utterance is additionally held in bounded memory, up to
+19.2 MB of PCM at the 600-second product limit, before nonblocking handoff to a
+bounded background writer.
 
 The Volcengine documentation describes `bigmodel_async` as long-audio,
 bidirectional streaming and recommends sending 100–200 ms audio packets. It
@@ -39,6 +43,20 @@ The daemon implements two independent guards:
    cannot drain that queue, recording stops safely instead of growing memory
    without bound.
 
+Optional local collection has a separate two-record writer queue. WAV encoding,
+hashing, sync, and publication run outside the capture callback and session
+lock. A full queue, stalled mount, or write error loses only that unpublished
+optional record and reports a fixed status; it does not block final text or
+grow the queue. This is best-effort direct-to-selected-folder storage with no
+fallback local spool.
+
+On normal service shutdown, the writer gets a bounded 10 seconds to drain
+accepted records inside systemd's 30-second total stop budget. It never extends
+shutdown indefinitely. If the selected filesystem is stalled or unmounted, a
+hidden staging directory may be cleaned up (or remain hidden if the filesystem
+operation itself cannot complete) and the unpublished record may be lost.
+Records already atomically published under `utterances/` remain.
+
 Long meetings should use rolling, focus-bound segments rather than one
 unbounded input-method transaction. A user-configurable longer limit may be
 offered only after continuous 5/30/60/120-minute tests and confirmation of the
@@ -53,3 +71,8 @@ account-specific service expectations from Volcengine support.
 - Focus change before auto-finalisation; confirm no text reaches the new field.
 - Quota, authentication, and rate-limit errors; confirm ordinary Rime typing
   remains available.
+- Enabled local collection at the 600-second limit; confirm bounded RSS,
+  nonblocking final, correct WAV/hash metadata, and atomic publication.
+- Full writer queue, stalled/unmounted destination, disable during staging, and
+  service shutdown; confirm bounded stop time, no publication after disable,
+  and no damage to already published records.

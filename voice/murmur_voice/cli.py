@@ -31,7 +31,14 @@ from .control import (
     ControlServer,
     request_command,
 )
+from .data_collection import (
+    DataCollectionRuntime,
+    default_data_collection_config_path,
+)
 from .engine_restore import EngineRestoreState, RestoreError, restore_saved_engine
+
+
+DATA_COLLECTION_CLOSE_TIMEOUT_SECONDS = 10.0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,6 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--adaptive-corrections",
         type=Path,
         default=default_adaptive_corrections_path(),
+    )
+    run_parser.add_argument(
+        "--data-collection",
+        type=Path,
+        default=default_data_collection_config_path(),
     )
     run_parser.add_argument("--socket", type=Path)
     run_parser.add_argument("--verbose", action="store_true")
@@ -109,6 +121,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             vocabulary_path=options.vocabulary,
             corrections_path=options.corrections,
             adaptive_corrections_path=options.adaptive_corrections,
+            data_collection_path=options.data_collection,
         )
     try:
         response = request_command(options.command, options.socket)
@@ -185,6 +198,7 @@ def _run(
     vocabulary_path: Path | None = None,
     corrections_path: Path | None = None,
     adaptive_corrections_path: Path | None = None,
+    data_collection_path: Path | None = None,
 ) -> int:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -196,6 +210,7 @@ def _run(
     logging.getLogger("websockets").setLevel(logging.WARNING)
     if _restore_engine(None) != 0:
         return 1
+    data_collection_runtime: DataCollectionRuntime | None = None
     try:
         from .adaptive_runtime import AdaptiveCorrectionRuntime
 
@@ -208,6 +223,18 @@ def _run(
             ),
         )
         config = runtime.validate()
+        try:
+            # The optional configuration is deliberately not validated here:
+            # missing or malformed collection consent must never keep the
+            # voice service from starting or ordinary dictation from working.
+            data_collection_runtime = DataCollectionRuntime(
+                config_path=(
+                    data_collection_path or default_data_collection_config_path()
+                )
+            )
+        except (OSError, RuntimeError):
+            logger = logging.getLogger(__name__)
+            logger.error("Optional local data collection is unavailable")
         # Delay GI, sounddevice, and provider imports until run. Status and
         # configure remain useful on systems missing optional runtime pieces.
         from .session import VoiceSession
@@ -216,9 +243,20 @@ def _run(
             config,
             asr_client_factory=runtime.create_asr_client,
             observation_handler=runtime.observe,
+            data_collection_factory=(
+                data_collection_runtime.begin
+                if data_collection_runtime is not None
+                else None
+            ),
+            data_collection_status_reader=(
+                data_collection_runtime.status_code
+                if data_collection_runtime is not None
+                else None
+            ),
         )
         server = ControlServer(session, socket_path)
     except (ConfigError, ControlError, ImportError, RuntimeError) as error:
+        _close_data_collection_runtime(data_collection_runtime)
         # Configuration/control errors are authored locally and contain no key.
         print(str(error), file=sys.stderr)
         return 2
@@ -243,7 +281,25 @@ def _run(
     except ControlError as error:
         print(str(error), file=sys.stderr)
         return 2
+    finally:
+        _close_data_collection_runtime(data_collection_runtime)
     return 0
+
+
+def _close_data_collection_runtime(
+    runtime: DataCollectionRuntime | None,
+) -> None:
+    if runtime is None:
+        return
+    try:
+        if not runtime.close(timeout=DATA_COLLECTION_CLOSE_TIMEOUT_SECONDS):
+            logging.getLogger(__name__).warning(
+                "Optional local data writer did not finish before shutdown"
+            )
+    except Exception:
+        logging.getLogger(__name__).error(
+            "Optional local data writer could not be closed cleanly"
+        )
 
 
 def _restore_engine(path: Path | None) -> int:

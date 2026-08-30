@@ -487,6 +487,7 @@ class PreviewBundleTests(unittest.TestCase):
             "vocabulary.json",
             "corrections.json",
             "adaptive-corrections.json",
+            "data-collection.json",
         ):
             with (
                 self.subTest(forbidden=forbidden),
@@ -508,7 +509,7 @@ class PreviewBundleTests(unittest.TestCase):
                     "scripts/uninstall-user.sh",
                     "scripts/verify_preview_bundle.py",
                     "voice/pyproject.toml",
-                    "wheelhouse/murmur_ime_voice-0.1.0a1-py3-none-any.whl",
+                    "wheelhouse/murmur_ime_voice-0.1.0a2-py3-none-any.whl",
                     forbidden,
                 ):
                     path = root / relative
@@ -517,6 +518,36 @@ class PreviewBundleTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(VerificationError, "local configuration"):
                     verify_bundle_shape(root)
+
+    def test_bundle_shape_rejects_personal_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for relative in (
+                "BUNDLE-INFO",
+                "LICENSE",
+                "README.md",
+                "SBOM.cdx.json",
+                "packaging/desktop/io.github.SidUParis.OpenVoiceInputLinux.Settings.desktop.in",
+                "packaging/icons/io.github.SidUParis.OpenVoiceInputLinux.Settings.svg",
+                "packaging/open-voice-input-settings",
+                "packaging/requirements-preview-ubuntu-24.04-x86_64-cp312.txt",
+                "scripts/generate_preview_sbom.py",
+                "scripts/render_desktop_entry.py",
+                "scripts/install-user.sh",
+                "scripts/uninstall-user.sh",
+                "scripts/verify_preview_bundle.py",
+                "voice/pyproject.toml",
+                "wheelhouse/murmur_ime_voice-0.1.0a2-py3-none-any.whl",
+            ):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            leaked = root / "openvoiceinput-dataset-v1/utterances/private/audio.wav"
+            leaked.parent.mkdir(parents=True)
+            leaked.write_bytes(b"private audio")
+
+            with self.assertRaisesRegex(VerificationError, "personal dataset leaked"):
+                verify_bundle_shape(root)
 
 
 if __name__ == "__main__":

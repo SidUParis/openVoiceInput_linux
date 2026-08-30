@@ -30,7 +30,10 @@ email or otherwise invent content.
 > toggle ends the observation early; focus loss immediately invalidates
 > learning. The daemon requests restoration before the evidence deadline;
 > IBus command verification may finish shortly afterward. The
-> optional per-user systemd installation now covers both processes. The
+> optional per-user systemd installation now covers both processes. Before
+> each dictation the daemon can choose a linked DJI Mic Mini 2 for its own
+> capture stream, and an explicit, default-off setting can retain accepted
+> utterances as a local WAV/JSON dataset. The
 > permanent combined Rime + voice engine and a distribution-native package are
 > the next milestones.
 
@@ -46,8 +49,9 @@ an IBus context during dictation:
 - No black transcription window or synthetic paste is required.
 - The target UI uses a small floating microphone button only for recording,
   finalizing, and error state. The standalone daemon currently exposes these
-  states through its control command; the compatibility app has the visual
-  button.
+  states through its control command. The separately delivered compatibility
+  Flatpak is a controller UI for that bounded interface; it does not contain
+  this repository's microphone, provider, or dataset implementation.
 
 The target combined architecture is:
 
@@ -58,6 +62,7 @@ flowchart LR
     M["Microphone"] --> V["Voice daemon"]
     S["Settings UI + private config"] --> V
     V -->|"partial / final over D-Bus"| E
+    V -.->|"explicit opt-in WAV + JSON"| D["User-selected local dataset"]
     E -->|"preedit / commit"| F["Focused input field"]
     V --> I["Small recording indicator"]
 ```
@@ -72,8 +77,9 @@ flowchart LR
 - `settings/` — settings UI documentation and entry-point notes. The bounded
   GTK4 implementation lives in `voice/murmur_voice/settings_app.py` and
   `settings_controller.py`; it manages a masked API key, explicit vocabulary,
-  recognition corrections, and user-service status/control through the
-  daemon's private storage. Secret Service migration remains later work.
+  recognition corrections, an optional local dataset destination, and
+  user-service status/control through the daemon's private storage. Secret
+  Service migration remains later work.
 - `scripts/` — user install/uninstall helpers and a deterministic GTK preedit
   demonstration that does not use a microphone or network.
 - `docs/` — architecture, security rules, prototype operation, and D-Bus
@@ -122,9 +128,14 @@ packages must not download code or data during installation.
 - Runtime IBus registration without root access or an IBus/desktop restart.
 - Self-contained microphone/Volcengine daemon with a 10-minute recording cap,
   a 10-second pending-audio cap, and generation-safe late callback rejection.
-- Fresh microphone selection on every recording, including exact per-stream
-  routing around a stale monitor default and conservative output-only profile
-  recovery after device disconnect.
+- Fresh microphone selection on every recording, including link-aware DJI Mic
+  Mini 2 choice, exact per-stream routing around a stale monitor default, and
+  conservative output-only profile recovery after device disconnect. This
+  selection does not change playback or request a system-wide default change.
+- Optional local dataset collection, disabled by default: an accepted
+  authoritative provider final can publish the exact 16 kHz mono signed
+  16-bit utterance as one WAV plus a versioned JSON record below a folder the
+  user selected. Local writing is bounded and runs in the background.
 - A private mode-0600 Unix control socket with `toggle`, `start`, `stop`,
   `cancel`, and `status` commands.
 - Native GTK4 settings that never prefill the saved key and never restart a
@@ -138,11 +149,21 @@ can still be handled by the application, but the previous Rime/IBus engine is
 not available until it is restored. A true single input method still requires
 the planned engine derived from `ibus-rime` and linked to librime.
 
-Adaptive observation is enabled by default in this development branch after a
+Adaptive observation is enabled by default in this alpha after a
 nonempty authoritative final. It is event-driven rather than a polling or
 keyboard-monitoring loop, but the settings window does not yet provide a
 disable switch. Applications without trustworthy IBus surrounding text simply
 produce no learned pair.
+
+Microphone choice is refreshed before every dictation. When exactly one DJI
+Mic Mini 2 receiver is present and its transmitter link is proven online, the
+daemon selects that source for its new capture stream. A proven offline link
+excludes the silent receiver and uses an unambiguous non-DJI fallback. If the
+link cannot be proven, existing system/default-source behavior is preserved.
+This DJI choice is application-scoped: it never changes a playback sink or
+requests a system-wide default-source change. The source is fixed after the
+stream opens, so powering a transmitter on or off during an utterance does not
+handoff live; the next dictation checks again.
 
 ## Try the prototype
 
@@ -208,10 +229,14 @@ launcher and project icon to the desktop application menu.
 ![Open Voice Input Linux settings window with no API key configured](docs/assets/settings-window.png)
 
 _Rendered from an empty temporary profile. The scrollable page continues to
-explicit corrections and service controls._
+explicit corrections, microphone selection, optional local collection, and
+service controls._
 
-Saving a key never contacts the provider or interrupts a recording. Use the
-window's explicit enable/start action after configuration.
+Saving a key or local-collection choice never contacts the provider or
+interrupts a recording. Vocabulary, corrections, and the collection choice are
+reloaded for the next dictation without a service restart; microphone selection
+is also rerun before that dictation. Use the window's explicit enable/start
+action after configuration.
 
 CI also publishes a clean-source Ubuntu x86_64 preview archive with a locked,
 hashed Python wheelhouse, deterministic CycloneDX SBOM, and complete SHA-256
@@ -274,7 +299,10 @@ engine so additional ASR services can be added later.
 
 Microphone audio is streamed to Volcengine only during an active dictation and
 usage is billed to the user's own Volcengine account. Cancelling prevents a
-local commit but cannot retract audio already uploaded. Read
+local commit but cannot retract audio already uploaded. If the user separately
+enables local collection, the same accepted utterance is also retained below
+the selected local or mounted folder; this does not replace or alter the
+provider upload. Read
 [docs/privacy.md](docs/privacy.md) before using voice input with sensitive
 data. The reviewed security assumptions and accepted preview risks are in the
 [threat model](docs/threat-model.md); bundled-code and dependency attribution
@@ -297,11 +325,23 @@ the combined provider view remains at most 50 pairs. Configuration is reloaded
 for the next dictation without restarting the daemon. This is correction
 memory, not local model training.
 
-Retaining microphone audio for a personal ASR dataset is **not** implemented in
-this change. The opt-in future plan keeps `spoken_verbatim` separate from the
-user's `preferred_output`, targets a user-controlled Orange machine for the
-personal deployment, and postpones all training decisions until the collection
-and consent boundaries are implemented. See
+The optional personal-ASR collector is implemented but **off by default**. The
+user must choose an existing absolute local or mounted folder; the application
+initializes `openvoiceinput-dataset-v1` below it. Only an utterance whose
+authoritative provider final was accepted is published, as the exact 16 kHz
+mono signed 16-bit WAV plus `record.json`. `provider_final` is explicitly an
+unreviewed pseudo-label; `spoken_verbatim` and `preferred_output` remain null
+until a later review workflow. The collector uses bounded memory and a
+background writer, and collection failures do not block normal dictation.
+It writes directly to that folder with no fallback spool; service shutdown
+allows a bounded 10-second drain, so a stalled or unmounted destination can
+lose an unpublished staged record while published records remain.
+
+This feature does not upload the local dataset, transfer it to Orange, train or
+fine-tune a model, or add application-level encryption. The selected
+filesystem determines the effective visibility and at-rest protection.
+Disabling collection prevents queued unpublished records from becoming
+visible; records already published remain until the user removes them. See
 [docs/personal-asr-data-plan.md](docs/personal-asr-data-plan.md).
 
 ## Development targets

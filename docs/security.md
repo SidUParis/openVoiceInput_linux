@@ -31,10 +31,23 @@
   authoritative final's anchored IBus span during a five-second same-focus
   lease. Never infer from partials, unrelated text, clipboard, AT-SPI, or global
   key events, and never apply an unbounded local string replacement.
-- Persist only bounded adaptive pair/state/support records, not full
-  transcripts, edit streams, document context, or audio. Manual pairs take
-  priority; conflicts, unsafe overlaps, and cycles must be suppressed, and the
-  provider view remains capped at 50 pairs.
+- Outside the explicit local collector, persist only bounded adaptive
+  pair/state/support records, not full transcripts, edit streams, document
+  context, or audio. Manual pairs take priority; conflicts, unsafe overlaps,
+  and cycles must be suppressed, and the provider view remains capped at 50
+  pairs.
+- Local audio/provider-final collection must remain off by default and require
+  an existing user-selected absolute directory. Publish only after the focused
+  client accepts the authoritative final. Mark that provider text
+  `teacher-unreviewed`; leave `spoken_verbatim` and `preferred_output` null
+  until independent review.
+- Collection filesystem work must stay outside the audio callback/session lock,
+  use bounded memory and a bounded queue, and never block dictation. Disabling
+  must prevent unpublished queued/staged publication while retaining already
+  published records.
+- Do not upload the local dataset, transfer it to Orange, train a model, or
+  imply application-level encryption. The selected filesystem is the storage
+  visibility/at-rest boundary.
 
 ## Focus safety
 
@@ -53,6 +66,10 @@
   application text; it receives only the bounded observation snapshot returned
   by the focused IBus engine.
 - D-Bus methods validate caller identity, utterance ID, sizes, and state order.
+- DJI link probing is bounded and read-only. Its result may select only the
+  daemon's next stream: it must not change a playback sink or system default,
+  and unknown status must preserve existing system behavior. No
+  mid-utterance handoff is required or claimed.
 
 ## Non-goals for the MVP
 

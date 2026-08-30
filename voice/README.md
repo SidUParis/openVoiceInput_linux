@@ -8,8 +8,9 @@ org.murmur.IME.Preedit1 engine, briefly observes one same-focus correction,
 and then restores the previously selected IBus engine.
 
 There is no transcription window and no clipboard/paste fallback. Transcript
-text appears only as native IBus preedit at the focused caret and is never
-written to logs.
+text appears as native IBus preedit at the focused caret and is never written
+to logs. An explicitly enabled local collector is the only intentional
+audio/provider-final record described below.
 
 ## Runtime dependencies
 
@@ -21,6 +22,9 @@ written to logs.
   or newer but below 18.
 - GTK4 introspection data when using the bundled native settings window
   (`gir1.2-gtk-4.0` on Ubuntu).
+- Optional `libusb-1.0` (`libusb-1.0-0` on Ubuntu) for the bounded DJI Mic Mini
+  2 transmitter-link probe. When unavailable, link state is unknown and normal
+  system/default-source behavior is preserved.
 
 From this directory, install into a virtual environment that can see the
 system PyGObject package:
@@ -52,11 +56,18 @@ placeholder.
 An installed preview also provides `open-voice-input-settings`. Its
 `Gtk.PasswordEntry` is never prefilled and is cleared after every save attempt.
 The window can edit the explicit vocabulary and optional recognition
-corrections, and explicitly enable/start or disable/stop the user service.
-Saving alone never contacts Volcengine or restarts an active recording.
+corrections, choose the optional local-collection destination, and explicitly
+enable/start or disable/stop the user service. Saving alone never contacts
+Volcengine or restarts an active recording. All local choices are read again at
+the next dictation without a service restart.
 After the service is explicitly disabled and stopped, a two-step destructive
 button can remove only the local private key file; it never contacts or revokes
 the provider credential itself.
+
+A separately delivered compatibility Flatpak can act as a controller/indicator
+for this daemon's bounded command surface. It does not contain or own this
+repository's microphone capture, provider client, DJI selection, or dataset
+writer; those remain in the installed host daemon.
 
 ## Optional explicit personal vocabulary
 
@@ -112,7 +123,7 @@ new dictation, so changing them does not require a service restart.
 
 Each saved pair is sent with every new dictation in Volcengine's documented
 `request.context.correct_words` map. After a nonempty authoritative final, the
-current development branch enables a bounded five-second adaptive observation
+current alpha enables a bounded five-second adaptive observation
 by default. If the same focused field supplies trustworthy IBus surrounding
 text and the user makes one conservative replacement, only that bounded pair,
 state, and support count may be saved in private
@@ -122,6 +133,48 @@ offer an adaptive disable/manage control. The client never runs a second local
 string replacement after ASR. Because Volcengine
 does not publish request-level pair limits or matching-boundary guarantees,
 this feature is labelled experimental and uses conservative local limits.
+
+## Optional local WAV/JSON collection
+
+Collection is disabled by default. The native settings window requires the
+user to select an existing absolute local or mounted folder before enabling
+it. Saving initializes or reopens `openvoiceinput-dataset-v1` below that
+folder and writes the private choice to
+`$XDG_CONFIG_HOME/murmur-ime/data-collection.json`. It does not contact the
+provider, start a recording, or restart the daemon; each new dictation reloads
+the choice.
+
+For an enabled utterance, audio chunks successfully submitted to the ASR client
+are copied as exact 16 kHz mono signed 16-bit PCM into bounded memory. They are
+offered to the background writer only after a nonempty authoritative provider
+final was accepted by the focused IBus client. Cancel, failure, final rejection,
+no final, and incomplete audio publish nothing.
+
+Each atomically published `utterances/<utterance_id>/` contains `audio.wav` and
+versioned `record.json` with identifiers, UTC time, explicit-opt-in consent,
+audio format/frame counts and hashes, provider/model identity, and three label
+roles. `provider_final` is `teacher-unreviewed`: it is a pseudo-label, not
+ground truth. `spoken_verbatim` and `preferred_output` are both null/unreviewed
+until a separate human-review workflow exists.
+
+The active recorder is bounded by the same 600-second audio limit, and the
+writer queue holds at most two completed records. WAV encoding, hashing, fsync,
+and atomic rename run outside the audio callback and session lock. A full or
+failed writer sets a fixed optional status and does not block normal dictation.
+Disabling or changing the destination prevents older unpublished queued/staged
+items from later becoming published; already published records remain.
+
+This is best-effort direct-to-selected-folder storage. There is no fallback
+local spool: if a mount stalls or disappears, the hidden staging item may be
+cleaned up and that unpublished record may be lost. Normal daemon shutdown
+gives accepted queued records up to 10 seconds to drain inside systemd's
+30-second total stop budget; it does not wait indefinitely.
+
+The collector does not make an extra cloud upload, transfer to Orange, train,
+fine-tune, or distil a model, implement review/deletion tooling, or add
+application-level encryption. The selected filesystem determines effective
+visibility and at-rest protection. Uninstall preserves the private setting and
+every dataset below a user-selected folder.
 
 ## Run and control
 
@@ -165,6 +218,17 @@ mute, or changes volume. Ambiguous or failed preflight returns
 an input and start again. The next start always enumerates again, so no daemon
 restart is required after a device change.
 
+When exactly one DJI Mic Mini 2 source is present, that preflight also performs
+a bounded read-only transmitter-link probe. Proven online selects DJI for the
+new daemon stream. Proven offline excludes the receiver that remains
+enumerated but silent, preserving the current non-DJI default or accepting only
+one unambiguous built-in/non-DJI fallback. Unknown status (including absent,
+busy, inaccessible, malformed, or unavailable `libusb`) preserves the existing
+system/default-source path. The probe neither logs nor retains USB frames. It
+never changes a playback sink or requests a system-wide default-source change.
+The source is fixed once the stream opens; there is no mid-utterance handoff,
+and the next dictation checks again.
+
 The `pactl` discovery/profile transaction has a three-second forward bound and
 a seven-second reserved rollback window (a ten-second hard bound in total).
 The synchronous provider/capture gate has a 35-second logical deadline,
@@ -197,8 +261,9 @@ visible warning; this headless MVP does not itself draw an indicator.
     PYTHONPATH=. pytest
 
 The tests use fake audio streams, ASR providers, D-Bus proxies, IBus command
-runners, timers, and a private temporary Unix socket. They do not access a
-real microphone, network endpoint, or IBus engine.
+runners, DJI USB probes, dataset writers, timers, and a private temporary Unix
+socket. They do not access a real microphone, network endpoint, mounted user
+dataset, or IBus engine.
 
 ## Deliberate MVP limits
 
@@ -211,3 +276,6 @@ real microphone, network endpoint, or IBus engine.
 - The optional user installer manages a foreground-style systemd user service,
   but desktop D-Bus activation and a distribution-native package remain later
   milestones.
+- Local collection has no Orange transport, review/delete interface, automatic
+  label validation, fallback spool, or model-training pipeline. A published
+  provider-final pair remains an unreviewed pseudo-labelled record.

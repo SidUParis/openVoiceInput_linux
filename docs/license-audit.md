@@ -4,6 +4,11 @@ Audit basis: source tree and verified Ubuntu 24.04 preview at implementation
 commit `57181db`, reviewed on 2026-08-24. This is an engineering inventory, not
 legal advice.
 
+Alpha.2 delta reviewed on 2026-08-30: the DJI link probe dynamically loads the
+host's `libusb-1.0`; it adds no bundled wheel or copied library. The Ubuntu
+`libusb-1.0-0` package records LGPL-2.1-or-later terms and remains an external system
+component in this inventory.
+
 ## Result
 
 The current source and preview have a documented licence path for every
@@ -60,11 +65,12 @@ wheelhouse.
 
 ## External system components
 
-Python, PyGObject, GTK, Gio, IBus, PortAudio, systemd, and standard host tools
-are supplied by Ubuntu and are not copied into the preview. Consequently they
-are correctly described as external prerequisites rather than bundled SBOM
-components. A future Debian/Arch package must inventory the exact distribution
-payload and preserve the distribution's corresponding notices.
+Python, PyGObject, GTK, Gio, IBus, PortAudio, `libusb-1.0`, systemd, and
+standard host tools are supplied by Ubuntu and are not copied into the preview.
+Consequently they are correctly described as external prerequisites rather
+than bundled SBOM components. A future Debian/Arch package must inventory the
+exact distribution payload and preserve the distribution's corresponding
+notices.
 
 ibus-rime, librime, and Rime Ice are architectural references only. Their code
 and data are not present in this tree. Vendoring or linking them later requires

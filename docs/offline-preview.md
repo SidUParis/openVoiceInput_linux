@@ -13,8 +13,9 @@ construction.
 
 The bundle does not contain Ubuntu `.deb` packages. Install the documented
 system prerequisites (`ibus`, `gir1.2-ibus-1.0`, `gir1.2-gtk-4.0`,
-`python3-gi`, `python3-venv`, `libportaudio2`, `pulseaudio-utils` for `pactl`,
-and `util-linux` for `flock`)
+`python3-gi`, `python3-venv`, `libportaudio2`, optional `libusb-1.0-0` for the
+DJI Mic Mini 2 link probe, `pulseaudio-utils` for `pactl`, and `util-linux` for
+`flock`)
 before moving the bundle to an offline machine. This preview intentionally refuses to build on any target
 other than Ubuntu 24.04, x86_64 and 64-bit CPython 3.12; the target machine
 must match those tags too.

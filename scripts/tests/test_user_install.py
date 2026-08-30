@@ -64,7 +64,7 @@ class InstallerHarness:
             self.wheelhouse / filename
             for filename in (
                 "cffi-2.1.1-py3-none-any.whl",
-                "murmur_ime_voice-0.1.0a1-py3-none-any.whl",
+                "murmur_ime_voice-0.1.0a2-py3-none-any.whl",
                 "pycparser-3.0-py3-none-any.whl",
                 "sounddevice-0.5.6-py3-none-any.whl",
                 "websockets-17.0.1-py3-none-any.whl",
@@ -344,7 +344,7 @@ class InstallerHarness:
               chmod 0755 "$launcher"
               site=$(dirname -- "$0")/../lib/python3.12/site-packages/murmur_voice
               mkdir -p "$site"
-              printf '%s\n' '__version__ = "0.1.0a1"' >"$site/__init__.py"
+              printf '%s\n' '__version__ = "0.1.0a2"' >"$site/__init__.py"
               touch "$(dirname -- "$0")/../.mock-local-wheels-installed"
               exit 0
             fi
@@ -362,6 +362,8 @@ class InstallerHarness:
                   [[ ${MOCK_ADAPTIVE_CORRECTIONS_INVALID:-0} != 1 ]] || exit 1
                 elif [[ $code == *load_corrections* ]]; then
                   [[ ${MOCK_CORRECTIONS_INVALID:-0} != 1 ]] || exit 1
+                elif [[ $code == *load_data_collection_config* ]]; then
+                  [[ ${MOCK_DATA_COLLECTION_INVALID:-0} != 1 ]] || exit 1
                 else
                   [[ -f $config ]] || exit 1
                 fi
@@ -607,7 +609,7 @@ class UserInstallTests(unittest.TestCase):
         install_text = INSTALLER.read_text(encoding="utf-8")
         self.assertEqual(
             install_text.count('"$install_root/voice-venv/bin/python" -I -c'),
-            4,
+            5,
         )
 
     def test_no_clobber_helper_commits_a_directory_atomically(self) -> None:
@@ -661,9 +663,11 @@ class UserInstallTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        def spawn(flag: str) -> subprocess.Popen[bytes]:
+        def spawn(flag: str, ready: Path) -> subprocess.Popen[bytes]:
             # Run the actual venv interpreter with the production argv spelling
             # so the matcher exercises the host's real /proc entries.
+            process_environment = os.environ.copy()
+            process_environment["MOCK_VOICE_READY"] = str(ready)
             return subprocess.Popen(
                 [
                     str(expected_python),
@@ -674,21 +678,40 @@ class UserInstallTests(unittest.TestCase):
                     "--socket",
                     str(self.harness.runtime / "custom.sock"),
                 ],
+                env=process_environment,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
 
-        processes = [spawn("-I"), spawn("-s"), spawn("-B")]
+        ready_paths = [
+            self.harness.root / f"voice-process-{index}.ready" for index in range(3)
+        ]
+        processes = [
+            spawn(flag, ready)
+            for flag, ready in zip(("-I", "-s", "-B"), ready_paths, strict=True)
+        ]
         try:
-            deadline = time.monotonic() + 2
+            deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
-                if managed_voice_process_count(install_root) == 2:
+                if all(ready.exists() for ready in ready_paths):
+                    break
+                if any(process.poll() is not None for process in processes):
                     break
                 time.sleep(0.01)
+            self.assertTrue(
+                all(ready.exists() for ready in ready_paths),
+                "voice test processes did not reach their stable run state: "
+                f"{[process.poll() for process in processes]}",
+            )
+            self.assertTrue(
+                all(process.poll() is None for process in processes),
+                "voice test process exited after signaling readiness",
+            )
             self.assertEqual(managed_voice_process_count(install_root), 2)
         finally:
             for process in processes:
-                process.terminate()
+                if process.poll() is None:
+                    process.terminate()
             for process in processes:
                 process.wait(timeout=2)
 
@@ -881,6 +904,11 @@ class UserInstallTests(unittest.TestCase):
         self.assertIn("--adaptive-corrections", unit)
         self.assertIn(
             str(self.harness.config / "murmur-ime/adaptive-corrections.json"),
+            unit,
+        )
+        self.assertIn("--data-collection", unit)
+        self.assertIn(
+            str(self.harness.config / "murmur-ime/data-collection.json"),
             unit,
         )
         engine_unit = (
@@ -1884,6 +1912,24 @@ class UserInstallTests(unittest.TestCase):
         self.assertIn("adaptive correction ledger", result.stdout)
         self.assertIn("enable --now murmur-ime-voice.service", result.stdout)
 
+    def test_invalid_data_collection_setting_never_blocks_voice_service(self) -> None:
+        self.harness.configure_key_placeholder()
+        self.harness.environment["MOCK_DATA_COLLECTION_INVALID"] = "1"
+
+        result = self.harness.run(
+            INSTALLER, "--wheelhouse", str(self.harness.wheelhouse)
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.harness.calls()
+        self.assertIn("systemctl --user enable murmur-ime-voice.service", calls)
+        self.assertIn("systemctl --user start murmur-ime-voice.service", calls)
+        self.assertLess(
+            calls.index("systemctl --user disable murmur-ime-voice.service"),
+            calls.index("systemctl --user enable murmur-ime-voice.service"),
+        )
+        self.assertIn("Voice input remains enabled", result.stdout)
+
     def test_uninstall_restores_only_recorded_engine_and_retains_key(self) -> None:
         config = self.harness.configure_key_placeholder()
         corrections = config.parent / "corrections.json"
@@ -1899,6 +1945,26 @@ class UserInstallTests(unittest.TestCase):
         )
         adaptive_corrections.write_text(adaptive_payload, encoding="utf-8")
         adaptive_corrections.chmod(0o600)
+        external_dataset = self.harness.root / "selected training storage"
+        utterance = external_dataset / "openvoiceinput-dataset-v1/utterances/test-id"
+        utterance.mkdir(parents=True)
+        audio = utterance / "audio.wav"
+        audio.write_bytes(b"unchanged-dataset-sentinel")
+        data_collection = config.parent / "data-collection.json"
+        data_collection_payload = (
+            json.dumps(
+                {
+                    "version": 1,
+                    "enabled": True,
+                    "directory": str(external_dataset),
+                    "dataset_id": "test-dataset-id",
+                },
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        data_collection.write_text(data_collection_payload, encoding="utf-8")
+        data_collection.chmod(0o600)
         install_result = self.harness.run(
             INSTALLER, "--wheelhouse", str(self.harness.wheelhouse)
         )
@@ -1933,6 +1999,11 @@ class UserInstallTests(unittest.TestCase):
             adaptive_corrections.read_text(encoding="utf-8"), adaptive_payload
         )
         self.assertEqual(adaptive_corrections.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(
+            data_collection.read_text(encoding="utf-8"), data_collection_payload
+        )
+        self.assertEqual(audio.read_bytes(), b"unchanged-dataset-sentinel")
+        self.assertIn("dataset", result.stdout)
         self.assertFalse((self.harness.data / "murmur-ime/voice-venv").exists())
         self.assertFalse(self.harness.desktop_entry().exists())
         self.assertFalse(self.harness.settings_icon().exists())

@@ -8,6 +8,9 @@ The public project name is **Open Voice Input Linux**, with the canonical
 repository `SidUParis/openVoiceInput_linux`. Historical `murmur-*` and
 `org.murmur.*` runtime names remain unchanged throughout the 0.x line as
 compatibility ABI for existing installations and the verified sidecar bridge.
+The separately delivered compatibility Flatpak remains a controller/indicator;
+host microphone routing, provider access, and dataset storage belong to this
+repository's daemon.
 
 ## Phase 0 — Repository and legal boundary
 
@@ -54,6 +57,12 @@ selected.
 - [x] Enable DDC, punctuation, ITN, and sentence segmentation by default.
 - [x] Add bounded local control, recording limits, stale-session rejection,
   and a reversible systemd user-service installation.
+- [x] Add per-dictation, app-scoped DJI Mic Mini 2 link-aware selection without
+  changing playback or requesting a system-wide default; recheck on the next
+  utterance rather than attempting mid-stream handoff.
+- [x] Add optional, default-off local WAV/JSON collection with a user-selected
+  existing destination, bounded background publication, and explicit
+  unreviewed/null label roles.
 - [ ] Generalise the provider boundary and expose a production daemon D-Bus
   API; the transition implementation uses the Preedit1 bridge and local Unix
   control socket.
@@ -74,7 +83,8 @@ them into the librime-capable production engine and removes engine switching.
 ## Phase 4 — Settings and packaging
 
 - [x] Bounded GTK4 settings window with masked API key, explicit vocabulary,
-  explicit provider-side corrections, and user-service controls.
+  explicit provider-side corrections, local-collection choice, microphone
+  boundary notice, and user-service controls.
 - [ ] Optional explicit provider test that clearly warns it creates a real,
   potentially billable ASR session.
 - [ ] Store secrets in Secret Service; provide a documented `0600` fallback.
@@ -90,4 +100,20 @@ them into the librime-capable production engine and removes engine switching.
 - [x] Chinese quick-start, settings screenshot, and contribution guide.
 - [ ] Short inline-preedit demo video recorded with synthetic, non-sensitive
       text.
-- [ ] Make the repository public and publish the first signed preview release.
+- [x] Make the repository public and publish the first signed preview release.
+
+## Phase 6 — Personal ASR corpus and model research
+
+- [x] Implement initial schema-v1 collection of exact opted-in WAV plus an
+  accepted authoritative provider final marked `teacher-unreviewed`; leave
+  `spoken_verbatim` and `preferred_output` null.
+- [ ] Add review, keep/delete, and schema-migration tooling before treating
+  records as a maintained corpus.
+- [ ] Add resumable, authenticated Orange transport with count/hash/deletion
+  verification; current collection writes directly only to the selected local
+  or mounted folder and has no fallback spool.
+- [ ] Build leakage-safe multilingual/code-switch evaluation splits and
+  human-review `spoken_verbatim` separately from `preferred_output`.
+- [ ] Compare vocabulary/correction/decoding baselines before selecting a local
+  model or fine-tuning strategy. No current record is automatically gold or
+  distillation-ready.

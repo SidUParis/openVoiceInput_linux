@@ -10,6 +10,7 @@ from murmur_voice.config import (
     load_corrections as load_corrections_file,
     load_vocabulary,
 )
+from murmur_voice.data_collection import DataCollectionConfig
 from murmur_voice.settings_controller import (
     SYSTEMCTL,
     VOICE_SERVICE,
@@ -57,6 +58,7 @@ def _controller(tmp_path, runner=None, status_reader=None):
         "adaptive_corrections_path": (
             tmp_path / "private" / "adaptive-corrections.json"
         ),
+        "data_collection_path": tmp_path / "private" / "data-collection.json",
         "runner": runner or RecordingRunner(),
     }
     if status_reader is not None:
@@ -394,3 +396,64 @@ def test_unknown_systemctl_output_is_not_forwarded_to_the_view(tmp_path):
 
     assert snapshot == ServiceSnapshot("unknown")
     assert private_output not in repr(snapshot)
+
+
+def test_data_collection_defaults_off_and_save_never_runs_service(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+    selected = tmp_path / "personal-asr-records"
+    selected.mkdir()
+
+    assert controller.load_data_collection() == DataCollectionConfig()
+
+    saved = controller.save_data_collection(True, selected)
+
+    assert saved.enabled is True
+    assert saved.directory == selected
+    assert saved.dataset_id is not None
+    assert controller.load_data_collection() == saved
+    assert runner.calls == []
+
+
+def test_data_collection_enable_requires_absolute_existing_folder(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+
+    with pytest.raises(SettingsError, match="absolute storage folder"):
+        controller.save_data_collection(True, "relative-folder")
+    with pytest.raises(SettingsError, match="folder is unavailable"):
+        controller.save_data_collection(True, tmp_path / "missing-folder")
+
+    assert runner.calls == []
+
+
+def test_data_collection_error_never_echoes_existing_private_content(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+    private_text = "private-data-collection-path-that-must-not-appear"
+    path = tmp_path / "private" / "data-collection.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(private_text, encoding="utf-8")
+    path.chmod(0o600)
+
+    with pytest.raises(SettingsError) as captured:
+        controller.load_data_collection()
+
+    assert private_text not in str(captured.value)
+    assert "must-not-appear" not in str(captured.value)
+    assert runner.calls == []
+
+
+def test_invalid_optional_data_collection_does_not_block_service_start(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+    controller.save_key("test-key")
+    data_collection_path = tmp_path / "private" / "data-collection.json"
+    data_collection_path.write_text("{invalid", encoding="utf-8")
+    data_collection_path.chmod(0o600)
+
+    controller.start_service()
+
+    assert [call[0] for call in runner.calls] == [
+        (SYSTEMCTL, "--user", "enable", "--now", VOICE_SERVICE),
+    ]

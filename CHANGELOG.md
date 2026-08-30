@@ -5,6 +5,8 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-08-30
+
 ### Added
 
 - Default-on, event-driven adaptive correction after an authoritative final:
@@ -16,9 +18,19 @@ here. The project has not published a stable release yet.
   authoritative and the combined provider view remains capped at 50 pairs.
 - A real isolated IBus smoke that edits one committed result and consumes the
   observation exactly once without microphone, provider, key, or network use.
-- A future-only personal ASR data plan that keeps provider output,
-  `spoken_verbatim`, and `preferred_output` separate and does not retain audio
-  in the current implementation.
+- Optional, default-off local data collection that pairs each completed
+  dictation WAV with a versioned JSON record containing the authoritative
+  Volcengine final. Records are staged and published atomically for future
+  personal-ASR dataset work.
+- GTK settings, private per-user configuration, installer, service, and
+  uninstaller support for choosing and retaining an external collection
+  directory without making voice input depend on that directory.
+- Link-aware DJI Mic Mini 2 selection before each dictation: an online
+  transmitter selects its receiver for that capture stream, while an offline
+  transmitter avoids the silent receiver and chooses the current non-DJI
+  default or an unambiguous fallback. If link status cannot be read, the
+  current system default is preserved. Playback and the desktop-wide default
+  source are not changed.
 
 ### Changed
 
@@ -31,14 +43,29 @@ here. The project has not published a stable release yet.
   or failure. Focus loss prevents learning immediately but may wait for the
   remaining lease before restoration.
 
+### Security and privacy
+
+- Collection remains disabled until the user explicitly enables it and picks
+  a directory. Audio and JSON stay local; this release does not upload a
+  dataset to Orange or another host and does not train or fine-tune a model.
+- Provider finals are labelled as unreviewed teacher output. They are not
+  presented as `spoken_verbatim` or `preferred_output`, so future training can
+  distinguish pseudo-labels from user-verified text.
+- Collection write failures are reported separately and do not block or cancel
+  normal dictation. Uninstall retains both the private setting and any external
+  dataset instead of deleting user data.
+
 ### Known limitations
 
-- Adaptive observation is enabled by default in this development branch and
+- Adaptive observation is enabled by default in this alpha and
   currently has no settings-window switch. It only works in applications that
   provide trustworthy IBus surrounding text; unsupported or ambiguous cases
   learn nothing.
-- The legacy Doubao Murmur Flatpak right-Alt controller still uses its own ASR
-  path and is not yet wired to this daemon feature.
+- Microphone choice is refreshed at the start of a dictation; this release does
+  not hand an active recording between devices when link state changes
+  mid-session.
+- The companion Doubao Murmur Flatpak right-Alt controller remains a separate
+  controller-only project and release. It is not bundled into this package.
 
 ## [0.1.0-alpha.1] - 2026-08-26
 

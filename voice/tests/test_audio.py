@@ -423,6 +423,169 @@ def test_valid_real_pulse_default_is_kept_without_mutation():
     assert not any(call[0].startswith("set-") for call in pactl.calls)
 
 
+def test_linked_dji_is_bound_for_this_stream_without_changing_system_default():
+    built_in = "alsa_input.pci-test.analog-stereo"
+    dji = "alsa_input.usb-DJI_Technology_Co.__Ltd._Wireless_Mic_Rx.analog-stereo"
+    pactl = FakePactl(
+        sources=_short_source(8, built_in) + _short_source(9, dji),
+        default=built_in,
+    )
+
+    selection = resolve_input_device(
+        pactl_runner=pactl,
+        dji_link_probe=lambda: True,
+    )
+
+    _assert_pulse_selection(selection, dji)
+    assert pactl.default == built_in
+    assert not any(call[0].startswith("set-") for call in pactl.calls)
+
+
+def test_offline_dji_falls_back_to_unique_built_in_for_this_stream():
+    built_in = "alsa_input.pci-test.analog-stereo"
+    dji = "alsa_input.usb-DJI_Technology_Co.__Ltd._Wireless_Mic_Rx.analog-stereo"
+    pactl = FakePactl(
+        sources=_short_source(8, built_in) + _short_source(9, dji),
+        default=dji,
+    )
+
+    selection = resolve_input_device(
+        pactl_runner=pactl,
+        dji_link_probe=lambda: False,
+    )
+
+    _assert_pulse_selection(selection, built_in)
+    assert pactl.default == dji
+    assert not any(call[0].startswith("set-") for call in pactl.calls)
+
+
+def test_offline_dji_recovers_unique_hidden_output_only_built_in_once():
+    built_in = "alsa_input.pci-test.analog-stereo"
+    dji = "alsa_input.usb-DJI_Technology_Co.__Ltd._Wireless_Mic_Rx.analog-stereo"
+    pactl = FakePactl(
+        sources=_short_source(8, dji) + _short_source(9, "sink.monitor"),
+        default=dji,
+        cards=[_card()],
+    )
+    pactl.after_profile_sources = _short_source(8, dji) + _short_source(10, built_in)
+    pactl.after_profile_json_sources = [_json_source(built_in, 2)]
+    probe_calls = []
+
+    def probe():
+        probe_calls.append("probe")
+        return False
+
+    selection = resolve_input_device(
+        pactl_runner=pactl,
+        sleep=lambda seconds: None,
+        dji_link_probe=probe,
+    )
+
+    _assert_pulse_selection(selection, built_in)
+    assert probe_calls == ["probe"]
+    assert pactl.default == dji
+    assert (
+        "set-card-profile",
+        "alsa_card.pci-test",
+        "output:analog-stereo+input:analog-stereo",
+    ) in pactl.calls
+    assert not any(call[0] == "set-default-source" for call in pactl.calls)
+    assert not any("sink" in call[0] for call in pactl.calls)
+
+
+def test_offline_dji_with_multiple_hidden_cards_fails_without_mutation():
+    dji = "alsa_input.usb-DJI_Technology_Co.__Ltd._Wireless_Mic_Rx.analog-stereo"
+    pactl = FakePactl(
+        sources=_short_source(8, dji) + _short_source(9, "sink.monitor"),
+        default=dji,
+        cards=[
+            _card("alsa_card.pci-first", index=2),
+            _card("alsa_card.pci-second", index=3),
+        ],
+    )
+    probe_calls = []
+
+    def probe():
+        probe_calls.append("probe")
+        return False
+
+    with pytest.raises(AudioDeviceError, match="profile selection is ambiguous"):
+        resolve_input_device(
+            pactl_runner=pactl,
+            sleep=lambda seconds: None,
+            dji_link_probe=probe,
+        )
+
+    assert probe_calls == ["probe"]
+    assert pactl.default == dji
+    assert ("--format=json", "list", "cards") in pactl.calls
+    assert not any(call[0].startswith("set-") for call in pactl.calls)
+
+
+def test_offline_dji_without_safe_hidden_card_fails_without_mutation():
+    dji = "alsa_input.usb-DJI_Technology_Co.__Ltd._Wireless_Mic_Rx.analog-stereo"
+    pactl = FakePactl(
+        sources=_short_source(8, dji) + _short_source(9, "sink.monitor"),
+        default=dji,
+        cards=[],
+    )
+    probe_calls = []
+
+    def probe():
+        probe_calls.append("probe")
+        return False
+
+    with pytest.raises(AudioDeviceError, match="no safe input-capable"):
+        resolve_input_device(
+            pactl_runner=pactl,
+            sleep=lambda seconds: None,
+            dji_link_probe=probe,
+        )
+
+    assert probe_calls == ["probe"]
+    assert pactl.default == dji
+    assert ("--format=json", "list", "cards") in pactl.calls
+    assert not any(call[0].startswith("set-") for call in pactl.calls)
+
+
+def test_unknown_dji_link_state_preserves_existing_default_behavior():
+    built_in = "alsa_input.pci-test.analog-stereo"
+    dji = "alsa_input.usb-DJI_Technology_Co.__Ltd._Wireless_Mic_Rx.analog-stereo"
+    pactl = FakePactl(
+        sources=_short_source(8, built_in) + _short_source(9, dji),
+        default=dji,
+    )
+
+    selection = resolve_input_device(
+        pactl_runner=pactl,
+        dji_link_probe=lambda: None,
+    )
+
+    _assert_pulse_selection(selection, dji)
+    assert pactl.default == dji
+
+
+def test_offline_dji_never_guesses_between_multiple_non_dji_fallbacks():
+    first = "bluez_input.first"
+    second = "xrdp_input.second"
+    dji = "alsa_input.usb-DJI_Technology_Co.__Ltd._Wireless_Mic_Rx.analog-stereo"
+    pactl = FakePactl(
+        sources=(
+            _short_source(7, first) + _short_source(8, second) + _short_source(9, dji)
+        ),
+        default=dji,
+    )
+
+    with pytest.raises(AudioDeviceError, match="unambiguous fallback"):
+        resolve_input_device(
+            pactl_runner=pactl,
+            dji_link_probe=lambda: False,
+        )
+
+    assert pactl.default == dji
+    assert not any(call[0].startswith("set-") for call in pactl.calls)
+
+
 def test_monitor_default_is_left_unchanged_and_real_source_is_bound_per_stream():
     real = "alsa_input.pci-test.analog-stereo"
     pactl = FakePactl(

@@ -11,7 +11,7 @@ does not use root, modify the IBus daemon, or read or write
 On Ubuntu, install the system runtime first:
 
 ```bash
-sudo apt install ibus gir1.2-ibus-1.0 gir1.2-gtk-4.0 python3-gi python3-venv libportaudio2 pulseaudio-utils util-linux
+sudo apt install ibus gir1.2-ibus-1.0 gir1.2-gtk-4.0 python3-gi python3-venv libportaudio2 libusb-1.0-0 pulseaudio-utils util-linux
 ```
 
 The normal installer never silently downloads Python packages. A no-network
@@ -61,13 +61,17 @@ Installed files use these XDG-relative locations:
 - optional vocabulary: `$XDG_CONFIG_HOME/murmur-ime/vocabulary.json`;
 - optional manual corrections: `$XDG_CONFIG_HOME/murmur-ime/corrections.json`;
 - automatically maintained adaptive correction memory:
-  `$XDG_CONFIG_HOME/murmur-ime/adaptive-corrections.json`.
+  `$XDG_CONFIG_HOME/murmur-ime/adaptive-corrections.json`;
+- optional local-collection choice:
+  `$XDG_CONFIG_HOME/murmur-ime/data-collection.json`;
+- optional collected records: `openvoiceinput-dataset-v1/` below the existing
+  local or mounted directory explicitly selected by the user.
 
 If `XDG_DATA_HOME` or `XDG_CONFIG_HOME` is unset, the standard
 `~/.local/share` and `~/.config` defaults apply. The generated service records
-the resolved config, vocabulary, manual-correction, and adaptive-correction
-paths, so a custom XDG config root is used consistently even if it is absent
-from the systemd manager's environment.
+the resolved config, vocabulary, manual-correction, adaptive-correction, and
+local-collection paths, so a custom XDG config root is used consistently even
+if it is absent from the systemd manager's environment.
 
 The engine service starts after installation and is enabled for subsequent
 graphical logins. Its unit is attached to `graphical-session.target`, rather
@@ -77,6 +81,8 @@ retried every two seconds without exhausting the unit's start-rate limit. The
 voice unit is installed but is enabled and started only when the key file,
 optional vocabulary, manual corrections, and an existing adaptive ledger
 already pass the daemon's ownership, permission, schema, and content checks.
+Local collection is not part of this readiness gate: a missing, disabled, or
+invalid optional collection setting must not prevent ordinary dictation.
 Configure a missing or invalid key in the GTK4 settings window:
 
 ```bash
@@ -121,15 +127,54 @@ The optional explicit vocabulary can be edited separately:
   --vocabulary ~/.config/murmur-ime/vocabulary.json
 ```
 
-The key, vocabulary, manual corrections, and adaptive ledger are reloaded
-before every new dictation. Saving a change never mutates an active recording;
-the next start/idle toggle uses it without a daemon restart. A newly invalid or
-unsafe file fails that start before microphone/provider use rather than falling
-back to stale in-memory values.
+The key, vocabulary, manual corrections, adaptive ledger, and local-collection
+choice are reloaded before every new dictation. Saving a change never mutates
+an active recording; the next start/idle toggle uses it without a daemon
+restart. A newly invalid key/vocabulary/correction file fails that start before
+microphone/provider use rather than falling back to stale in-memory values.
+Collection remains an optional side path: its invalid setting or unavailable
+destination reports a fixed collection status and leaves normal dictation
+available.
+
+### Optional local training-data collection
+
+Collection is off by default. In the settings window, select an existing
+absolute local or mounted folder, enable **Keep local WAV + unreviewed provider
+final**, and choose **Save local collection setting**. Saving initializes or
+reopens `openvoiceinput-dataset-v1` below the selected folder. It does not
+contact Volcengine, start capture, or restart the service; the next dictation
+reads the choice.
+
+For each enabled utterance whose authoritative provider final is accepted by
+the focused IBus context, the collector publishes one
+`utterances/<utterance_id>/` directory containing the exact 16 kHz mono signed
+16-bit `audio.wav` and versioned `record.json`. The provider result is stored as
+`provider_final` with `teacher-unreviewed` status. `spoken_verbatim` and
+`preferred_output` are both null/unreviewed: the current pair is a future
+review candidate, not a gold label or distillation-ready sample.
+
+Capture copies bounded PCM into memory; WAV encoding, hashing, syncing, and
+atomic publication run in a bounded background writer. A full/unavailable
+writer or invalid destination reports `data-collection-failed` or
+`data-collection-unavailable` but never blocks normal dictation. Cancelled,
+failed, final-rejected, and no-final sessions produce no published record.
+
+The collector does not make an extra cloud upload, transfer to Orange, train or
+fine-tune a model, or add application-level encryption. The selected
+filesystem controls effective visibility, backup, and at-rest protection.
+Disabling or changing the destination immediately applies to the next
+utterance; once the save returns, older queued/staged records cannot publish.
+Already published records remain until the user deletes them directly.
+
+Storage is best-effort direct to the selected folder; there is no fallback
+local spool. Normal service shutdown gives its writer 10 seconds to drain
+accepted queued records within systemd's 30-second total stop budget. A stalled
+or unmounted destination may leave or remove a hidden staging directory and
+lose that unpublished record. Published `utterances/` entries remain.
 
 ### Adaptive correction observation
 
-This observation is enabled by default in the current development branch after
+This observation is enabled by default in the current alpha after
 a nonempty authoritative final; the settings window does not yet provide a
 disable switch. It is event-driven and does not poll application text.
 
@@ -183,8 +228,8 @@ no-new-privileges policy still allow the user-session D-Bus/IBus and
 PipeWire/PulseAudio Unix sockets plus IPv4/IPv6 access to the configured ASR
 provider. The installed launcher disables Python's per-user site-packages so
 unrelated packages under `~/.local` cannot alter this managed runtime. Logs
-contain lifecycle/error classes, never keys, vocabulary, corrections, or
-dictated text.
+contain lifecycle/error classes, never keys, vocabulary, corrections, selected
+dataset paths, USB status frames, audio, or dictated text.
 
 Each `start`/idle `toggle` rechecks the current microphone before provider
 connection. On a PulseAudio-compatible PipeWire desktop, the daemon uses the
@@ -200,6 +245,17 @@ The daemon does not unmute a source or change volume. The fixed status code
 `microphone-unavailable` means recovery was absent, ambiguous, or failed; use
 the desktop sound panel to select/unmute an input, reconnect the device if
 needed, and start dictation again. Restarting the daemon is not required.
+
+When exactly one DJI Mic Mini 2 source is visible, the daemon also performs a
+bounded link-state probe before that new dictation. Proven online selects DJI
+for the daemon stream even when another system default remains selected. Proven
+offline excludes the silent receiver and preserves the current non-DJI default,
+or uses only one unambiguous built-in/non-DJI fallback. Unknown status (for
+example, a busy/inaccessible receiver or unavailable `libusb`) preserves the
+existing system/default-source behavior. This DJI path is app-scoped: it never
+changes the playback sink or calls `set-default-source`. The selected stream is
+not handed off mid-utterance; transmitter changes are picked up on the next
+`start` or idle `toggle`.
 
 The `pactl` discovery/profile transaction is bounded to three forward seconds,
 with seven more seconds reserved for conservative rollback (ten seconds hard
@@ -261,5 +317,6 @@ files while any managed daemon remains. Only if the current engine is exactly
 stop, never a warning followed by deletion. The managed runtime and units move
 to same-filesystem quarantine before final deletion so an interrupted
 uninstall can roll back. The private API-key, vocabulary, manual-correction,
-and adaptive-correction files are retained, and no Rime program or user
-database is touched.
+adaptive-correction, and `data-collection.json` files are retained. Every
+`openvoiceinput-dataset-v1` below a user-selected folder is outside installer
+ownership and is never removed. No Rime program or user database is touched.
