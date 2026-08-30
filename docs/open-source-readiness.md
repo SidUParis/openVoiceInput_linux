@@ -4,7 +4,9 @@ This repository is a public early technical preview for community testing and
 feedback. Unchecked items below are either explicit alpha validation gaps or
 production-readiness gates, as stated by each item. Publishing a labelled alpha
 does not claim that the permanent combined librime engine, a supported
-distribution package, or the missing graphical/provider matrix is finished.
+package repository, broad distribution support, or the missing
+graphical/provider matrix is finished. The standalone Ubuntu 24.04 `amd64`
+`.deb` is an alpha artifact, not that broader support claim.
 
 ## Public-preview readiness and remaining gates
 
@@ -21,7 +23,8 @@ distribution package, or the missing graphical/provider matrix is finished.
       has enabled the matching service in their account.
 - [ ] Alpha validation gap: install, upgrade, and uninstall have offline mock
       lifecycle coverage and prior same-machine coverage, but no fresh
-      graphical-login lifecycle has been recorded for this release artifact.
+      graphical-login lifecycle has been recorded for both alpha.4 install
+      routes, including the standalone `.deb`.
 - [ ] Alpha validation gap: the mock contract proves that no installer path
       writes to or locks `~/.config/ibus/rime`; a fresh graphical-machine
       fingerprint check remains unperformed for this release artifact.
@@ -38,6 +41,11 @@ distribution package, or the missing graphical/provider matrix is finished.
       risks are recorded in `docs/threat-model.md`.
 - [x] CI builds a clean-source Ubuntu x86_64 preview with a complete offline
       Python wheelhouse, exact SHA256 manifest, and unpacked mock-install test.
+- [x] The standalone Ubuntu 24.04 `amd64` `.deb` builder exports one exact clean
+      commit, consumes only the hash-locked runtime wheels, installs root-owned
+      code plus package-installed user units, emits package provenance/SBOM and a
+      checksum, and refuses a detected higher-precedence source-preview
+      installation.
 - [x] The Ubuntu 24.04/CPython 3.12 preview pins and hashes every bundled
       runtime wheel and its build backend, emits a deterministic CycloneDX 1.5
       SBOM, and independently recomputes that inventory during verification.
@@ -76,6 +84,9 @@ distribution package, or the missing graphical/provider matrix is finished.
 - [x] The `v0.1.0-alpha.2` procedure completed on 2026-08-30 with a
       GitHub-verified signed tag, independently verified offline artifact, and
       immutable prerelease.
+- [x] The `v0.1.0-alpha.3` procedure completed on 2026-08-30 with a
+      GitHub-verified signed tag, independently verified offline artifact, and
+      immutable prerelease.
 
 ## Release gates
 
@@ -95,7 +106,8 @@ distribution package, or the missing graphical/provider matrix is finished.
 - Permanent `ibus-rime`/librime-derived combined engine.
 - Wayland desktop-global shortcut standardisation.
 - Additional ASR providers.
-- Distribution-native Debian and Arch repositories.
+- A signed APT repository, broader Debian-family qualification, and Arch
+  packaging.
 - Optional managed hotword-table tooling.
 - Local label-review/delete tooling, resumable Orange transport, and any model
   training or distillation pipeline.

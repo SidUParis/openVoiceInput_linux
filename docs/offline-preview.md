@@ -1,9 +1,9 @@
 # Offline Ubuntu 24.04 x86_64 / CPython 3.12 preview bundle
 
-Each successful push to `main` publishes a short-lived Ubuntu 24.04 x86_64 /
-CPython 3.12 preview artifact. Pull requests build and verify the same payload
-but cannot upload an installable artifact. Before installing, confirm the
-artifact's full commit SHA belongs to this repository's trusted `main`
+Each successful push to `main` builds a short-lived Ubuntu 24.04 x86_64 /
+CPython 3.12 preview artifact set. Pull requests build and verify the same
+payloads but cannot upload an installable artifact. Before installing, confirm
+the artifact's full commit SHA belongs to this repository's trusted `main`
 history; checksums alone prove integrity, not publisher identity.
 The archive contains only the committed source tree, a project wheel, every
 Python runtime-dependency wheel, `BUNDLE-INFO`, a deterministic CycloneDX 1.5
@@ -11,8 +11,23 @@ Python runtime-dependency wheel, `BUNDLE-INFO`, a deterministic CycloneDX 1.5
 configuration, credentials, bytecode, and Git metadata are excluded by
 construction.
 
-The bundle does not contain Ubuntu `.deb` packages. Install the documented
-system prerequisites (`ibus`, `gir1.2-ibus-1.0`, `gir1.2-gtk-4.0`,
+The bundle does not contain an Ubuntu `.deb` inside itself. The standalone
+`.deb` and its checksum are sibling CI/release assets built from the same exact
+commit and the bundle's hash-locked runtime wheelhouse. For a normal Ubuntu
+24.04 `amd64` installation, verify and install that package:
+
+```bash
+sha256sum --check open-voice-input-linux_*_amd64.deb.sha256
+sudo apt install ./open-voice-input-linux_*_amd64.deb
+```
+
+APT resolves its declared Ubuntu dependencies, while application code and the
+four locked Python runtime wheels come from the package. The remainder of this
+document describes the source/offline archive and its reversible per-user
+installer, which remains useful for verification and development.
+
+Before using that per-user installer, install the documented system
+prerequisites (`ibus`, `gir1.2-ibus-1.0`, `gir1.2-gtk-4.0`,
 `python3-gi`, `python3-venv`, `libportaudio2`, optional `libusb-1.0-0` for the
 DJI Mic Mini 2 link probe, `pulseaudio-utils` for `pactl`, and `util-linux` for
 `flock`)
@@ -121,6 +136,9 @@ archive does not vendor or pin Ubuntu `.deb` packages, the CPython patch
 release, pip, glibc, PortAudio, GTK, or IBus. Consequently this preview is not
 a claim that two arbitrary Ubuntu installations produce or contain identical
 system-level bits. Those external system dependencies and build tools are
-intentionally outside the bundled wheelhouse SBOM; a future signed distribution
-package needs a separately locked OS build environment and installation-level
-SBOM.
+intentionally outside the bundled wheelhouse SBOM. The sibling `.deb` emits a
+separate package-scoped SBOM for its application identity/source commit and
+bundled Python wheels, but it likewise does not inventory or pin the
+surrounding Ubuntu installation. A future signed APT repository or system
+image needs a separately locked OS build environment and broader
+installation-level SBOM before making that claim.

@@ -1,0 +1,17 @@
+Package: open-voice-input-linux
+Version: @PACKAGE_VERSION@
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Open Voice Input Linux contributors <SidUParis@users.noreply.github.com>
+Homepage: https://github.com/SidUParis/openVoiceInput_linux
+Depends: python3 (>= 3.12), python3 (<< 3.13), python3-gi, desktop-file-utils, gir1.2-ibus-1.0, gir1.2-gtk-4.0, hicolor-icon-theme, ibus, ibus-gtk4, init-system-helpers (>= 1.65.2), libffi8, libportaudio2, libusb-1.0-0, pulseaudio-utils, systemd
+Installed-Size: @INSTALLED_SIZE@
+Description: native IBus voice input with inline preedit
+ Open Voice Input Linux streams speech recognition into the focused IBus
+ input context instead of copying text through the clipboard. It includes a
+ GTK settings application, adaptive terminology correction, dynamic
+ microphone selection, and optional user-owned ASR data collection.
+ .
+ This Ubuntu 24.04 amd64 preview uses Volcengine ASR. Microphone audio is sent
+ only after the user explicitly starts a dictation.

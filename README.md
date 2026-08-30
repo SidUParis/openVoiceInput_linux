@@ -1,386 +1,288 @@
 # Open Voice Input Linux
 
-[简体中文快速上手](docs/README.zh-CN.md)
+**Linux 原生自适应语音输入：按下快捷键，说话，文字直接出现在当前光标。**
 
-**A lightweight Linux/IBus voice-input preview with native caret-local preedit.**
+**IBus-native voice typing for Linux: press a shortcut, speak, and see text
+appear at the caret—without clipboard paste or simulated keystrokes.**
 
-Open Voice Input Linux 的目标是面向 Linux/IBus 的开源中文输入法：键盘输入
-由 librime + 雾凇拼音负责，语音输入由火山引擎流式 ASR 负责。当前开发预览
-已经让识别草稿直接显示在应用光标处，并在二遍识别完成后原位提交；键盘与
-语音永久合并为同一个 librime 引擎仍是下一阶段。
+> 中文用户是当前 alpha 的主要使用者。请从
+> **[中文安装与使用指南](docs/README.zh-CN.md)** 开始。
 
-Open Voice Input Linux is an early-stage Linux input method project. Its goal
-is to keep the complete local Rime/Rime Ice typing experience while adding
-native voice dictation directly inside the focused input field.
+![Open Voice Input Linux: voice input appears directly at the active caret](docs/assets/hero-demo.gif)
 
-Canonical repository:
-[github.com/SidUParis/openVoiceInput_linux](https://github.com/SidUParis/openVoiceInput_linux)
+_This interaction concept animation uses synthetic text to illustrate the
+implemented caret-local flow. It is not a screen recording or ASR call; real
+dictation in this alpha uses the user's own Volcengine account._
 
-The voice path is faithful transcription, not generative writing: live ASR,
-two-pass recognition, disfluency removal, punctuation, sentence segmentation,
-and inverse text normalization. It does not turn a short instruction into an
-email or otherwise invent content.
+## Install on Ubuntu
 
-> **Current status:** the Python IBus inline-preedit prototype and a
-> self-contained Volcengine voice daemon are implemented. During one recording
-> they temporarily switch `current IBus engine → murmur-voice`, stream
-> partial/final text over D-Bus, and, after an authoritative final, keep the
-> same focused input context for a bounded five-second correction observation.
-> They then restore the exact previous engine. Cancel, failure, or the next
-> toggle ends the observation early; focus loss immediately invalidates
-> learning. The daemon requests restoration before the evidence deadline;
-> IBus command verification may finish shortly afterward. The
-> optional per-user systemd installation now covers both processes. Before
-> each dictation the daemon applies the user's microphone-category priority
-> to the currently usable inputs for its own capture stream, and an explicit,
-> default-off setting can retain accepted
-> utterances as a local WAV/JSON dataset. The
-> permanent combined Rime + voice engine and a distribution-native package are
-> the next milestones.
+The current package target is **Ubuntu 24.04 x86_64 with IBus**. Download the
+`.deb` from the matching signed entry on the
+[Releases page](https://github.com/SidUParis/openVoiceInput_linux/releases),
+then install it locally:
 
-## Why a new IBus engine?
-
-The original Doubao Murmur desktop application did not own the active IBus input
-context, so it needed a separate transcription window and clipboard-based
-paste. The implemented Python prototype proves the replacement path by owning
-an IBus context during dictation:
-
-- ASR partial results use IBus preedit and appear at the caret.
-- The optimized final result uses IBus commit and enters the application once.
-- No black transcription window or synthetic paste is required.
-- The target UI uses a small floating microphone button only for recording,
-  finalizing, and error state. The standalone daemon currently exposes these
-  states through its control command. The separately delivered compatibility
-  Flatpak is a controller UI for that bounded interface; it does not contain
-  this repository's microphone, provider, or dataset implementation.
-
-The target combined architecture is:
-
-```mermaid
-flowchart LR
-    K["Keyboard"] --> E["Open Voice Input IBus Engine"]
-    E <--> R["librime + Rime Ice data"]
-    M["Microphone"] --> V["Voice daemon"]
-    S["Settings UI + private config"] --> V
-    V -->|"partial / final over D-Bus"| E
-    V -.->|"explicit opt-in WAV + JSON"| D["Local or mounted dataset folder"]
-    E -->|"preedit / commit"| F["Focused input field"]
-    V --> I["Small recording indicator"]
+```bash
+sudo apt install ./open-voice-input-linux_*_amd64.deb
 ```
 
-## Repository components
+Open **Open Voice Input Linux** from the application menu, save your
+own Volcengine API key, review the microphone order, and enable the service.
+The current alpha does not install a system-wide shortcut automatically; bind
+your preferred key (Right Alt is recommended) to:
 
-- `engine/` — implemented Python `murmur-voice` prototype with dynamic IBus
-  registration, focus-safe preedit/final commit, and a temporary D-Bus bridge.
-  It will be replaced by the production `ibus-rime`/librime-capable engine.
-- `voice/` — implemented, isolated Python daemon for microphone capture,
-  Volcengine `bigmodel_async`, bounded local control, and the Preedit1 bridge.
-- `settings/` — settings UI documentation and entry-point notes. The bounded
-  GTK4 implementation lives in `voice/murmur_voice/settings_app.py` and
-  `settings_controller.py`; it manages a masked API key, explicit vocabulary,
-  recognition corrections, an optional local dataset destination, and
-  user-service status/control through the daemon's private storage. Secret
-  Service migration remains later work.
-- `scripts/` — user install/uninstall helpers and a deterministic GTK preedit
-  demonstration that does not use a microphone or network.
-- `docs/` — architecture, security rules, prototype operation, and D-Bus
-  contracts.
+```bash
+murmur-voice-daemon toggle
+```
 
-## 0.x compatibility ABI
+The `.deb` is the normal evaluation path. Maintainers and users who need to
+verify every bundled wheel, hash and SBOM can instead follow the
+[reproducible preview archive procedure](docs/offline-preview.md).
 
-The public project name and repository are **Open Voice Input Linux** and
-`openVoiceInput_linux`. To avoid disrupting existing prototype installations
-and the verified local sidecar bridge, the 0.x line intentionally retains
-these historical internal identifiers:
+## Why this is different
 
-- IBus engine `murmur-voice` and component `org.murmur.IME.Engine`;
-- D-Bus bridge `org.murmur.IME.Preedit1` at
-  `/org/murmur/IME/Preedit1`;
-- executables `murmur-ime-engine` and `murmur-voice-daemon`, plus user units
-  `murmur-ime-engine.service` and `murmur-ime-voice.service`;
-- Python package `murmur_ime_engine`, text domain `murmur-ime`, and user data
-  directory `$XDG_DATA_HOME/murmur-ime`.
+### Native text at the caret
 
-These names are compatibility ABI, not public branding to replace
-mechanically. Any future runtime-identifier migration must support existing
-installations explicitly.
+Partial recognition is rendered with IBus preedit in the focused field, then
+one authoritative final is committed exactly once. The normal path does not
+open a transcription window, read the clipboard, paste with `Ctrl+V`, or
+simulate typing.
 
-Rime Ice data is not currently vendored. Open Voice Input Linux will use
-isolated system and user data directories; it will never concurrently write
-the live database used by stock `ibus-rime`. Existing preferences and user
-data will be imported only through an explicit migration flow. Release
-packages must not download code or data during installation.
+### Learns a precise correction, not your whole document
+
+After a final commit, the engine can observe the same IBus field for at most
+five seconds. One strict replacement inside the committed span may become a
+private correction for a later dictation. It does not monitor global keys,
+AT-SPI, the clipboard, Rime history, or unrelated text. Applications without
+trustworthy IBus surrounding-text support simply do not learn.
+
+This event-driven observation is enabled by default after a nonempty final in
+the current alpha; the Settings window does not yet expose a disable switch.
+The next toggle, focus loss, cancellation or timeout ends it.
+
+### Your optional dataset stays under your control
+
+Collection is off by default. When explicitly enabled, an accepted utterance
+can be retained as its exact 16 kHz mono WAV plus a versioned JSON record in a
+local or already-mounted folder selected by the user. In this alpha the JSON
+contains an **unreviewed provider result**; user edits do not yet backfill the
+training record, and `spoken_verbatim` / `preferred_output` remain unset until
+a future review workflow.
+
+## Cloud, privacy and cost
+
+The only ASR backend implemented today is **Volcengine BigModel ASR 2.0**. It
+requires internet access, an activated speech service and the user's own API
+key; usage is billed under that account. This project does not ship a shared
+key and does not yet provide local ASR.
+
+The voice path is transcription, not generative writing. Provider-side DDC,
+punctuation, segmentation and inverse text normalization may clean a faithful
+transcript, but the application does not expand a short instruction into an
+email or invent new content.
+
+Audio is uploaded only after the user starts a dictation. Cancelling prevents
+a local commit but cannot retract audio already sent to the provider. Optional
+WAV/JSON collection is a separate opt-in and does not replace the provider
+upload. Read the [privacy notice](docs/privacy.md) and
+[threat model](docs/threat-model.md) before using sensitive material.
+
+## Current compatibility
+
+| Area | Current alpha status |
+| --- | --- |
+| Operating system | Ubuntu 24.04 x86_64 is the packaging and CI target; clean-machine, real microphone/provider validation is still being expanded |
+| Desktop input | IBus applications with preedit support; X11 and Wayland application coverage is still being documented |
+| Keyboard IME | The alpha temporarily switches to `murmur-voice` for dictation and correction observation, then restores the exact previous IBus engine |
+| Chinese typing | Permanent librime / Rime Ice keyboard-and-voice integration is planned, not yet complete |
+| Speech provider | Volcengine `bigmodel_async` with two-pass recognition, DDC, ITN, punctuation and sentence segmentation |
+| Local / offline ASR | Not implemented yet |
+| Shortcut / indicator | A shortcut must currently be configured by the user; a separate compatibility controller is not part of this repository's daemon package |
+| Password and private fields | Voice acquisition is refused for protected, fake or unsupported input contexts |
+
+See [known changes and limitations](CHANGELOG.md) and the
+[roadmap](ROADMAP.md) before relying on the alpha for daily work.
 
 ## What works now
 
-- Native cumulative preedit at the active application caret.
-- One authoritative `Final` committed exactly once, without clipboard paste.
-- Bounded adaptive correction learning: after that commit, one strict
-  replacement inside the committed span may become a private correction pair.
-  Insertions, deletions, multiple edits, broad polishing, focus changes, and
-  clients without IBus surrounding-text support do not learn.
-- Focus token, D-Bus sender, utterance ID, and strictly increasing revision
-  checks; stale results are rejected.
-- Cancellation on focus loss, engine disable, or sidecar disappearance; an
-  input-context reset also cancels before Final, while GTK's ordinary
-  same-focus edit reset is tolerated during the bounded observation.
-- Voice acquisition disabled for password, PIN, private, fake, and clients
-  without preedit support.
-- Runtime IBus registration without root access or an IBus/desktop restart.
-- Self-contained microphone/Volcengine daemon with a 10-minute recording cap,
-  a 10-second pending-audio cap, and generation-safe late callback rejection.
-- Fresh microphone selection on every recording using a user-configurable
-  order of DJI, headset, other external, and built-in categories. Unavailable
-  categories fall through to the next one; link-aware DJI handling avoids a
-  proven-offline receiver. Exact per-stream routing also works around a stale
-  monitor default and can conservatively recover an output-only built-in card.
-  This selection does not change playback or request a system-wide default
-  change.
-- Optional filesystem dataset collection, disabled by default: an accepted
-  authoritative provider final can publish the exact 16 kHz mono signed
-  16-bit utterance as one WAV plus a versioned JSON record below a folder the
-  user selected. Local writing is bounded and runs in the background.
-- A private mode-0600 Unix control socket with `toggle`, `start`, `stop`,
-  `cancel`, and `status` commands.
-- Native GTK4 settings that never prefill the saved key and never restart a
-  recording implicitly.
+- Cumulative partial text at the active caret and one authoritative final
+  commit, without clipboard paste.
+- Focus token, D-Bus sender, utterance ID and monotonically increasing revision
+  checks; stale or late results are rejected.
+- Cancellation on focus loss, engine disable or sidecar disappearance.
+- Password, PIN, private, fake and preedit-incompatible contexts are refused.
+- A self-contained voice daemon with a 10-minute recording limit, bounded
+  pending audio and generation-safe late-callback rejection.
+- Fresh microphone selection before every utterance using a user-configurable
+  order of DJI, headset, other external and built-in inputs. Selection affects
+  this capture stream only and does not change the playback device.
+- Explicit vocabulary, manual correction pairs and bounded adaptive correction
+  memory, reloaded before the next dictation without restarting the service.
+- Optional background WAV/JSON publication to an existing local or mounted
+  filesystem directory, with no hidden fallback upload.
+- A native GTK4 settings window and private mode-0600 control socket.
 
-The temporary switch is a development bridge. While `murmur-voice` is active,
-ordinary keys pass through and stock `ibus-rime` is not providing Chinese
-keyboard composition. This includes the correction-observation window, which
-ends after at most five seconds or on the next toggle. Ordinary direct key input
-can still be handled by the application, but the previous Rime/IBus engine is
-not available until it is restored. A true single input method still requires
-the planned engine derived from `ibus-rime` and linked to librime.
+## Use the alpha
 
-Adaptive observation is enabled by default in this alpha after a
-nonempty authoritative final. It is event-driven rather than a polling or
-keyboard-monitoring loop, but the settings window does not yet provide a
-disable switch. Applications without trustworthy IBus surrounding text simply
-produce no learned pair.
+### Configure
 
-Microphone choice is refreshed before every dictation. The settings window
-stores one complete priority order for four categories: DJI, headset, other
-external, and built-in. The recommended default is `DJI > headset > other
-external > built-in`, but the user can reorder it. The daemon selects the
-first currently usable category, preferring an explicitly remembered source,
-then the system default within that category, then a unique candidate. An
-ambiguous category is skipped rather than guessed.
-
-DJI remains link-aware: a proven-online transmitter makes its receiver usable,
-a proven-offline receiver is excluded, and an unknown link is not promoted
-ahead of known-working alternatives. If that DJI source is the existing
-system default and no verified non-DJI or recoverable input exists, it may be
-kept as a last-resort continuity path. The choice is application-scoped: it
-never changes a playback sink or requests a system-wide default-source change.
-The source is fixed after the stream opens, so disconnecting a preferred
-device during an utterance does not hand off live; the next dictation falls
-through the saved order again.
-
-## Try the prototype
-
-Run the engine directly from the repository:
+After installation, launch **Open Voice Input Linux** from the desktop
+menu or run:
 
 ```bash
-./engine/murmur-ime-engine
+open-voice-input-settings
 ```
 
-The deterministic visual demo and sender are documented in
-[docs/prototype-demo.md](docs/prototype-demo.md). The complete runtime,
-temporary bridge, safety, and optional per-user install instructions are in
-[docs/python-preedit-prototype.md](docs/python-preedit-prototype.md).
+The saved key is never prefilled into the window. Saving a key, vocabulary,
+correction, microphone order or collection choice does not contact the
+provider or interrupt an active recording. Changes are loaded for the next
+dictation.
 
-For a zero-download, no-key smoke test that leaves the current desktop and
-IBus engine untouched, run:
+![Open Voice Input Linux settings window with no API key configured](docs/assets/settings-window.png)
+
+_Rendered from an empty temporary profile; no saved key or user data appears._
+
+### Start, stop or cancel
+
+The shortcut target uses `toggle`: one invocation starts recording and the
+next requests the provider's two-pass final. The same private controller also
+supports explicit commands:
+
+```bash
+murmur-voice-daemon start
+murmur-voice-daemon stop
+murmur-voice-daemon cancel
+murmur-voice-daemon status
+```
+
+`stop` finalizes audio and waits for the authoritative result. `cancel` clears
+local preedit and prevents a commit, but cannot undo provider upload that
+already happened.
+
+### Optional personal-ASR records
+
+Enable **Keep WAV + unreviewed provider final in selected folder** only if you
+want to retain data. Select an existing absolute local path or an operating-
+system-mounted filesystem. The application itself does not log in to Orange,
+mount SSH storage or accept a Google Drive URL. See the
+[remote dataset storage guide](docs/remote-dataset-storage.md) for SSHFS and
+asynchronous `rclone` backup boundaries.
+
+Direct writes have no local fallback spool. A stalled or disconnected mount
+can lose an unpublished staged record, while already published records remain.
+The selected filesystem controls its effective access and at-rest protection.
+
+## Architecture and safety boundaries
+
+The current preview deliberately keeps the network-facing voice daemon
+separate from the IBus engine:
+
+```mermaid
+flowchart LR
+    M["Selected microphone"] --> V["Voice daemon"]
+    S["Settings + private config"] --> V
+    V -->|"partial / final over D-Bus"| E["Temporary IBus voice engine"]
+    E -->|"preedit / commit"| F["Focused input field"]
+    V -.->|"explicit opt-in"| D["Local or mounted dataset folder"]
+```
+
+During dictation and the bounded correction window, the preview temporarily
+selects `murmur-voice`; stock Rime composition is not available until the
+previous engine is restored. The production goal is one librime-capable engine
+for continuous keyboard and voice input. Details are in the
+[architecture](docs/architecture.md), [D-Bus contract](docs/dbus-api.md),
+[recognition and correction design](docs/recognition-accuracy.md), and
+[personal ASR data plan](docs/personal-asr-data-plan.md).
+
+The 0.x line retains historical internal identifiers such as the
+`murmur-voice` IBus engine, `org.murmur.IME.Preedit1` bridge and
+`$XDG_DATA_HOME/murmur-ime`. These are compatibility ABI, not a second public
+product name. The package does not write to `~/.config/ibus/rime` and does not
+download code or Rime data during installation.
+
+## Deterministic no-key demo
+
+Contributors can verify the caret-local IBus path without a microphone, API key
+or changes to the current desktop session:
 
 ```bash
 python3 -I scripts/run_isolated_preedit_smoke.py
 ```
 
-It creates a temporary HOME plus private Xvfb, D-Bus and IBus instances,
-sends fixed synthetic partial/final text, and retains private partial/final
-screenshots at the printed path. This proves the real caret-local IBus path;
-it does not test a microphone, provider account, systemd user session or fresh
-operating-system dependencies.
+It runs fixed synthetic partial/final text inside private Xvfb, D-Bus and IBus
+instances. This checks the real preedit/commit path, but it is not evidence of
+microphone quality, provider accuracy, systemd integration or application-wide
+compatibility.
 
-To try the standalone daemon from source after installing the engine:
+## Build and test
+
+To build the Debian package from an exact commit and a prepared offline
+wheelhouse, use a clean Ubuntu 24.04 x86_64 checkout whose builder bytes match
+that revision:
 
 ```bash
-cd voice
-python3 -m venv --system-site-packages .venv
-PYTHONNOUSERSITE=1 .venv/bin/pip install -e '.[test]'
-PYTHONNOUSERSITE=1 .venv/bin/murmur-voice-daemon configure
-PYTHONNOUSERSITE=1 .venv/bin/murmur-voice-daemon run
+./scripts/build-deb.sh \
+  --ref EXACT_COMMIT_SHA \
+  --wheelhouse /absolute/path/to/wheelhouse \
+  --output-dir dist
+sudo apt install ./dist/open-voice-input-linux_*_amd64.deb
 ```
 
-The configuration prompt is masked and never accepts a key as a command-line
-argument. Full daemon commands, permissions, limits, and dependencies are in
-[voice/README.md](voice/README.md).
+The package owns its root-installed runtime under
+`/usr/lib/open-voice-input-linux`, public launchers under `/usr/bin`, and user
+unit definitions under `/usr/lib/systemd/user`. It does not enable voice
+capture until the user explicitly does so in Settings.
 
-For a persistent per-user install from a connected source checkout, explicitly
-opt into development dependency resolution:
+Install from a connected source checkout only when you explicitly accept
+development dependency resolution:
 
 ```bash
 ./scripts/install-user.sh --allow-network
 ```
 
-For a locked, no-network install, use the complete CI preview bundle described
-below. Its `--wheelhouse` path is accepted only together with the matching
-project wheel, runtime lock, SBOM, and hashes; an ad hoc `pip wheel` directory
-is intentionally rejected.
-
-After installation, open the native configuration window with:
-
-```bash
-~/.local/share/murmur-ime/open-voice-input-settings
-```
-
-The managed user install also adds an **Open Voice Input Linux** settings
-launcher and project icon to the desktop application menu.
-
-![Open Voice Input Linux settings window with no API key configured](docs/assets/settings-window.png)
-
-_Rendered from an empty temporary profile. The scrollable page continues to
-explicit corrections, microphone selection, optional local collection, and
-service controls._
-
-Saving a key, microphone priority, or local-collection choice never contacts
-the provider or interrupts a recording. Vocabulary, corrections, microphone
-priority, and the collection choice are reloaded for the next dictation
-without a service restart; microphone availability is also re-enumerated then.
-Use the window's explicit enable/start action after configuration.
-
-CI also publishes a clean-source Ubuntu x86_64 preview archive with a locked,
-hashed Python wheelhouse, deterministic CycloneDX SBOM, and complete SHA-256
-manifest. Its offline installation and verification procedure is documented in
-[docs/offline-preview.md](docs/offline-preview.md).
-
-User-visible preview changes and known limitations are tracked in
-[CHANGELOG.md](CHANGELOG.md).
-
-Configuration, systemd behavior, upgrades, desktop shortcuts, troubleshooting,
-and safe uninstall are documented in
-[docs/user-service.md](docs/user-service.md). This is still a developer
-preview: there is not yet a distribution-native package or built-in global
-shortcut.
-
-IBus preedit is session-local and cannot be forwarded through an RDP canvas as
-ordinary keystrokes. Remmina microphone redirection, remote-session setup, and
-the explicit clipboard fallback are documented in
-[docs/remote-desktop.md](docs/remote-desktop.md).
-
-Run the current offline test suites with:
+Run the offline engine and daemon suites with:
 
 ```bash
 PYTHONPATH=engine python3 -m unittest discover -s engine/tests -v
 PYTHONPATH=voice python3 -m pytest -q -p no:cacheprovider voice/tests
 ```
 
-The current tree contains separate engine, installer/service, and voice-daemon
-test suites. They use protocol fixtures and fake audio/D-Bus/systemd/IBus
-boundaries; they do not call a real microphone, editable IBus context, package
-index, or cloud account.
+The tests use synthetic protocol, audio, D-Bus, systemd and IBus boundaries;
+they do not call a real microphone, cloud account or editable desktop context.
+Release construction, checksum/signature verification and SBOM requirements
+are documented in the [release process](docs/release-process.md).
 
-## Target MVP behavior
+Remove the Debian package with:
 
-1. Select **Open Voice Input Linux** as the active IBus engine.
-2. Type normally with Rime/Rime Ice, fully offline.
-3. Press the configured shortcut (right `Alt` where available) or the
-   microphone button to start dictation.
-4. See live hypotheses at the current caret as IBus preedit.
-5. Stop recording; the two-pass, smoothed result replaces the hypothesis and
-   is committed exactly once.
-6. For at most five seconds, correct one wrong span in the same input field.
-   When IBus surrounding text is supported, that strict replacement can become
-   an adaptive correction for the next dictation. Another toggle ends this
-   observation early.
-7. Press `Esc` or change focus to cancel without committing late results;
-   losing focus during observation prevents learning.
+```bash
+sudo apt remove open-voice-input-linux
+```
 
-Voice input will be disabled for password/private input contexts. An active
-Rime composition must be committed or cancelled before voice recording starts.
+Removal preserves the user's private key, vocabulary, corrections, collection
+choice and external dataset. Delete those only through an explicit user action.
 
-## Provider scope
+## Documentation
 
-The first provider is Volcengine BigModel ASR 2.0 using
-`bigmodel_async`, `enable_nonstream`, `enable_ddc`, `enable_itn`, and
-`enable_punc`. After the user activates the matching speech service in their
-own Volcengine project, the application needs only that user's API key. No
-shared key is bundled. Provider interfaces remain separate from the IBus
-engine so additional ASR services can be added later.
+- [中文安装与使用指南](docs/README.zh-CN.md)
+- [Architecture](docs/architecture.md)
+- [Verified compatibility matrix](docs/compatibility-matrix.md)
+- [Security model](docs/security.md) and [threat model](docs/threat-model.md)
+- [User service, upgrades and uninstall](docs/user-service.md)
+- [Recognition accuracy and adaptive corrections](docs/recognition-accuracy.md)
+- [Privacy](docs/privacy.md)
+- [Personal ASR dataset plan](docs/personal-asr-data-plan.md)
+- [Remote and mounted storage](docs/remote-dataset-storage.md)
+- [Prototype internals](docs/python-preedit-prototype.md)
+- [Launch positioning and demo storyboard](docs/launch-positioning.md)
+- [中文产品与发布计划](docs/product-launch-plan.zh-CN.md)
+- [中文宣传资料包](docs/press-kit.zh-CN.md)
 
-Microphone audio is streamed to Volcengine only during an active dictation and
-usage is billed to the user's own Volcengine account. Cancelling prevents a
-local commit but cannot retract audio already uploaded. If the user separately
-enables local collection, the same accepted utterance is also retained below
-the selected local or mounted folder; this does not replace or alter the
-provider upload. Read
-[docs/privacy.md](docs/privacy.md) before using voice input with sensitive
-data. The reviewed security assumptions and accepted preview risks are in the
-[threat model](docs/threat-model.md); bundled-code and dependency attribution
-is recorded in the [licence audit](docs/license-audit.md) and
-[NOTICE](NOTICE.md). Maintainers should follow the
-[release process](docs/release-process.md) before publishing a preview.
+## License
 
-The correction strategy is documented in
-[docs/recognition-accuracy.md](docs/recognition-accuracy.md): provider-side
-two-pass recognition first, then the explicit private vocabulary for names and
-specialist terms, with optional user-confirmed wrong-to-canonical mappings sent
-through Volcengine's documented `context.correct_words`. A bounded five-second
-IBus surrounding-text observation can also derive one strict replacement into
-the private `adaptive-corrections.json` ledger. It never rewrites the already
-committed text or reads the clipboard, AT-SPI, global keystrokes, or Rime
-database. The bounded current-field surrounding snapshot is used transiently
-and is not retained as a document or transcript record. Manual corrections take
-priority; conflicted, overlapping, or cyclic learned rules are suppressed, and
-the combined provider view remains at most 50 pairs. Configuration is reloaded
-for the next dictation without restarting the daemon. This is correction
-memory, not local model training.
-
-The optional personal-ASR collector is implemented but **off by default**. The
-user must choose an existing absolute local or mounted folder; the application
-initializes `openvoiceinput-dataset-v1` below it. Only an utterance whose
-authoritative provider final was accepted is published, as the exact 16 kHz
-mono signed 16-bit WAV plus `record.json`. `provider_final` is explicitly an
-unreviewed pseudo-label; `spoken_verbatim` and `preferred_output` remain null
-until a later review workflow. The collector uses bounded memory and a
-background writer, and collection failures do not block normal dictation.
-It writes directly to that folder with no fallback spool; service shutdown
-allows a bounded 10-second drain, so a stalled or unmounted destination can
-lose an unpublished staged record while published records remain.
-
-The application does not authenticate to Orange, mount a remote host, or upload
-to Google Drive. An existing compatible SSHFS mount can be selected directly;
-for Drive, collect complete records locally or on Orange and back them up
-asynchronously with rclone. The selected filesystem determines effective
-visibility and at-rest protection. Direct remote writes still have no fallback
-spool, so a disconnect can lose an unpublished record.
-Disabling collection prevents queued unpublished records from becoming
-visible; records already published remain until the user removes them. See
-[the remote-storage guide](docs/remote-dataset-storage.md) and
-[docs/personal-asr-data-plan.md](docs/personal-asr-data-plan.md).
-
-## Development targets
-
-- Validated preview and offline-bundle target: Ubuntu 24.04 x86_64 with IBus
-- Planned, currently unverified development target: Ubuntu 26.04 with IBus
-- X11 and Wayland applications that implement IBus preedit correctly
-- Debian package first; Arch packaging afterwards
-
-See [ROADMAP.md](ROADMAP.md) and [docs/architecture.md](docs/architecture.md).
-
-## License and upstream projects
-
-Open Voice Input Linux's new original code is licensed under GPL-3.0-only. It
-is designed around `ibus-rime` (GPL-3.0-or-later) and `librime`
-(BSD-3-Clause). Rime Ice is currently an external GPL-3.0-only project and is
-not bundled in this repository. Imported files retain their upstream license
-and copyright notices; voice-daemon code migrated from Doubao Murmur must
-preserve its MIT notices.
-
-See [NOTICE.md](NOTICE.md) for attribution and distribution boundaries and
-[docs/dependencies.md](docs/dependencies.md) for the direct dependency and
-licence inventory.
+New original code is licensed under GPL-3.0-only. The design builds around
+`ibus-rime` (GPL-3.0-or-later) and `librime` (BSD-3-Clause). Rime Ice is an
+external GPL-3.0-only project and is not bundled. Imported files retain their
+upstream notices; see [NOTICE.md](NOTICE.md) and the
+[licence audit](docs/license-audit.md).
 
 Open Voice Input Linux is an independent community project and is not
-affiliated with Rime, Volcengine, ByteDance, or Doubao.
+affiliated with Rime, Volcengine, ByteDance or Doubao.

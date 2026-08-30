@@ -1,0 +1,11 @@
+This Ubuntu 24.04 amd64 package privately bundles the exact runtime wheels
+listed in packaging/requirements-preview-ubuntu-24.04-x86_64-cp312.txt.
+
+- sounddevice: MIT
+- websockets: BSD-3-Clause
+- cffi: MIT
+- pycparser: BSD
+
+Each wheel's own metadata and license files are retained below
+/usr/lib/open-voice-input-linux/python/*.dist-info/. The package build rejects
+missing, additional, version-mismatched, or hash-mismatched runtime wheels.

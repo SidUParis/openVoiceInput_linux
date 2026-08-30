@@ -90,8 +90,10 @@ them into the librime-capable production engine and removes engine switching.
 - [ ] Optional explicit provider test that clearly warns it creates a real,
   potentially billable ASR session.
 - [ ] Store secrets in Secret Service; provide a documented `0600` fallback.
-- [ ] Debian/Ubuntu package and user D-Bus activation.
-- [ ] Arch package and reproducible CI builds.
+- [x] Standalone Ubuntu 24.04 `amd64` `.deb` built offline from an exact commit
+  and the hash-locked runtime wheelhouse.
+- [ ] Production user D-Bus activation and a signed APT repository.
+- [ ] Arch package and a reproducible CI build for that target.
 - [ ] Migration helper from Doubao Murmur without copying secrets.
 
 ## Phase 5 — Public preview
@@ -100,8 +102,8 @@ them into the librime-capable production engine and removes engine switching.
 - [x] Licence and attribution audit for the current source and wheelhouse.
 - [ ] End-to-end tests for GTK, Qt, Chromium/Electron, terminals, and Wayland.
 - [x] Chinese quick-start, settings screenshot, and contribution guide.
-- [ ] Short inline-preedit demo video recorded with synthetic, non-sensitive
-      text.
+- [x] Reproducible short inline-preedit concept animation generated with
+      synthetic, non-sensitive text.
 - [x] Make the repository public and publish the first signed preview release.
 
 ## Phase 6 — Personal ASR corpus and model research

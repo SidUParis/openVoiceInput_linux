@@ -45,10 +45,13 @@ integrity; it does not prove who published the file.
    Keep collection disabled unless the run explicitly uses a private disposable
    folder. Record no key, selected dataset path, dictated text, audio, dataset,
    or credential-bearing log in release evidence.
-4. Require all protected checks on the exact release commit. Build the archive
-   from that trusted commit, verify it against the repository ref, and compare
-   the independently built archive checksum when the supported build
-   environment is available.
+4. Require all protected checks on the exact release commit. Build both the
+   offline/source archive and standalone Ubuntu `.deb` from that trusted
+   commit. The package builder must consume the hash-locked runtime wheelhouse
+   from the matching verified bundle, never an adjacent project wheel. Verify
+   both artifacts against the repository ref and compare independently built
+   archive and package bytes on the supported Ubuntu 24.04 `amd64`/CPython
+   3.12 builder.
 5. Create a signed annotated release tag and verify that GitHub reports the tag
    signature as valid.
 6. Release notes for a collector-enabled alpha must say that collection is off
@@ -76,16 +79,28 @@ integrity; it does not prove who published the file.
 ## Immutable release publication
 
 1. Create a draft prerelease from the verified signed tag.
-2. Attach only the verified `.tar.gz` and its `.sha256`. Do not reuse artifacts
-   built for an untrusted pull request.
-3. Download the draft assets, verify the outer checksum, unpack safely, and run
-   `scripts/verify_preview_bundle.py` against the exact source tag.
-4. Publish the draft only after every asset passes. With immutable releases
+2. Attach exactly four verified assets: the `.tar.gz`, its `.tar.gz.sha256`,
+   the Ubuntu 24.04 `amd64` `.deb`, and its `.deb.sha256`. Do not reuse
+   artifacts built for an untrusted pull request.
+3. Download all four draft assets into an empty directory. Verify each checksum
+   with `sha256sum --check`, unpack the archive safely, and run
+   `scripts/verify_preview_bundle.py` against the exact source tag. Inspect the
+   package identity, version, architecture, file list, `BUILD-INFO`, and
+   package-scoped SBOM with `dpkg-deb` before using a disposable clean Ubuntu
+   24.04 machine to exercise install, command discovery, settings launch, and
+   removal. Confirm removal leaves no packaged command or running project unit
+   while preserving deliberately user-owned configuration and dataset paths.
+4. Confirm the two SBOM scopes separately: the archive SBOM inventories its
+   project wheel and runtime wheelhouse; the package SBOM identifies the
+   application/source commit and the four bundled Python runtime wheels. The
+   latter is not a file-level inventory of Ubuntu system dependencies.
+5. Publish the draft only after every asset passes. With immutable releases
    enabled, the published tag and assets become locked; corrections require a
    new version rather than replacing an existing asset.
-5. Verify the immutable release and each asset with a current GitHub CLI or the
+6. Verify the immutable release and each asset with a current GitHub CLI or the
    GitHub API, then record the release URL, tag verification, source commit,
-   archive SHA256, SBOM serial, and CI run in the release notes.
+   archive and package SHA256 values, both SBOM serials/scopes, and CI run in
+   the release notes.
 
 Official GitHub references:
 

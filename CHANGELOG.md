@@ -5,6 +5,61 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] - 2026-08-30
+
+### Added
+
+- A standalone Ubuntu 24.04 `amd64` `.deb` with root-owned application code,
+  global launchers, package-installed systemd user units, desktop/AppStream
+  metadata, and an explicitly opt-in voice service. The microphone-free IBus
+  engine remains attached to each graphical user session.
+- An offline, exact-commit package builder which consumes the existing
+  hash-locked runtime wheelhouse, records source provenance, emits a
+  deterministic package-scoped CycloneDX SBOM, and produces a matching
+  `.deb.sha256` file.
+- A Chinese-first project landing page with English secondary copy, a
+  reproducible synthetic interaction demo, social-preview artwork, an honest
+  compatibility-report form, and launch/press guidance.
+
+### Changed
+
+- Preview releases now publish and independently verify four assets: the
+  source/offline `.tar.gz`, its checksum, the standalone Ubuntu `.deb`, and
+  its checksum.
+- The packaged commands live in `/usr/bin`, while application modules and
+  locked Python dependencies live below
+  `/usr/lib/open-voice-input-linux/python`. Private settings and any selected
+  dataset remain per-user files outside package ownership.
+
+### Security and privacy
+
+- Package installation refuses a higher-precedence legacy source-preview
+  installation instead of silently leaving a desktop user on older code. The
+  check tests only fixed installation pathnames; users migrate with the
+  trusted source-preview uninstaller, which preserves private configuration
+  and external datasets.
+- Package payloads and maintainer scripts do not package, read, rewrite, or
+  delete provider keys, correction memory, microphone policy, collection
+  settings, recordings, or transcripts. A voice service already enabled by
+  its user is restarted on upgrade and then reads that user's configuration in
+  the normal daemon process.
+
+### Known limitations
+
+- The `.deb` is an Ubuntu 24.04 `amd64` alpha artifact, not a signed APT
+  repository or a broad Debian/Ubuntu support claim. Physical microphone,
+  provider, graphical-login, and representative application validation remain
+  release gates.
+- The package does not provide a built-in global shortcut. Users must bind a
+  desktop shortcut to `murmur-voice-daemon toggle`; the separate compatibility
+  controller is not bundled.
+- Recognition still uses the user's Volcengine account. There is no local ASR
+  backend or model training in this release.
+- Adaptive corrections do not retroactively rewrite collected `record.json`
+  files. Collected `provider_final` remains an unreviewed teacher label, with
+  `spoken_verbatim` and `preferred_output` left null until a future review
+  workflow supplies them.
+
 ## [0.1.0-alpha.3] - 2026-08-30
 
 ### Added

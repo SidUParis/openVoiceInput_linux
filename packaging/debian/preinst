@@ -1,0 +1,94 @@
+#!/bin/sh
+set -eu
+
+# A source-preview installation owns higher-precedence per-user systemd units
+# and desktop entries.  Installing the system package on top would make dpkg
+# report the new version while the desktop continued to execute old code from
+# ~/.local.  Refuse before unpacking; never open or alter any user config/key.
+case "${1:-}" in
+    install|upgrade)
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
+target_root=${DPKG_ROOT:-}
+case "$target_root" in
+    ""|/*)
+        ;;
+    *)
+        printf '%s\n' "Invalid DPKG_ROOT for Open Voice Input pre-install check." >&2
+        exit 1
+        ;;
+esac
+
+shadow=""
+check_shadow_root() {
+    candidate_root=$1
+    for relative in \
+        .config/systemd/user/murmur-ime-engine.service \
+        .config/systemd/user/murmur-ime-voice.service \
+        .local/share/applications/io.github.SidUParis.OpenVoiceInputLinux.Settings.desktop \
+        .local/share/murmur-ime/install-manifest.json
+    do
+        candidate=$candidate_root/$relative
+        if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+            shadow=$candidate
+            return
+        fi
+    done
+}
+
+check_shadow_root "$target_root/root"
+if [ -z "$shadow" ]; then
+    for candidate_home in "$target_root"/home/*
+    do
+        [ -d "$candidate_home" ] || continue
+        check_shadow_root "$candidate_home"
+        [ -z "$shadow" ] || break
+    done
+fi
+if [ -z "$shadow" ] && [ -n "${XDG_CONFIG_HOME:-}" ]; then
+    case "$XDG_CONFIG_HOME" in
+        /*)
+            for unit in murmur-ime-engine.service murmur-ime-voice.service
+            do
+                candidate=$target_root$XDG_CONFIG_HOME/systemd/user/$unit
+                if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+                    shadow=$candidate
+                    break
+                fi
+            done
+            ;;
+    esac
+fi
+if [ -z "$shadow" ] && [ -n "${XDG_DATA_HOME:-}" ]; then
+    case "$XDG_DATA_HOME" in
+        /*)
+            for relative in \
+                applications/io.github.SidUParis.OpenVoiceInputLinux.Settings.desktop \
+                murmur-ime/install-manifest.json
+            do
+                candidate=$target_root$XDG_DATA_HOME/$relative
+                if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+                    shadow=$candidate
+                    break
+                fi
+            done
+            ;;
+    esac
+fi
+
+if [ -n "$shadow" ]; then
+    printf '%s\n' \
+        "Open Voice Input Linux system-package installation was refused." \
+        "A higher-precedence source-preview installation was found at:" \
+        "  $shadow" \
+        "Run scripts/uninstall-user.sh from the current or matching preview bundle as that desktop user, then retry apt install." \
+        "That trusted uninstaller preserves the API key, vocabulary, corrections, microphone policy, data-collection choice, and external dataset." \
+        "The package did not inspect or modify any private configuration." >&2
+    exit 1
+fi
+
+exit 0
