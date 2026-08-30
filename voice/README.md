@@ -23,8 +23,10 @@ audio/provider-final record described below.
 - GTK4 introspection data when using the bundled native settings window
   (`gir1.2-gtk-4.0` on Ubuntu).
 - Optional `libusb-1.0` (`libusb-1.0-0` on Ubuntu) for the bounded DJI Mic Mini
-  2 transmitter-link probe. When unavailable, link state is unknown and normal
-  system/default-source behavior is preserved.
+  2 transmitter-link probe. When unavailable, link state is unknown: DJI is
+  not promoted ahead of a known alternative, while an already-default unique
+  DJI remains only a final continuity fallback when no non-DJI or recoverable
+  input can be selected.
 
 From this directory, install into a virtual environment that can see the
 system PyGObject package:
@@ -105,6 +107,21 @@ provider's documented `request.context` hotwords JSON string; empty lists omit
 typing history, documents, transcripts, or the Rime database, and they are
 never written to logs. Provider-side handling follows the user's Volcengine
 account policy.
+
+## Configurable microphone priority
+
+The native settings window stores the user's complete four-class ordering in
+`$XDG_CONFIG_HOME/murmur-ime/microphone-priority.json` (or
+`~/.config/murmur-ime/microphone-priority.json`). The file uses the same
+private ownership, regular-file, `0700` directory, and `0600` file checks as
+the key and recognition settings. A missing file selects the documented
+recommended order without writing anything; an existing invalid file fails
+the next dictation with `microphone-policy-invalid` until the user explicitly
+repairs it in settings.
+
+The ordering is reloaded before every new dictation and never changes an
+already open stream. See the microphone-routing section below for category,
+fallback, and DJI link-state semantics.
 
 ## Optional explicit recognition corrections
 
@@ -218,16 +235,29 @@ mute, or changes volume. Ambiguous or failed preflight returns
 an input and start again. The next start always enumerates again, so no daemon
 restart is required after a device change.
 
-When exactly one DJI Mic Mini 2 source is present, that preflight also performs
-a bounded read-only transmitter-link probe. Proven online selects DJI for the
-new daemon stream. Proven offline excludes the receiver that remains
-enumerated but silent, preserving the current non-DJI default or accepting only
-one unambiguous built-in/non-DJI fallback. Unknown status (including absent,
-busy, inaccessible, malformed, or unavailable `libusb`) preserves the existing
-system/default-source path. The probe neither logs nor retains USB frames. It
-never changes a playback sink or requests a system-wide default-source change.
-The source is fixed once the stream opens; there is no mid-utterance handoff,
-and the next dictation checks again.
+The private `microphone-priority.json` file stores one complete order for DJI,
+headset, other external, and built-in microphone categories. A missing file
+uses the recommended `DJI > headset > other external > built-in` default; an
+existing invalid or unsafe file rejects the next start before preedit, provider,
+USB, profile, or microphone activity. The native settings window can repair it
+by explicitly saving a complete allowlisted order. Each new dictation reloads
+the file and re-enumerates sources. Within one category, an exact saved source
+wins, then the live system default, then a unique candidate; unresolved
+same-category ambiguity falls through to the next category rather than being
+guessed.
+
+When exactly one DJI Mic Mini 2 source is present, preflight performs a bounded
+read-only transmitter-link probe. Proven online makes DJI eligible at its saved
+position; proven offline excludes the receiver that remains enumerated but
+silent. Unknown status (including busy, inaccessible, malformed, or unavailable
+`libusb`) does not promote DJI ahead of a known alternative. A unique DJI source
+that is already the system default may be retained only as a last-resort path
+when no non-DJI or recoverable input can be selected. Bluetooth counts as a
+headset microphone only when an input source already exists (for example,
+HSP/HFP); the daemon does not switch an A2DP playback profile. The probe neither
+logs nor retains USB frames. Selection never changes a playback sink or requests
+a system-wide default-source change. The source is fixed once the stream opens;
+there is no mid-utterance handoff, and the next dictation checks again.
 
 The `pactl` discovery/profile transaction has a three-second forward bound and
 a seven-second reserved rollback window (a ten-second hard bound in total).

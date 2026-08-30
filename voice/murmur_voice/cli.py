@@ -9,8 +9,11 @@ import logging
 import queue
 import signal
 import sys
+import threading
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Callable, Sequence
+
+from .audio import AudioCapture, MicrophonePolicyError, resolve_input_device
 
 from .config import (
     MAX_VOCABULARY_ENTRIES,
@@ -36,9 +39,54 @@ from .data_collection import (
     default_data_collection_config_path,
 )
 from .engine_restore import EngineRestoreState, RestoreError, restore_saved_engine
+from .microphone_policy import (
+    MicrophonePolicyConfig,
+    default_microphone_policy_config_path,
+    load_microphone_policy_config,
+)
 
 
 DATA_COLLECTION_CLOSE_TIMEOUT_SECONDS = 10.0
+
+
+class _MicrophonePriorityResolver:
+    """Load one private policy snapshot before external start mutations."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        resolver: Callable[..., Any] = resolve_input_device,
+    ) -> None:
+        self._path = path
+        self._resolver = resolver
+        self._lock = threading.Lock()
+        self._prepared_policy: MicrophonePolicyConfig | None = None
+
+    def validate(self) -> None:
+        """Stage the policy for one prepare, without touching audio state."""
+
+        policy = self._load()
+        with self._lock:
+            self._prepared_policy = policy
+
+    def __call__(self) -> Any:
+        """Resolve with the staged policy, or load for a direct prepare call."""
+
+        with self._lock:
+            policy = self._prepared_policy
+            self._prepared_policy = None
+        if policy is None:
+            policy = self._load()
+        return self._resolver(microphone_policy=policy)
+
+    def _load(self) -> MicrophonePolicyConfig:
+        try:
+            return load_microphone_policy_config(self._path)
+        except ConfigError as error:
+            raise MicrophonePolicyError(
+                "microphone priority configuration is invalid"
+            ) from error
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,6 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--data-collection",
         type=Path,
         default=default_data_collection_config_path(),
+    )
+    run_parser.add_argument(
+        "--microphone-priority",
+        type=Path,
+        default=default_microphone_policy_config_path(),
     )
     run_parser.add_argument("--socket", type=Path)
     run_parser.add_argument("--verbose", action="store_true")
@@ -122,6 +175,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             corrections_path=options.corrections,
             adaptive_corrections_path=options.adaptive_corrections,
             data_collection_path=options.data_collection,
+            microphone_policy_path=options.microphone_priority,
         )
     try:
         response = request_command(options.command, options.socket)
@@ -199,6 +253,7 @@ def _run(
     corrections_path: Path | None = None,
     adaptive_corrections_path: Path | None = None,
     data_collection_path: Path | None = None,
+    microphone_policy_path: Path | None = None,
 ) -> int:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -239,9 +294,15 @@ def _run(
         # configure remain useful on systems missing optional runtime pieces.
         from .session import VoiceSession
 
+        microphone_resolver = _MicrophonePriorityResolver(
+            microphone_policy_path or default_microphone_policy_config_path()
+        )
+
         session = VoiceSession(
             config,
             asr_client_factory=runtime.create_asr_client,
+            audio_capture=AudioCapture(input_resolver=microphone_resolver),
+            microphone_policy_validator=microphone_resolver.validate,
             observation_handler=runtime.observe,
             data_collection_factory=(
                 data_collection_runtime.begin

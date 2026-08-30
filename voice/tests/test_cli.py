@@ -9,11 +9,13 @@ import pytest
 from murmur_voice import cli
 from murmur_voice import adaptive_runtime as adaptive_runtime_module
 from murmur_voice import session as session_module
+from murmur_voice.audio import AudioCapture, MicrophonePolicyError
 from murmur_voice.config import (
     VoiceConfig,
     load_config,
     load_vocabulary,
 )
+from murmur_voice.microphone_policy import save_microphone_policy_config
 
 
 class _InteractiveInput:
@@ -179,6 +181,7 @@ def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_pat
     corrections_path = tmp_path / "corrections.json"
     adaptive_path = tmp_path / "adaptive-corrections.json"
     data_collection_path = tmp_path / "data-collection.json"
+    microphone_priority_path = tmp_path / "microphone-priority.json"
     parser = cli.build_parser()
 
     options = parser.parse_args(
@@ -190,16 +193,61 @@ def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_pat
             str(adaptive_path),
             "--data-collection",
             str(data_collection_path),
+            "--microphone-priority",
+            str(microphone_priority_path),
         ]
     )
 
     assert options.corrections == corrections_path
     assert options.adaptive_corrections == adaptive_path
     assert options.data_collection == data_collection_path
+    assert options.microphone_priority == microphone_priority_path
     with pytest.raises(SystemExit):
         parser.parse_args(["run", "--wrong", "private wrong form"])
     with pytest.raises(SystemExit):
         parser.parse_args(["run", "--canonical", "private canonical form"])
+
+
+def test_microphone_priority_resolver_hot_loads_one_policy_per_prepare(tmp_path):
+    path = tmp_path / "private" / "microphone-priority.json"
+    observed = []
+
+    def resolve(*, microphone_policy):
+        observed.append(microphone_policy.priority)
+        return "offline-device"
+
+    resolver = cli._MicrophonePriorityResolver(path, resolver=resolve)
+    resolver.validate()
+    assert resolver() == "offline-device"
+
+    updated = ("headset", "dji", "external", "built-in")
+    save_microphone_policy_config(updated, path)
+    resolver.validate()
+    assert resolver() == "offline-device"
+
+    assert observed == [
+        ("dji", "headset", "external", "built-in"),
+        updated,
+    ]
+
+
+def test_microphone_priority_resolver_rejects_invalid_file_before_resolution(
+    tmp_path,
+):
+    path = tmp_path / "private" / "microphone-priority.json"
+    path.parent.mkdir(mode=0o700)
+    path.write_text("not-json\n", encoding="utf-8")
+    path.chmod(0o600)
+
+    def must_not_resolve(**kwargs):
+        raise AssertionError(f"audio resolver must not run: {kwargs}")
+
+    resolver = cli._MicrophonePriorityResolver(path, resolver=must_not_resolve)
+
+    with pytest.raises(MicrophonePolicyError):
+        resolver.validate()
+    with pytest.raises(MicrophonePolicyError):
+        resolver()
 
 
 def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
@@ -209,6 +257,7 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
     corrections_path = tmp_path / "corrections.json"
     adaptive_path = tmp_path / "adaptive-corrections.json"
     data_collection_path = tmp_path / "data-collection.json"
+    microphone_priority_path = tmp_path / "microphone-priority.json"
     captured = []
     runtime_arguments = []
     data_runtime_arguments = []
@@ -282,6 +331,7 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
             corrections_path=corrections_path,
             adaptive_corrections_path=adaptive_path,
             data_collection_path=data_collection_path,
+            microphone_policy_path=microphone_priority_path,
         )
         == 0
     )
@@ -300,6 +350,8 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
     config, options = captured[0]
     assert config.api_key == "test-key"
     assert options["asr_client_factory"] is FakeRuntime.create_asr_client
+    assert isinstance(options["audio_capture"], AudioCapture)
+    assert callable(options["microphone_policy_validator"])
     assert options["observation_handler"] is FakeRuntime.observe
     assert options["data_collection_factory"] is FakeDataCollectionRuntime.begin
     assert (

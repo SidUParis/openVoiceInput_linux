@@ -860,6 +860,37 @@ def test_non_dji_generic_wireless_receiver_uses_explicit_usb_ids():
     assert probe_calls == []
 
 
+def test_internal_form_factor_never_overrides_explicit_usb_source_identity():
+    usb = "alsa_input.usb-mislabelled.analog-stereo"
+    built_in = "alsa_input.pci-test.analog-stereo"
+    pactl = FakePactl(
+        sources=_short_source(7, usb) + _short_source(8, built_in),
+        default=built_in,
+        json_sources=[
+            _json_source(
+                usb,
+                4,
+                extra_properties={
+                    "device.bus": "usb",
+                    "device.form_factor": "internal",
+                },
+            ),
+            _json_source(
+                built_in,
+                2,
+                extra_properties={
+                    "device.bus": "pci",
+                    "device.form_factor": "internal",
+                },
+            ),
+        ],
+    )
+
+    selection = resolve_input_device(pactl_runner=pactl)
+
+    _assert_pulse_selection(selection, usb)
+
+
 def test_multiple_dji_sources_are_not_mapped_from_one_boolean_probe():
     first = "alsa_input.usb-DJI_first.analog-stereo"
     second = "alsa_input.usb-DJI_second.analog-stereo"
@@ -1004,6 +1035,37 @@ def test_output_only_usb_card_is_not_automatically_recovered():
         sources=_short_source(9, "sink.monitor"),
         default="sink.monitor",
         cards=[_card("alsa_card.usb-external", index=4)],
+    )
+
+    with pytest.raises(AudioDeviceError, match="no safe input-capable"):
+        resolve_input_device(pactl_runner=pactl, sleep=lambda seconds: None)
+
+    assert not any(call[0].startswith("set-") for call in pactl.calls)
+
+
+@pytest.mark.parametrize(
+    ("card_name", "properties"),
+    (
+        ("alsa_card.usb-mislabelled", {"device.form_factor": "internal"}),
+        (
+            "alsa_card.usb-mislabelled",
+            {"device.form_factor": "internal", "device.bus": "usb"},
+        ),
+        (
+            "alsa_card.pci-mislabelled",
+            {"device.form_factor": "internal", "device.bus": "usb"},
+        ),
+    ),
+)
+def test_internal_label_never_overrides_explicit_usb_recovery_boundary(
+    card_name, properties
+):
+    card = _card(card_name, index=4)
+    card["properties"] = properties
+    pactl = FakePactl(
+        sources=_short_source(9, "sink.monitor"),
+        default="sink.monitor",
+        cards=[card],
     )
 
     with pytest.raises(AudioDeviceError, match="no safe input-capable"):

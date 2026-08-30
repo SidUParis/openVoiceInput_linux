@@ -488,6 +488,7 @@ class PreviewBundleTests(unittest.TestCase):
             "corrections.json",
             "adaptive-corrections.json",
             "data-collection.json",
+            "microphone-priority.json",
         ):
             with (
                 self.subTest(forbidden=forbidden),
@@ -509,7 +510,7 @@ class PreviewBundleTests(unittest.TestCase):
                     "scripts/uninstall-user.sh",
                     "scripts/verify_preview_bundle.py",
                     "voice/pyproject.toml",
-                    "wheelhouse/murmur_ime_voice-0.1.0a2-py3-none-any.whl",
+                    "wheelhouse/murmur_ime_voice-0.1.0a3-py3-none-any.whl",
                     forbidden,
                 ):
                     path = root / relative
@@ -537,7 +538,7 @@ class PreviewBundleTests(unittest.TestCase):
                 "scripts/uninstall-user.sh",
                 "scripts/verify_preview_bundle.py",
                 "voice/pyproject.toml",
-                "wheelhouse/murmur_ime_voice-0.1.0a2-py3-none-any.whl",
+                "wheelhouse/murmur_ime_voice-0.1.0a3-py3-none-any.whl",
             ):
                 path = root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)

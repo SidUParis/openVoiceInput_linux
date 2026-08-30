@@ -92,7 +92,7 @@ def write_test_bundle(root: Path, *, project_module_content: bytes = b"") -> Non
     (voice / "pyproject.toml").write_text(
         "[project]\n"
         'name = "murmur-ime-voice"\n'
-        'version = "0.1.0a2"\n'
+        'version = "0.1.0a3"\n'
         "[project.scripts]\n"
         'murmur-voice-daemon = "murmur_voice.cli:main"\n'
         'open-voice-input-settings = "murmur_voice.settings_app:main"\n',
@@ -100,12 +100,12 @@ def write_test_bundle(root: Path, *, project_module_content: bytes = b"") -> Non
     )
     wheelhouse = root / "wheelhouse"
     wheelhouse.mkdir()
-    project_dist_info = "murmur_ime_voice-0.1.0a2.dist-info"
+    project_dist_info = "murmur_ime_voice-0.1.0a3.dist-info"
     write_test_wheel(
         wheelhouse,
-        filename="murmur_ime_voice-0.1.0a2-py3-none-any.whl",
+        filename="murmur_ime_voice-0.1.0a3-py3-none-any.whl",
         name="murmur-ime-voice",
-        version="0.1.0a2",
+        version="0.1.0a3",
         license_expression="GPL-3.0-only",
         module_name="murmur_voice",
         module_content=project_module_content,
@@ -187,7 +187,7 @@ class PreviewSBOMTests(unittest.TestCase):
                 project["hashes"][0]["content"],
                 hashlib.sha256(
                     (
-                        root / "wheelhouse/murmur_ime_voice-0.1.0a2-py3-none-any.whl"
+                        root / "wheelhouse/murmur_ime_voice-0.1.0a3-py3-none-any.whl"
                     ).read_bytes()
                 ).hexdigest(),
             )
@@ -226,7 +226,7 @@ class PreviewSBOMTests(unittest.TestCase):
                 entry["ref"]: entry["dependsOn"] for entry in first["dependencies"]
             }
             self.assertEqual(
-                graph["pkg:pypi/murmur-ime-voice@0.1.0a2"],
+                graph["pkg:pypi/murmur-ime-voice@0.1.0a3"],
                 [
                     "pkg:pypi/sounddevice@0.5.6",
                     "pkg:pypi/websockets@17.0.1",
@@ -300,7 +300,7 @@ class PreviewSBOMTests(unittest.TestCase):
             root = Path(temporary)
             write_test_bundle(root)
             project_wheel = root / (
-                "wheelhouse/murmur_ime_voice-0.1.0a2-py3-none-any.whl"
+                "wheelhouse/murmur_ime_voice-0.1.0a3-py3-none-any.whl"
             )
             with zipfile.ZipFile(project_wheel, mode="a") as archive:
                 archive.writestr("murmur_voice/./alias.py", b"")

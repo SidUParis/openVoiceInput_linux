@@ -1,12 +1,12 @@
 # Threat model for the 0.x preview
 
-Review basis: the implementation and documentation prepared for the
-`v0.1.0-alpha.1` preview on 2026-08-26, extended for the adaptive-correction,
-DJI Mic Mini 2 routing, and optional local-collection work through 2026-08-30.
-This document covers the current temporary IBus-engine switch, standalone voice
-daemon, per-dictation microphone selection, and disabled-by-default local
-WAV/JSON collector. It does not claim that the future combined librime engine,
-Orange transport, human label-review workflow, or local model training has been
+Review basis: the implementation and documentation published as
+`v0.1.0-alpha.2` on 2026-08-30, extended for the configurable microphone-policy
+candidate prepared the same day. This document covers the current temporary
+IBus-engine switch, standalone voice daemon, per-dictation microphone
+selection, adaptive correction, and disabled-by-default local WAV/JSON
+collector. It does not claim that the future combined librime engine, Orange
+transport, human label-review workflow, or local model training has been
 implemented or reviewed.
 
 ## Security and privacy objectives
@@ -41,8 +41,9 @@ Open Voice Input Linux is designed to preserve these properties:
 ## Assets and trust boundaries
 
 Sensitive assets are the provider API key, microphone audio, live/final text,
-explicit vocabulary, manual/adaptive correction pairs, local-collection
-consent/destination and published records, the focused input context and its
+explicit vocabulary, manual/adaptive correction pairs, microphone priority and
+exact-source preferences, local-collection consent/destination and published
+records, the focused input context and its
 bounded surrounding-text snapshot, the previous IBus engine, the selected
 audio source/profile, DJI status frames, and the user's existing Rime data.
 
@@ -144,8 +145,9 @@ Evidence: `engine/murmur_ime_engine/ibus_engine.py`,
 
 The CLI uses a masked prompt and never accepts a key in argv. The GTK window
 does not preload the stored key and clears the entry after a save attempt.
-Key, vocabulary, manual-correction, and adaptive-correction files use a private
-`0700` directory and `0600` regular files, reject links/foreign
+Key, vocabulary, manual-correction, adaptive-correction, and
+microphone-priority files use a private `0700` directory and `0600` regular
+files, reject links/foreign
 ownership/public modes/oversize or unknown fields, and are replaced
 atomically. Key removal requires the managed voice service to be explicitly
 inactive. Logs contain fixed status/error classes rather than secret or
@@ -228,15 +230,22 @@ numeric card IDs, exact device names, and exact ALSA-card/bus-path pairs are
 handled as separate strict schemas; conflicting, partial, or multiple matches
 are rejected.
 
+Each start loads a private, complete category order and re-enumerates sources.
+Missing configuration uses `DJI > headset > other external > built-in`; an
+existing invalid or unsafe file fails before preedit, provider, USB, profile,
+or microphone activity. Within each category, an exact saved source, then the
+current default, then a unique candidate can resolve it. Ambiguity falls through
+instead of being guessed.
+
 When exactly one DJI Mic Mini 2 source is enumerated, a bounded read-only
 vendor-status probe distinguishes a linked transmitter from a receiver that
-remains registered while silent. Proven online selects DJI for the new stream.
-Proven offline excludes it, preserving a current non-DJI default or accepting
-only one unambiguous built-in/non-DJI fallback. Unknown status preserves the
-existing default-source selection path; it is never guessed as online or
-offline. The USB frame decoder is size/count/time bounded, and frame/device
-content is neither logged nor persisted. The stream is not handed off during
-an utterance; link changes take effect only on the next start.
+remains registered while silent. Proven online makes DJI eligible at its saved
+position. Proven offline excludes it. Unknown is never promoted ahead of a
+known alternative; an already-default unique DJI can remain only as a final
+continuity path when no non-DJI or recoverable source can be selected. The USB
+frame decoder is size/count/time bounded, and frame/device content is neither
+logged nor persisted. The stream is not handed off during an utterance; link
+and device changes take effect only on the next start.
 
 The selected source is applied only to the daemon's PortAudio `pulse` stream.
 `PULSE_SOURCE` is changed under a process-wide lock only while that stream is
@@ -346,7 +355,9 @@ fingerprint before and after install/upgrade/uninstall/reinstall.
   keyboard input is unaffected.
 - The DJI probe depends on the receiver's undocumented vendor status framing
   and exclusive access to its USB interface. Busy, inaccessible, absent, or
-  unrecognised devices fall back to unknown/system behavior. There is no
+  unrecognised devices yield unknown. Unknown never promotes DJI ahead of a
+  known alternative; an already-default unique DJI is only a final continuity
+  fallback when no non-DJI or recoverable input exists. There is no
   mid-utterance live source handoff, so changing transmitter state while
   speaking may leave that utterance on its already opened source.
 

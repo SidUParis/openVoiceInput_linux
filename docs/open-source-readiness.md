@@ -42,9 +42,10 @@ distribution package, or the missing graphical/provider matrix is finished.
       runtime wheel and its build backend, emits a deterministic CycloneDX 1.5
       SBOM, and independently recomputes that inventory during verification.
 - [x] A bounded native GTK4 settings window manages private key, vocabulary,
-      explicit-correction, and default-off local-collection choices. It never
-      preloads or logs the provider key; it displays the selected dataset path
-      locally but never logs the path, audio, or transcript.
+      explicit-correction, microphone-priority, and default-off
+      local-collection choices. It never preloads or logs the provider key; it
+      displays the selected dataset path locally but never logs the path,
+      audio, or transcript.
 - [x] The optional collector is covered with fake/bounded tests for opt-in,
       accepted-final-only WAV/JSON publication, background failure, disable
       revocation, and private config; tests do not record real audio or write to
@@ -57,7 +58,9 @@ distribution package, or the missing graphical/provider matrix is finished.
       same-machine lifecycle record and isolated real-IBus smoke do not claim
       that evidence. Physical DJI online/offline selection and a real mounted
       collection destination also remain outside the automated matrix; the
-      alpha release notes must disclose this limitation.
+      alpha release notes must disclose this limitation. Configurable headset,
+      external, built-in, and DJI fallback order is covered by fake-device
+      tests but still needs the same physical reconnect matrix.
 - [x] All provider keys used during pre-release development were disabled after
       a fresh replacement key was installed and validated on 2026-08-26.
 - [x] `main` requires the `security`, `engine`, `voice`, and `preview-bundle`
@@ -70,6 +73,9 @@ distribution package, or the missing graphical/provider matrix is finished.
       public repository; Secret Scanning and Push Protection are also enabled.
 - [x] The `v0.1.0-alpha.1` procedure in `docs/release-process.md` completed on
       2026-08-26 with a GitHub-verified signed tag and an immutable prerelease.
+- [x] The `v0.1.0-alpha.2` procedure completed on 2026-08-30 with a
+      GitHub-verified signed tag, independently verified offline artifact, and
+      immutable prerelease.
 
 ## Release gates
 

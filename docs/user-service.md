@@ -64,14 +64,16 @@ Installed files use these XDG-relative locations:
   `$XDG_CONFIG_HOME/murmur-ime/adaptive-corrections.json`;
 - optional local-collection choice:
   `$XDG_CONFIG_HOME/murmur-ime/data-collection.json`;
+- optional microphone-priority policy:
+  `$XDG_CONFIG_HOME/murmur-ime/microphone-priority.json`;
 - optional collected records: `openvoiceinput-dataset-v1/` below the existing
   local or mounted directory explicitly selected by the user.
 
 If `XDG_DATA_HOME` or `XDG_CONFIG_HOME` is unset, the standard
 `~/.local/share` and `~/.config` defaults apply. The generated service records
-the resolved config, vocabulary, manual-correction, adaptive-correction, and
-local-collection paths, so a custom XDG config root is used consistently even
-if it is absent from the systemd manager's environment.
+the resolved config, vocabulary, manual-correction, adaptive-correction,
+local-collection, and microphone-priority paths, so a custom XDG config root is
+used consistently even if it is absent from the systemd manager's environment.
 
 The engine service starts after installation and is enabled for subsequent
 graphical logins. Its unit is attached to `graphical-session.target`, rather
@@ -246,16 +248,24 @@ The daemon does not unmute a source or change volume. The fixed status code
 the desktop sound panel to select/unmute an input, reconnect the device if
 needed, and start dictation again. Restarting the daemon is not required.
 
+Before every new dictation, the daemon reloads the private microphone policy and
+re-enumerates sources. The complete priority covers DJI, headset, other external,
+and built-in categories; a missing file uses `DJI > headset > other external >
+built-in`. The first usable, unambiguous category wins. Within it, an exact saved
+source wins, then the live system default, then a unique candidate. Same-category
+ambiguity falls through rather than being guessed. An existing invalid/unsafe
+file returns `microphone-policy-invalid` before preedit, provider, profile, USB,
+or capture activity; explicitly saving the displayed complete order repairs it.
+
 When exactly one DJI Mic Mini 2 source is visible, the daemon also performs a
-bounded link-state probe before that new dictation. Proven online selects DJI
-for the daemon stream even when another system default remains selected. Proven
-offline excludes the silent receiver and preserves the current non-DJI default,
-or uses only one unambiguous built-in/non-DJI fallback. Unknown status (for
-example, a busy/inaccessible receiver or unavailable `libusb`) preserves the
-existing system/default-source behavior. This DJI path is app-scoped: it never
+bounded link-state probe. Proven online makes DJI eligible at its saved position;
+proven offline excludes the silent receiver. Unknown status (for example, a
+busy/inaccessible receiver or unavailable `libusb`) does not promote DJI ahead
+of known alternatives; an already-default unique DJI is only a last resort when
+no non-DJI/recoverable input can be selected. This path is app-scoped: it never
 changes the playback sink or calls `set-default-source`. The selected stream is
-not handed off mid-utterance; transmitter changes are picked up on the next
-`start` or idle `toggle`.
+not handed off mid-utterance; device changes are picked up on the next `start`
+or idle `toggle`.
 
 The `pactl` discovery/profile transaction is bounded to three forward seconds,
 with seven more seconds reserved for conservative rollback (ten seconds hard
@@ -317,6 +327,7 @@ files while any managed daemon remains. Only if the current engine is exactly
 stop, never a warning followed by deletion. The managed runtime and units move
 to same-filesystem quarantine before final deletion so an interrupted
 uninstall can roll back. The private API-key, vocabulary, manual-correction,
-adaptive-correction, and `data-collection.json` files are retained. Every
+adaptive-correction, `microphone-priority.json`, and `data-collection.json`
+files are retained. Every
 `openvoiceinput-dataset-v1` below a user-selected folder is outside installer
 ownership and is never removed. No Rime program or user database is touched.

@@ -38,6 +38,10 @@ integrity; it does not prove who published the file.
    distribution-native release must complete the matrix with a newly rotated
    key entered locally. Include DJI link-state and a real mounted collection
    destination in the matrix before claiming those paths fully validated.
+   Exercise the saved microphone ordering with built-in-only, headset plus
+   built-in, DJI plus headset plus built-in, disconnect/reconnect, and an
+   unavailable higher-priority source before claiming physical routing fully
+   validated.
    Keep collection disabled unless the run explicitly uses a private disposable
    folder. Record no key, selected dataset path, dictated text, audio, dataset,
    or credential-bearing log in release evidence.
@@ -51,7 +55,9 @@ integrity; it does not prove who published the file.
    by default, `provider_final` is unreviewed, there is no Orange transfer,
    encryption, review/delete UI, training, or fallback spool, and shutdown only
    gives the writer a bounded drain. Also disclose that DJI selection is
-   per-dictation/app-scoped with no mid-utterance handoff.
+   per-dictation/app-scoped with no mid-utterance handoff. A release that adds
+   microphone ordering must also state the recommended default, saved-order
+   fallback behavior, and the remaining physical-device validation gap.
 
 ## Controlled public transition
 

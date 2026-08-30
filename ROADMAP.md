@@ -60,6 +60,8 @@ selected.
 - [x] Add per-dictation, app-scoped DJI Mic Mini 2 link-aware selection without
   changing playback or requesting a system-wide default; recheck on the next
   utterance rather than attempting mid-stream handoff.
+- [x] Generalise microphone routing to a private user-configurable order of
+  DJI, headset, other external, and built-in categories with dynamic fallback.
 - [x] Add optional, default-off local WAV/JSON collection with a user-selected
   existing destination, bounded background publication, and explicit
   unreviewed/null label roles.

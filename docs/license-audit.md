@@ -9,6 +9,9 @@ host's `libusb-1.0`; it adds no bundled wheel or copied library. The Ubuntu
 `libusb-1.0-0` package records LGPL-2.1-or-later terms and remains an external system
 component in this inventory.
 
+Alpha.3 adds policy, settings, and tests around the existing audio boundary; it
+adds no third-party source, model, wheel, system library, or bundled binary.
+
 ## Result
 
 The current source and preview have a documented licence path for every

@@ -512,6 +512,7 @@ def verify_bundle_shape(root: Path) -> Path:
         "corrections.json",
         "adaptive-corrections.json",
         "data-collection.json",
+        "microphone-priority.json",
         "volcengine.json",
     }
     for path in root.rglob("*"):

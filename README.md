@@ -31,8 +31,9 @@ email or otherwise invent content.
 > learning. The daemon requests restoration before the evidence deadline;
 > IBus command verification may finish shortly afterward. The
 > optional per-user systemd installation now covers both processes. Before
-> each dictation the daemon can choose a linked DJI Mic Mini 2 for its own
-> capture stream, and an explicit, default-off setting can retain accepted
+> each dictation the daemon applies the user's microphone-category priority
+> to the currently usable inputs for its own capture stream, and an explicit,
+> default-off setting can retain accepted
 > utterances as a local WAV/JSON dataset. The
 > permanent combined Rime + voice engine and a distribution-native package are
 > the next milestones.
@@ -128,10 +129,13 @@ packages must not download code or data during installation.
 - Runtime IBus registration without root access or an IBus/desktop restart.
 - Self-contained microphone/Volcengine daemon with a 10-minute recording cap,
   a 10-second pending-audio cap, and generation-safe late callback rejection.
-- Fresh microphone selection on every recording, including link-aware DJI Mic
-  Mini 2 choice, exact per-stream routing around a stale monitor default, and
-  conservative output-only profile recovery after device disconnect. This
-  selection does not change playback or request a system-wide default change.
+- Fresh microphone selection on every recording using a user-configurable
+  order of DJI, headset, other external, and built-in categories. Unavailable
+  categories fall through to the next one; link-aware DJI handling avoids a
+  proven-offline receiver. Exact per-stream routing also works around a stale
+  monitor default and can conservatively recover an output-only built-in card.
+  This selection does not change playback or request a system-wide default
+  change.
 - Optional local dataset collection, disabled by default: an accepted
   authoritative provider final can publish the exact 16 kHz mono signed
   16-bit utterance as one WAV plus a versioned JSON record below a folder the
@@ -155,15 +159,23 @@ keyboard-monitoring loop, but the settings window does not yet provide a
 disable switch. Applications without trustworthy IBus surrounding text simply
 produce no learned pair.
 
-Microphone choice is refreshed before every dictation. When exactly one DJI
-Mic Mini 2 receiver is present and its transmitter link is proven online, the
-daemon selects that source for its new capture stream. A proven offline link
-excludes the silent receiver and uses an unambiguous non-DJI fallback. If the
-link cannot be proven, existing system/default-source behavior is preserved.
-This DJI choice is application-scoped: it never changes a playback sink or
-requests a system-wide default-source change. The source is fixed after the
-stream opens, so powering a transmitter on or off during an utterance does not
-handoff live; the next dictation checks again.
+Microphone choice is refreshed before every dictation. The settings window
+stores one complete priority order for four categories: DJI, headset, other
+external, and built-in. The recommended default is `DJI > headset > other
+external > built-in`, but the user can reorder it. The daemon selects the
+first currently usable category, preferring an explicitly remembered source,
+then the system default within that category, then a unique candidate. An
+ambiguous category is skipped rather than guessed.
+
+DJI remains link-aware: a proven-online transmitter makes its receiver usable,
+a proven-offline receiver is excluded, and an unknown link is not promoted
+ahead of known-working alternatives. If that DJI source is the existing
+system default and no verified non-DJI or recoverable input exists, it may be
+kept as a last-resort continuity path. The choice is application-scoped: it
+never changes a playback sink or requests a system-wide default-source change.
+The source is fixed after the stream opens, so disconnecting a preferred
+device during an utterance does not hand off live; the next dictation falls
+through the saved order again.
 
 ## Try the prototype
 
@@ -232,11 +244,11 @@ _Rendered from an empty temporary profile. The scrollable page continues to
 explicit corrections, microphone selection, optional local collection, and
 service controls._
 
-Saving a key or local-collection choice never contacts the provider or
-interrupts a recording. Vocabulary, corrections, and the collection choice are
-reloaded for the next dictation without a service restart; microphone selection
-is also rerun before that dictation. Use the window's explicit enable/start
-action after configuration.
+Saving a key, microphone priority, or local-collection choice never contacts
+the provider or interrupts a recording. Vocabulary, corrections, microphone
+priority, and the collection choice are reloaded for the next dictation
+without a service restart; microphone availability is also re-enumerated then.
+Use the window's explicit enable/start action after configuration.
 
 CI also publishes a clean-source Ubuntu x86_64 preview archive with a locked,
 hashed Python wheelhouse, deterministic CycloneDX SBOM, and complete SHA-256

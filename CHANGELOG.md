@@ -5,6 +5,50 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-08-30
+
+### Added
+
+- A private, versioned microphone-priority policy and native settings controls
+  that let users order DJI, headset, other external, and built-in microphone
+  categories. The recommended default is `DJI > headset > other external >
+  built-in`.
+- Metadata-aware source classification for USB/Bluetooth headsets, 3.5 mm
+  headset ports, other external inputs, built-in PCI/platform microphones, and
+  the DJI Mic Mini 2 receiver.
+
+### Changed
+
+- Every new dictation reloads the saved priority, re-enumerates inputs, and
+  falls through unavailable or unresolved categories. Within a category, an
+  exact saved source, then the current system default, then a unique candidate
+  can resolve it. A running utterance keeps its source until it ends.
+- DJI online status now makes the receiver eligible at the user's saved
+  position instead of unconditionally overriding every other microphone.
+  Offline excludes it; unknown does not promote it ahead of known-working
+  alternatives.
+
+### Security and privacy
+
+- A missing microphone policy uses the documented default without writing a
+  file. An existing malformed, unsafe, or unsupported policy fails the next
+  dictation start with `microphone-policy-invalid` before preedit acquisition,
+  provider construction, USB probing, profile mutation, or microphone capture.
+- Selection remains scoped to the daemon's new Pulse stream. It never requests
+  a playback-sink, system-default, mute, volume, or mid-utterance route change.
+
+### Known limitations
+
+- Bluetooth A2DP playback alone does not expose a microphone. This release uses
+  an existing HSP/HFP input when one is already active but does not switch the
+  headset's global Bluetooth profile or reduce playback quality automatically.
+- Device-category classification uses PulseAudio/PipeWire metadata. An
+  unlabelled external device may fall into `other external`; optional exact
+  source preferences remain available in the private schema for disambiguation.
+- The built-in/headset/DJI, disconnect/reconnect, unavailable-higher-priority,
+  and hidden-profile-recovery matrix is covered with fake devices but has not
+  yet been completed with the corresponding physical hardware combinations.
+
 ## [0.1.0-alpha.2] - 2026-08-30
 
 ### Added

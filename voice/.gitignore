@@ -8,3 +8,7 @@ dist/
 /voice.json
 /vocabulary.json
 /corrections.json
+/adaptive-corrections.json
+/data-collection.json
+/microphone-priority.json
+openvoiceinput-dataset-v1/

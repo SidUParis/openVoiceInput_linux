@@ -11,6 +11,10 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
+from .microphone_policy import (  # noqa: E402
+    DEFAULT_MICROPHONE_PRIORITY,
+    MICROPHONE_CATEGORIES,
+)
 from .settings_controller import (  # noqa: E402
     CORRECTION_PAIR_LIMIT,
     CORRECTION_TEXT_LIMIT,
@@ -22,6 +26,19 @@ from .settings_controller import (  # noqa: E402
 
 APPLICATION_ID = "io.github.SidUParis.OpenVoiceInputLinux.Settings"
 APPLY_NOTICE = "Saved locally. The next dictation loads the new settings."
+
+_MICROPHONE_CATEGORY_LABELS = {
+    "dji": "DJI Mic Mini 2 receiver",
+    "headset": "Headset microphone",
+    "external": "Other external microphone",
+    "built-in": "Built-in computer microphone",
+}
+_MICROPHONE_CATEGORY_DESCRIPTIONS = {
+    "dji": "The DJI receiver while its transmitter is proven online.",
+    "headset": "USB, 3.5 mm, or an active Bluetooth HSP/HFP microphone.",
+    "external": "Another USB or externally connected capture device.",
+    "built-in": "The computer's internal fallback microphone.",
+}
 
 _SERVICE_LABELS = {
     "active": "running",
@@ -52,6 +69,10 @@ _STATUS_LABELS = {
     ),
     "final-timeout": "final recognition timed out",
     "microphone-unavailable": "no usable microphone; reconnect or select an input",
+    "microphone-policy-invalid": (
+        "microphone priority is invalid or unsafe; open settings and save a "
+        "complete order"
+    ),
     "adaptive-correction-failed": "adaptive correction could not be saved",
     "adaptive-correction-learned": "adaptive correction learned for future dictation",
     "recognition-context-invalid": "recognition context files are invalid or unsafe",
@@ -84,6 +105,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self._window_closed = False
         self._key_clear_armed = False
         self._correction_pairs: list[tuple[str, str]] = []
+        self._microphone_priority: list[str] = list(DEFAULT_MICROPHONE_PRIORITY)
         self._data_collection_chooser: Gtk.FileChooserNative | None = None
         self.connect("close-request", self._on_close_request)
 
@@ -230,21 +252,40 @@ class SettingsWindow(Gtk.ApplicationWindow):
 
         page.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
-        microphone_title = Gtk.Label(label="Automatic microphone selection", xalign=0)
+        microphone_title = Gtk.Label(label="Microphone priority", xalign=0)
         microphone_title.add_css_class("heading")
         page.append(microphone_title)
 
         self.microphone_selection_notice_label = Gtk.Label(
             label=(
-                "Before each dictation, Open Voice Input can prefer an available "
-                "DJI Mic Mini 2 transmitter and fall back when it is unavailable. "
-                "The choice is scoped to that dictation: playback and system-wide "
-                "audio or system-wide default changes are not requested."
+                "Rank all microphone categories from highest to lowest. Before "
+                "each new dictation, Open Voice Input reevaluates the currently "
+                "usable inputs and falls through this order when a preferred "
+                "category is unavailable. An active utterance keeps one microphone "
+                "until it ends; it never switches mid-stream. This app never moves "
+                "the playback sink or requests set-default-source. Host audio policy "
+                "may recompute a default after safe capture-profile recovery. "
+                "Playback-only Bluetooth A2DP is not a headset microphone, and "
+                "Bluetooth call profiles are not switched automatically."
             ),
             xalign=0,
             wrap=True,
         )
         page.append(self.microphone_selection_notice_label)
+
+        self.microphone_priority_list = Gtk.ListBox(
+            selection_mode=Gtk.SelectionMode.NONE,
+        )
+        self.microphone_priority_list.add_css_class("boxed-list")
+        page.append(self.microphone_priority_list)
+
+        self.save_microphone_priority_button = Gtk.Button(
+            label="Save microphone priority"
+        )
+        self.save_microphone_priority_button.connect(
+            "clicked", self._on_save_microphone_priority
+        )
+        page.append(self.save_microphone_priority_button)
 
         page.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
@@ -351,6 +392,13 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self._show_error(str(error))
         else:
             self._replace_correction_rows(pairs)
+        try:
+            microphone_policy = self._controller.load_microphone_policy()
+        except SettingsError as error:
+            self._replace_microphone_priority_rows(DEFAULT_MICROPHONE_PRIORITY)
+            self._show_error(str(error))
+        else:
+            self._replace_microphone_priority_rows(microphone_policy.priority)
         try:
             collection = self._controller.load_data_collection()
         except SettingsError as error:
@@ -547,6 +595,111 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self._replace_correction_rows(normalized_pairs)
             self._show_message(
                 f"Saved {count} explicit correction pairs. {APPLY_NOTICE}"
+            )
+
+    def _replace_microphone_priority_rows(self, priority: Sequence[str]) -> None:
+        normalized = tuple(priority)
+        if len(normalized) != len(MICROPHONE_CATEGORIES) or set(normalized) != set(
+            MICROPHONE_CATEGORIES
+        ):
+            normalized = DEFAULT_MICROPHONE_PRIORITY
+
+        child = self.microphone_priority_list.get_first_child()
+        while child is not None:
+            next_child = child.get_next_sibling()
+            self.microphone_priority_list.remove(child)
+            child = next_child
+
+        self._microphone_priority = list(normalized)
+        last_index = len(self._microphone_priority) - 1
+        for index, category in enumerate(self._microphone_priority):
+            row = Gtk.ListBoxRow()
+            content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            content.set_margin_top(6)
+            content.set_margin_bottom(6)
+            content.set_margin_start(8)
+            content.set_margin_end(8)
+
+            rank = Gtk.Label(label=f"{index + 1}", width_chars=2)
+            content.append(rank)
+
+            text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            text.set_hexpand(True)
+            text.append(
+                Gtk.Label(
+                    label=_MICROPHONE_CATEGORY_LABELS[category],
+                    xalign=0,
+                    wrap=True,
+                )
+            )
+            description = Gtk.Label(
+                label=_MICROPHONE_CATEGORY_DESCRIPTIONS[category],
+                xalign=0,
+                wrap=True,
+            )
+            description.add_css_class("dim-label")
+            text.append(description)
+            content.append(text)
+
+            move_up = Gtk.Button(label="Move up")
+            move_up.set_sensitive(index > 0)
+            move_up.connect("clicked", self._on_move_microphone_category, category, -1)
+            content.append(move_up)
+
+            move_down = Gtk.Button(label="Move down")
+            move_down.set_sensitive(index < last_index)
+            move_down.connect("clicked", self._on_move_microphone_category, category, 1)
+            content.append(move_down)
+
+            row.set_child(content)
+            self.microphone_priority_list.append(row)
+
+    def _on_move_microphone_category(
+        self,
+        button: Gtk.Button,
+        category: str,
+        offset: int,
+    ) -> None:
+        del button
+        try:
+            current_index = self._microphone_priority.index(category)
+        except ValueError:
+            self._show_error("The microphone priority could not be changed safely.")
+            return
+        target_index = current_index + offset
+        if target_index < 0 or target_index >= len(self._microphone_priority):
+            return
+        priority = list(self._microphone_priority)
+        priority[current_index], priority[target_index] = (
+            priority[target_index],
+            priority[current_index],
+        )
+        self._replace_microphone_priority_rows(priority)
+        self._show_message(
+            "Microphone order changed in this window. Save microphone priority "
+            "to apply it to future dictations."
+        )
+
+    def _on_save_microphone_priority(self, button: Gtk.Button) -> None:
+        del button
+        self.save_microphone_priority()
+
+    def save_microphone_priority(self) -> None:
+        try:
+            policy = self._controller.save_microphone_priority(
+                tuple(self._microphone_priority)
+            )
+        except SettingsError as error:
+            self._show_error(str(error))
+        except Exception:
+            self._show_error(
+                "The microphone priority setting could not be saved safely."
+            )
+        else:
+            self._replace_microphone_priority_rows(policy.priority)
+            self._show_message(
+                "Saved microphone priority. The next dictation reevaluates all "
+                "usable inputs; an active utterance keeps its current microphone."
             )
 
     def _on_choose_data_collection_directory(self, button: Gtk.Button) -> None:

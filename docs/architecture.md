@@ -65,9 +65,10 @@ not implemented yet.
 
 Responsibilities:
 
-- per-recording microphone re-enumeration, DJI Mic Mini 2 link-aware source
-  choice, exact per-stream Pulse routing, conservative profile recovery after
-  disconnects, capture, and fixed-code error reporting;
+- per-recording microphone re-enumeration, a private user-configurable category
+  priority, DJI Mic Mini 2 link-aware eligibility, exact per-stream Pulse
+  routing, conservative profile recovery after disconnects, capture, and
+  fixed-code error reporting;
 - a bounded start deadline plus an invisible post-preflight focus heartbeat,
   so delayed discovery cannot open capture for an invalidated input context;
 - provider authentication and WebSocket lifecycle;
@@ -83,20 +84,23 @@ Responsibilities:
 
 The daemon never commits text and cannot choose a target application.
 
-The DJI decision applies only while opening a new daemon capture stream.
-Proven online selects the unique DJI source; proven offline chooses only a safe
-non-DJI fallback; unknown preserves the existing system/default-source path.
-It never changes a playback sink or requests a system default-source change,
-and it does not hand a live utterance between microphones.
+The microphone policy applies only while opening a new daemon capture stream.
+It ranks DJI, headset, other external, and built-in categories; the default is
+`DJI > headset > other external > built-in`, and the settings window can reorder
+it. Unavailable or unresolved categories fall through. A proven-online DJI is
+eligible at its saved position; a proven-offline one is excluded; unknown does
+not promote DJI ahead of known alternatives. Selection never changes a
+playback sink or requests a system default-source change, and it does not hand
+a live utterance between microphones.
 
 ### Settings application
 
 A bounded GTK4 settings application now manages the private key-only fallback,
-explicit vocabulary, optional explicit recognition corrections, a
-disabled-by-default local dataset destination, and service controls. Collection
-enable/disable/path saves take effect at the next utterance without a daemon
-restart. Adaptive correction memory is maintained automatically in a separate
-private ledger and does not require a settings round trip. The masked
+explicit vocabulary, optional explicit recognition corrections, microphone
+category priority, a disabled-by-default local dataset destination, and service
+controls. Priority and collection saves take effect at the next utterance
+without a daemon restart. Adaptive correction memory is maintained automatically
+in a separate private ledger and does not require a settings round trip. The masked
 interactive `configure`
 command remains available. Secret Service storage and its migration lifecycle
 remain target features rather than part of this transition prototype.

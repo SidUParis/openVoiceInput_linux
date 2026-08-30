@@ -633,6 +633,10 @@ def _category_from_metadata(
         return "headset"
     if "external" in active_port_text:
         return "external"
+    if bus == "usb" or name.casefold().startswith("alsa_input.usb-"):
+        # Explicit external-bus identity takes precedence over a misleading
+        # generic ``device.form_factor=internal`` property.
+        return "external"
     if (
         "internal" in active_port_text
         or form_factor == "internal"
@@ -907,6 +911,11 @@ def _choose_profile_recovery(cards: Any) -> _ProfileRecovery:
             card_name is None
             or card_index is None
             or not card_name.startswith("alsa_card.")
+            # Explicit external-bus evidence always wins over a misleading
+            # ``device.form_factor=internal`` label. Automatic profile
+            # recovery is intentionally limited to a host PCI/platform card.
+            or card_name.startswith("alsa_card.usb")
+            or device_bus not in {"", "pci", "platform"}
             or not (
                 card_name.startswith(("alsa_card.pci-", "alsa_card.platform-"))
                 or device_bus in {"pci", "platform"}
