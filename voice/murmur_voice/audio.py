@@ -327,47 +327,68 @@ def _ensure_pulse_input(
         # the current default was observed first.
         raise AudioDeviceError("PulseAudio default source could not be determined")
     usable_sources = _usable_sources(sources)
-    selected, eligible_sources = _choose_policy_source(
+    selected, eligible_sources, unknown_dji_default = _choose_policy_source(
         usable_sources,
         default_source,
         dji_link_probe,
         microphone_policy,
     )
-    if selected is not None:
-        return _PulseInputSelection(selected.name, pulse_device)
+    fallback = selected or unknown_dji_default
+    if not _should_attempt_builtin_recovery(
+        microphone_policy,
+        eligible_sources,
+        selected,
+    ):
+        if fallback is not None:
+            return _PulseInputSelection(fallback.name, pulse_device)
+        raise AudioDeviceError("microphone policy has no unambiguous available source")
 
-    recovery: _ProfileRecovery | None = None
-    if not eligible_sources:
-        # A monitor/missing default plus zero real sources can mean that
-        # WirePlumber left the built-in card in an output-only profile after a
-        # Bluetooth headset disappeared. Only add input to the exact existing
-        # output profile; never guess a different output route.
+    # A hidden built-in input is a policy candidate, not merely a last-resort
+    # error path. If its rank is above the best visible winner (or every
+    # higher category was ambiguous), safely extend the exact existing output
+    # profile and re-enumerate. Never recover an external/USB output-only card.
+    try:
         recovery = _choose_profile_recovery(_list_cards(runner))
-        try:
-            runner(("set-card-profile", recovery.card, recovery.profile))
-        except Exception as error:
-            # The command may have been applied just as the forward budget
-            # expired (or before pactl reported an error).  Compare the live
-            # profile and use the reserved rollback budget before failing.
-            _rollback_recovery(rollback_runner, recovery, default_source)
-            if isinstance(error, (AudioDeviceError, FileNotFoundError)):
-                raise
-            raise AudioDeviceError("microphone profile recovery failed") from error
-        try:
-            usable_sources = _wait_for_recovered_sources(
-                runner,
-                sleep,
-                recovery,
-            )
-            selected = _choose_source(usable_sources)
-        except Exception:
-            _rollback_recovery(rollback_runner, recovery, default_source)
-            raise
-        # Keeping this same-output duplex profile is intentional: the exact
-        # recovered source is bound only to this recording stream below.
-        return _PulseInputSelection(selected.name, pulse_device)
+    except Exception:
+        if fallback is not None:
+            return _PulseInputSelection(fallback.name, pulse_device)
+        raise
 
-    raise AudioDeviceError("microphone policy has no unambiguous available source")
+    try:
+        runner(("set-card-profile", recovery.card, recovery.profile))
+    except Exception as error:
+        # The command may have been applied just as the forward budget expired
+        # (or before pactl reported an error). A visible lower-ranked fallback
+        # is safe only after the previous profile/default are confirmed again.
+        _rollback_recovery(rollback_runner, recovery, default_source)
+        if fallback is not None and _recovery_is_reverted(
+            rollback_runner,
+            recovery,
+            default_source,
+        ):
+            return _PulseInputSelection(fallback.name, pulse_device)
+        if isinstance(error, (AudioDeviceError, FileNotFoundError)):
+            raise
+        raise AudioDeviceError("microphone profile recovery failed") from error
+    try:
+        recovered_sources = _wait_for_recovered_sources(
+            runner,
+            sleep,
+            recovery,
+        )
+        recovered = _choose_recovered_builtin_source(recovered_sources)
+    except Exception:
+        _rollback_recovery(rollback_runner, recovery, default_source)
+        if fallback is not None and _recovery_is_reverted(
+            rollback_runner,
+            recovery,
+            default_source,
+        ):
+            return _PulseInputSelection(fallback.name, pulse_device)
+        raise
+    # Keeping this same-output duplex profile is intentional: the exact
+    # recovered source is bound only to this recording stream below.
+    return _PulseInputSelection(recovered.name, pulse_device)
 
 
 def _choose_policy_source(
@@ -375,7 +396,7 @@ def _choose_policy_source(
     default_source: str,
     link_probe: Callable[[], bool | None],
     policy: MicrophonePolicyConfig,
-) -> tuple[_PulseSource | None, tuple[_PulseSource, ...]]:
+) -> tuple[_PulseSource | None, tuple[_PulseSource, ...], _PulseSource | None]:
     """Select the first unambiguous currently usable policy category.
 
     DJI sources are eligible only after a positive link probe. A negative
@@ -417,22 +438,74 @@ def _choose_policy_source(
                 source for source in category_sources if source.name == preferred_name
             )
             if len(preferred) == 1:
-                return preferred[0], eligible
+                return (
+                    preferred[0],
+                    eligible,
+                    _unknown_dji_default(dji_sources, default_source, online),
+                )
         current = tuple(
             source for source in category_sources if source.name == default_source
         )
         if len(current) == 1:
-            return current[0], eligible
+            return (
+                current[0],
+                eligible,
+                _unknown_dji_default(dji_sources, default_source, online),
+            )
         if len(category_sources) == 1:
-            return category_sources[0], eligible
+            return (
+                category_sources[0],
+                eligible,
+                _unknown_dji_default(dji_sources, default_source, online),
+            )
 
-    if online is None and len(dji_sources) == 1:
-        current_dji = tuple(
-            source for source in dji_sources if source.name == default_source
-        )
-        if len(current_dji) == 1:
-            return current_dji[0], candidates
-    return None, eligible
+    return (
+        None,
+        eligible,
+        _unknown_dji_default(
+            dji_sources,
+            default_source,
+            online,
+        ),
+    )
+
+
+def _unknown_dji_default(
+    dji_sources: Sequence[_PulseSource],
+    default_source: str,
+    online: bool | None,
+) -> _PulseSource | None:
+    if online is not None or len(dji_sources) != 1:
+        return None
+    source = dji_sources[0]
+    return source if source.name == default_source else None
+
+
+def _should_attempt_builtin_recovery(
+    policy: MicrophonePolicyConfig,
+    eligible_sources: Sequence[_PulseSource],
+    selected: _PulseSource | None,
+) -> bool:
+    if any(_source_category(source) == "built-in" for source in eligible_sources):
+        return False
+    if selected is None:
+        return True
+    built_in_rank = policy.priority.index("built-in")
+    selected_rank = policy.priority.index(_source_category(selected))
+    return built_in_rank < selected_rank
+
+
+def _choose_recovered_builtin_source(
+    sources: Sequence[_PulseSource],
+) -> _PulseSource:
+    built_in = tuple(
+        source
+        for source in _usable_sources(sources)
+        if _source_category(source) == "built-in"
+    )
+    if len(built_in) != 1:
+        raise AudioDeviceError("recovered built-in microphone selection is ambiguous")
+    return built_in[0]
 
 
 def _list_pulse_sources(
@@ -949,7 +1022,10 @@ def _rollback_recovery(
     """Best-effort profile rollback that preserves unrecognized live state."""
 
     try:
-        if _current_card_profile(runner, recovery.card) != recovery.profile:
+        current_profile = _current_card_profile(runner, recovery.card)
+        if current_profile == recovery.previous_profile:
+            return
+        if current_profile != recovery.profile:
             logger.warning("Audio-card profile changed concurrently; not rolling back")
             return
         try:
@@ -977,6 +1053,21 @@ def _rollback_recovery(
         runner(("set-card-profile", recovery.card, recovery.previous_profile))
     except Exception:
         logger.error("Audio-card profile rollback failed")
+
+
+def _recovery_is_reverted(
+    runner: Callable[[Sequence[str]], str],
+    recovery: _ProfileRecovery,
+    previous_default: str,
+) -> bool:
+    """Confirm rollback before using an already-observed lower-ranked source."""
+
+    try:
+        if _current_card_profile(runner, recovery.card) != recovery.previous_profile:
+            return False
+        return _get_default_source(runner) == previous_default
+    except Exception:
+        return False
 
 
 @contextmanager
