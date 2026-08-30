@@ -178,6 +178,7 @@ def test_vocabulary_terms_cannot_be_passed_on_command_line():
 def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_path):
     corrections_path = tmp_path / "corrections.json"
     adaptive_path = tmp_path / "adaptive-corrections.json"
+    data_collection_path = tmp_path / "data-collection.json"
     parser = cli.build_parser()
 
     options = parser.parse_args(
@@ -187,11 +188,14 @@ def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_pat
             str(corrections_path),
             "--adaptive-corrections",
             str(adaptive_path),
+            "--data-collection",
+            str(data_collection_path),
         ]
     )
 
     assert options.corrections == corrections_path
     assert options.adaptive_corrections == adaptive_path
+    assert options.data_collection == data_collection_path
     with pytest.raises(SystemExit):
         parser.parse_args(["run", "--wrong", "private wrong form"])
     with pytest.raises(SystemExit):
@@ -204,8 +208,11 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
     vocabulary_path = tmp_path / "vocabulary.json"
     corrections_path = tmp_path / "corrections.json"
     adaptive_path = tmp_path / "adaptive-corrections.json"
+    data_collection_path = tmp_path / "data-collection.json"
     captured = []
     runtime_arguments = []
+    data_runtime_arguments = []
+    data_runtime_closes = []
 
     class FakeRuntime:
         def __init__(self, **kwargs):
@@ -228,6 +235,24 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
         def __init__(self, config, **kwargs):
             captured.append((config, kwargs))
 
+    class FakeDataCollectionRuntime:
+        def __init__(self, *, config_path):
+            data_runtime_arguments.append(config_path)
+
+        @staticmethod
+        def begin(utterance_id):
+            del utterance_id
+            return None
+
+        @staticmethod
+        def status_code():
+            return "none"
+
+        @staticmethod
+        def close(*, timeout):
+            data_runtime_closes.append(timeout)
+            return True
+
     class FakeServer:
         def __init__(self, session, socket_path):
             del session, socket_path
@@ -235,6 +260,91 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
         @staticmethod
         def serve_forever(signal_commands):
             del signal_commands
+
+    monkeypatch.setattr(cli.logging, "basicConfig", lambda **kwargs: None)
+    monkeypatch.setattr(cli, "_restore_engine", lambda path: 0)
+    monkeypatch.setattr(
+        adaptive_runtime_module,
+        "AdaptiveCorrectionRuntime",
+        FakeRuntime,
+    )
+    monkeypatch.setattr(session_module, "VoiceSession", FakeSession)
+    monkeypatch.setattr(cli, "DataCollectionRuntime", FakeDataCollectionRuntime)
+    monkeypatch.setattr(cli, "ControlServer", FakeServer)
+    monkeypatch.setattr(cli.signal, "signal", lambda *args: None)
+
+    assert (
+        cli._run(
+            tmp_path / "voice.json",
+            None,
+            False,
+            vocabulary_path=vocabulary_path,
+            corrections_path=corrections_path,
+            adaptive_corrections_path=adaptive_path,
+            data_collection_path=data_collection_path,
+        )
+        == 0
+    )
+
+    assert runtime_arguments == [
+        {
+            "config_path": tmp_path / "voice.json",
+            "vocabulary_path": vocabulary_path,
+            "corrections_path": corrections_path,
+            "adaptive_path": adaptive_path,
+        }
+    ]
+    assert len(captured) == 1
+    assert data_runtime_arguments == [data_collection_path]
+    assert data_runtime_closes == [cli.DATA_COLLECTION_CLOSE_TIMEOUT_SECONDS]
+    config, options = captured[0]
+    assert config.api_key == "test-key"
+    assert options["asr_client_factory"] is FakeRuntime.create_asr_client
+    assert options["observation_handler"] is FakeRuntime.observe
+    assert options["data_collection_factory"] is FakeDataCollectionRuntime.begin
+    assert (
+        options["data_collection_status_reader"]
+        is FakeDataCollectionRuntime.status_code
+    )
+
+
+def test_invalid_optional_data_collection_config_does_not_block_daemon_start(
+    tmp_path, monkeypatch
+):
+    data_collection_path = tmp_path / "data-collection.json"
+    data_collection_path.write_text("not-json\n", encoding="utf-8")
+    data_collection_path.chmod(0o600)
+    served = []
+
+    class FakeRuntime:
+        def __init__(self, **kwargs):
+            del kwargs
+
+        @staticmethod
+        def validate():
+            return VoiceConfig("test-key")
+
+        @staticmethod
+        def create_asr_client():
+            return object()
+
+        @staticmethod
+        def observe(snapshot):
+            del snapshot
+            return False
+
+    class FakeSession:
+        def __init__(self, config, **kwargs):
+            del config, kwargs
+
+    class FakeServer:
+        def __init__(self, session, socket_path):
+            del session, socket_path
+
+        @staticmethod
+        def serve_forever(signal_commands):
+            del signal_commands
+            served.append(True)
 
     monkeypatch.setattr(cli.logging, "basicConfig", lambda **kwargs: None)
     monkeypatch.setattr(cli, "_restore_engine", lambda path: 0)
@@ -252,23 +362,65 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
             tmp_path / "voice.json",
             None,
             False,
-            vocabulary_path=vocabulary_path,
-            corrections_path=corrections_path,
-            adaptive_corrections_path=adaptive_path,
+            data_collection_path=data_collection_path,
         )
         == 0
     )
+    assert served == [True]
 
-    assert runtime_arguments == [
-        {
-            "config_path": tmp_path / "voice.json",
-            "vocabulary_path": vocabulary_path,
-            "corrections_path": corrections_path,
-            "adaptive_path": adaptive_path,
-        }
-    ]
-    assert len(captured) == 1
-    config, options = captured[0]
-    assert config.api_key == "test-key"
-    assert options["asr_client_factory"] is FakeRuntime.create_asr_client
-    assert options["observation_handler"] is FakeRuntime.observe
+
+def test_optional_data_writer_start_failure_does_not_block_daemon(
+    tmp_path, monkeypatch
+):
+    captured = []
+
+    class FakeRuntime:
+        def __init__(self, **kwargs):
+            del kwargs
+
+        @staticmethod
+        def validate():
+            return VoiceConfig("test-key")
+
+        @staticmethod
+        def create_asr_client():
+            return object()
+
+        @staticmethod
+        def observe(snapshot):
+            del snapshot
+            return False
+
+    class FailedDataRuntime:
+        def __init__(self, **kwargs):
+            del kwargs
+            raise RuntimeError("optional writer unavailable")
+
+    class FakeSession:
+        def __init__(self, config, **kwargs):
+            del config
+            captured.append(kwargs)
+
+    class FakeServer:
+        def __init__(self, session, socket_path):
+            del session, socket_path
+
+        @staticmethod
+        def serve_forever(signal_commands):
+            del signal_commands
+
+    monkeypatch.setattr(cli.logging, "basicConfig", lambda **kwargs: None)
+    monkeypatch.setattr(cli, "_restore_engine", lambda path: 0)
+    monkeypatch.setattr(
+        adaptive_runtime_module,
+        "AdaptiveCorrectionRuntime",
+        FakeRuntime,
+    )
+    monkeypatch.setattr(cli, "DataCollectionRuntime", FailedDataRuntime)
+    monkeypatch.setattr(session_module, "VoiceSession", FakeSession)
+    monkeypatch.setattr(cli, "ControlServer", FakeServer)
+    monkeypatch.setattr(cli.signal, "signal", lambda *args: None)
+
+    assert cli._run(tmp_path / "voice.json", None, False) == 0
+    assert captured[0]["data_collection_factory"] is None
+    assert captured[0]["data_collection_status_reader"] is None

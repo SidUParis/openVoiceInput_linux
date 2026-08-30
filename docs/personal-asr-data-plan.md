@@ -1,10 +1,16 @@
-# Future personal ASR data plan
+# Personal ASR data collection and training plan
 
 ## Status and purpose
 
-This is a plan, not an implemented feature. The current adaptive-correction
-work stores neither microphone recordings nor transcript records and does not
-train, fine-tune, or distil a model.
+The first collection layer is implemented; model work is not. Collection is
+disabled by default and remains separate from adaptive correction. When a user
+explicitly enables it and chooses an existing absolute local or mounted folder,
+the daemon can retain each accepted utterance as a versioned WAV/JSON pair
+under `openvoiceinput-dataset-v1`.
+
+This layer does not review labels, transfer to Orange, upload a dataset, train,
+fine-tune, or distil a model. In particular, an automatically paired provider
+result and recording are not a gold label or a distillation-ready example.
 
 The eventual goal is a personal Chinese/English/French and code-switching ASR
 evaluation/training corpus for domain names, server names, acronyms, accents,
@@ -14,14 +20,17 @@ with how the user prefers text to be formatted.
 
 ## Labels that must remain separate
 
-Each explicitly retained utterance should have three distinct text roles:
+Each explicitly retained utterance has three distinct text roles:
 
-- `provider_final`: the cloud provider's authoritative result. This is a useful
-  pseudo-label and baseline, not unquestioned ground truth.
-- `spoken_verbatim`: a reviewed label for what the speaker actually said,
-  preserving language switches and spoken words.
-- `preferred_output`: the text the user ultimately wants inserted, which may
-  include spelling, capitalization, punctuation, normalization, or stylistic
+- `provider_final`: the cloud provider's authoritative result, stored with
+  `teacher-unreviewed` status. This is a useful pseudo-label and baseline, not
+  unquestioned ground truth.
+- `spoken_verbatim`: currently `null`/`unreviewed`; a later review workflow may
+  fill it with what the speaker actually said, preserving language switches and
+  spoken words.
+- `preferred_output`: currently `null`/`unreviewed`; a later review workflow
+  may fill it with the text the user ultimately wants inserted, including
+  spelling, capitalization, punctuation, normalization, or stylistic
   preferences that were not literally spoken.
 
 For example, a formatting preference belongs in `preferred_output`; it must not
@@ -29,32 +38,55 @@ silently alter `spoken_verbatim`. This separation permits ASR acoustic/language
 adaptation to use the faithful label while a later correction or formatting
 layer can learn the preferred output.
 
-## Proposed opt-in record
+## Implemented opt-in record (schema v1)
 
-Collection must be disabled by default and enabled through an explicit user
-choice. One record should use a random utterance ID to associate:
+The GTK settings window keeps collection off by default. Enabling requires an
+existing absolute local or mounted folder and initializes or reopens a marked
+`openvoiceinput-dataset-v1`. The daemon reloads the setting before each
+dictation, so saving enable/disable/path changes takes effect without a service
+restart.
 
-- one bounded audio file captured for that utterance;
-- `provider_final`, plus provider/model identity needed to interpret it;
-- independently reviewable `spoken_verbatim` and `preferred_output` fields;
-- coarse language/code-switch tags and optional microphone/session metadata;
-- label status such as `unreviewed`, `verbatim-reviewed`, or
-  `preferred-reviewed`;
-- an explicit keep/delete decision.
+A record is offered only after the focused IBus client accepts a nonempty
+authoritative provider final. Cancelled, failed, final-rejected, empty-audio,
+and no-final sessions publish nothing. One random utterance directory contains:
+
+- `audio.wav`, preserving the exact captured 16 kHz, mono, signed 16-bit PCM;
+- `record.json`, with schema/dataset/utterance/session IDs, UTC time, explicit
+  opt-in consent, audio format/frame count and PCM/file SHA-256 values;
+- Volcengine provider/model/resource identity;
+- the three text roles and review states described above.
+
+The active recorder stores at most the 600-second product limit in bounded
+memory. A bounded background queue performs WAV encoding, hashing, sync, and
+publication. A record is first completed below `.pending` and atomically
+renamed into `utterances/<utterance_id>`; writer failure is optional and cannot
+block final text or ordinary dictation.
+
+This is best-effort direct-to-selected-folder storage with no fallback spool.
+Normal service shutdown gives the writer 10 seconds to drain inside systemd's
+30-second total stop budget. A stalled/unmounted destination can leave or
+remove hidden staging and lose the unpublished record; already published
+records remain.
 
 The audio and manifest stay outside the public Git repository. Keys, tokens,
 desktop text surrounding the utterance, clipboard contents, global keyboard
 events, and Rime data are never dataset fields. The five-second adaptive
 ledger is not itself an audio dataset and must not be reinterpreted as one.
 
+Saving disable or a new destination shares the publication lock with the
+background writer. Once that settings save returns, older queued or staged,
+unpublished records cannot become visible. Already published records remain;
+the application currently provides no review/delete UI. Uninstall preserves
+both `data-collection.json` and datasets below user-selected folders.
+
 ## Orange storage target
 
 For the intended personal deployment, a user-controlled computer nicknamed
 **Orange** can be the storage destination. Both endpoints are treated as trusted
-local machines for this prototype, so adding application-level static
-encryption is not a prerequisite. The collector still needs explicit opt-in,
-predictable paths, ownership/permission checks, an observable transfer status,
-and a direct way to stop collection or delete an utterance. Repository code and
+local machines for this prototype. The implemented collector does not add
+application-level static encryption; the selected local or mounted filesystem
+determines effective visibility, sharing, backup, and at-rest protection. It
+also does not connect or copy anything to Orange. Repository code and
 documentation must never contain Orange credentials.
 
 Transfer implementation is deferred. A future design can spool complete local
@@ -65,21 +97,26 @@ pending item rather than drop valuable data silently.
 
 ## Work list before training
 
-1. Freeze and version the record schema, including the three separate text
-   roles and consent state.
-2. Implement disabled-by-default recording retention and per-utterance
-   keep/delete controls without changing the current provider stream.
-3. Implement resumable Orange transfer and verify record counts, hashes, and
-   delete behavior on both owned machines.
+1. **Implemented:** versioned, disabled-by-default WAV/JSON collection with the
+   three separate text roles, exact audio hashes, atomic publication, hot
+   enable/disable/path reload, and no change to the provider stream.
+2. Stabilize schema-v1 migration/validation policy before declaring long-term
+   corpus compatibility; add an explicit review/delete/keep interface.
+3. Implement resumable Orange transfer and verify record counts, hashes,
+   partial-transfer recovery, and delete behavior on both owned machines.
 4. Build a lightweight review queue for `spoken_verbatim`; do not treat either
-   cloud output or a quick preferred edit as a literal speech label.
-5. Create train/development/test splits by session or day so near-duplicate
+   cloud output or a quick preferred edit as a literal speech label. Review
+   `preferred_output` independently.
+5. Add language/code-switch and microphone/session annotations only with a
+   documented purpose and bounded schema; do not infer them from unrelated
+   desktop context.
+6. Create train/development/test splits by session or day so near-duplicate
    utterances do not leak across evaluation boundaries.
-6. Establish baselines for Mandarin, English, French, and code-switch segments,
+7. Establish baselines for Mandarin, English, French, and code-switch segments,
    including domain-term and named-entity error rates.
-7. Compare non-training baselines first: vocabulary/correction memory, decoding
+8. Compare non-training baselines first: vocabulary/correction memory, decoding
    bias, and a small preferred-output layer.
-8. Only then select a reproducible local base ASR model and test a small
+9. Only then select a reproducible local base ASR model and test a small
    speaker/domain adapter or parameter-efficient fine-tune. Keep an untouched
    multilingual test split and compare against the cloud baseline.
 
@@ -93,5 +130,7 @@ or made the default merely because its training loss improves.
 The implemented adaptive feature is a low-cost feedback loop for the next
 provider request: one strict same-focus replacement becomes a bounded
 wrong-to-canonical hint. It is intentionally not called self-training or an
-autoregressive model. It can improve daily use while the opt-in corpus design,
-label review, and eventual training work remain independent and auditable.
+autoregressive model. It can improve daily use while the separate opted-in
+collector accumulates review candidates. Adaptive entries are not labels, and
+neither feature makes the current corpus training-ready; label review and
+eventual training remain independent and auditable.

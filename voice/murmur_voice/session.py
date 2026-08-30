@@ -10,6 +10,7 @@ from typing import Any
 
 from .audio import AudioCapture, AudioDeviceError
 from .config import ConfigError, VoiceConfig
+from .data_collection import DataCollectionError
 from .preedit import AcquireResult, PreeditClient
 from .state import CommandReply, VoiceState
 from .volcengine import AudioBackpressureError, VolcengineASRClient
@@ -60,6 +61,8 @@ class VoiceSession:
         start_timeout_seconds: float = VOICE_START_TIMEOUT_SECONDS,
         observation_handler: Any | None = None,
         observation_seconds: float = ADAPTIVE_OBSERVATION_SECONDS,
+        data_collection_factory: Any | None = None,
+        data_collection_status_reader: Any | None = None,
     ) -> None:
         if asr_client_factory is not None:
             self._asr_factory = asr_client_factory
@@ -78,6 +81,8 @@ class VoiceSession:
         self._start_timeout_seconds = max(1.0, float(start_timeout_seconds))
         self._observation_handler = observation_handler
         self._observation_seconds = max(0.1, min(30.0, float(observation_seconds)))
+        self._data_collection_factory = data_collection_factory
+        self._data_collection_status_reader = data_collection_status_reader
 
         self._lock = threading.RLock()
         self._state = VoiceState.IDLE
@@ -93,6 +98,7 @@ class VoiceSession:
         self._last_error_code = "none"
         self._closed = False
         self._session_serial = 0
+        self._data_record: Any | None = None
 
     @property
     def state(self) -> VoiceState:
@@ -101,17 +107,23 @@ class VoiceSession:
 
     def status(self) -> CommandReply:
         with self._lock:
+            collection_code = "none"
+            if self._data_collection_status_reader is not None:
+                try:
+                    collection_code = self._data_collection_status_reader()
+                except Exception:
+                    collection_code = "data-collection-failed"
             if self._duration_warning and self._state in (
                 VoiceState.STARTING,
                 VoiceState.RECORDING,
             ):
                 code = "recording-limit-warning"
+            elif collection_code == "data-collection-failed":
+                code = collection_code
+            elif self._last_error_code != "none":
+                code = self._last_error_code
             else:
-                code = (
-                    self._last_error_code
-                    if self._last_error_code != "none"
-                    else "status"
-                )
+                code = "status"
             return CommandReply(True, code, self._state)
 
     def start(self) -> CommandReply:
@@ -170,11 +182,15 @@ class VoiceSession:
                     raise _PreeditHeartbeatRejected
                 self._revision = 1
                 self._require_start_time(start_deadline)
+                self._begin_data_record_locked(utterance_id)
                 # The provider immediately returns after creating its private
                 # event-loop thread. Network work never runs in the IBus engine.
                 asr.connect()
                 self._require_start_time(start_deadline)
-                self._audio.start(asr.send_audio)
+                data_record = self._data_record
+                self._audio.start(
+                    lambda data: self._send_audio_chunk(asr, data_record, data)
+                )
                 self._require_start_time(start_deadline)
                 timer = self._timer_factory(
                     self._max_recording_seconds,
@@ -237,6 +253,7 @@ class VoiceSession:
                 self._audio.stop()
             except Exception:
                 logger.error("Audio capture stop failed")
+            self._stop_data_record_audio_locked()
             asr.finish_sending()
             session_serial = self._session_serial
             timer = self._timer_factory(
@@ -313,9 +330,14 @@ class VoiceSession:
                 return
             self._cancel_final_timer_locked()
             utterance_id = self._utterance_id
+            provider_final = self._latest_text
+            # Stop capture before final delivery. Optional retention is only
+            # offered after the same authoritative final was accepted by the
+            # focused IBus client.
+            self._disconnect_provider_locked()
             accepted = False
             observation_deadline = None
-            if self._latest_text:
+            if provider_final:
                 # Start the window before the synchronous Final D-Bus call.
                 # The engine starts its own bound while handling that call, so
                 # this side will finish first even after round-trip latency.
@@ -323,25 +345,29 @@ class VoiceSession:
                 accepted = self._preedit.final(
                     utterance_id,
                     self._revision + 1,
-                    self._latest_text,
+                    provider_final,
                 )
             else:
                 self._preedit.cancel(utterance_id)
 
-            if self._latest_text and not accepted:
+            if provider_final and not accepted:
                 # final() may reject before making its D-Bus call. cancel() is
                 # harmless if final() already cleared the client session.
                 self._preedit.cancel(utterance_id)
                 self._last_error_code = "preedit-final-rejected"
-                self._reset_provider_locked()
+                self._discard_data_record_locked()
+                self._clear_sensitive_state_locked()
                 return
-            if not self._latest_text:
+            if not provider_final:
+                self._discard_data_record_locked()
                 self._last_error_code = "none"
-                self._reset_provider_locked()
+                self._clear_sensitive_state_locked()
                 return
 
-            self._last_error_code = "none"
-            self._disconnect_provider_locked()
+            collection_failed = not self._commit_data_record_locked(provider_final)
+            self._last_error_code = (
+                "data-collection-failed" if collection_failed else "none"
+            )
             self._revision = 0
             self._latest_text = ""
             self._duration_warning = False
@@ -485,6 +511,7 @@ class VoiceSession:
             self._audio.stop()
         except Exception:
             logger.error("Audio capture cleanup failed")
+        self._discard_data_record_locked()
         asr = self._asr
         self._asr = None
         if asr is not None:
@@ -496,6 +523,7 @@ class VoiceSession:
 
     def _reset_provider_locked(self) -> None:
         self._disconnect_provider_locked()
+        self._discard_data_record_locked()
         self._clear_sensitive_state_locked()
 
     def _disconnect_provider_locked(self) -> None:
@@ -506,6 +534,7 @@ class VoiceSession:
             self._audio.stop()
         except Exception:
             logger.error("Audio capture cleanup failed")
+        self._stop_data_record_audio_locked()
         asr = self._asr
         self._asr = None
         if asr is not None:
@@ -518,6 +547,65 @@ class VoiceSession:
         self._latest_text = ""
         self._duration_warning = False
         self._observation_deadline = None
+
+    def _begin_data_record_locked(self, utterance_id: str) -> None:
+        self._data_record = None
+        factory = self._data_collection_factory
+        if factory is None:
+            return
+        try:
+            self._data_record = factory(utterance_id)
+        except (ConfigError, DataCollectionError, OSError):
+            # Optional retention must never prevent dictation or disclose the
+            # selected path through logs.
+            logger.error("Optional local data collection is unavailable")
+            self._last_error_code = "data-collection-unavailable"
+        except Exception:
+            logger.error("Optional local data collection could not start")
+            self._last_error_code = "data-collection-unavailable"
+
+    @staticmethod
+    def _send_audio_chunk(asr: Any, data_record: Any | None, data: bytes) -> None:
+        asr.send_audio(data)
+        if data_record is not None:
+            data_record.add_audio(data)
+
+    def _stop_data_record_audio_locked(self) -> None:
+        record = self._data_record
+        if record is None:
+            return
+        try:
+            complete = record.stop_audio()
+        except Exception:
+            complete = False
+        if not complete:
+            logger.error("Optional local audio record is incomplete")
+            self._last_error_code = "data-collection-failed"
+
+    def _commit_data_record_locked(self, provider_final: str) -> bool:
+        record = self._data_record
+        self._data_record = None
+        if record is None:
+            return True
+        if not provider_final:
+            record.discard()
+            return True
+        try:
+            record.commit(provider_final)
+        except Exception:
+            logger.error("Optional local data record could not be completed")
+            return False
+        return True
+
+    def _discard_data_record_locked(self) -> None:
+        record = self._data_record
+        self._data_record = None
+        if record is None:
+            return
+        try:
+            record.discard()
+        except Exception:
+            logger.error("Optional local data record cleanup failed")
 
     def _cancel_final_timer_locked(self) -> None:
         timer = self._final_timer

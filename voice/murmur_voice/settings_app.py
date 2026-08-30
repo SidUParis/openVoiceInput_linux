@@ -9,7 +9,7 @@ from collections.abc import Callable, Sequence
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
 from .settings_controller import (  # noqa: E402
     CORRECTION_PAIR_LIMIT,
@@ -44,6 +44,12 @@ _SESSION_LABELS = {
 _STATUS_LABELS = {
     "audio-backpressure": "audio buffer is full",
     "capture-start-failed": "microphone could not start",
+    "data-collection-failed": (
+        "optional local data was not confirmed durable; dictation still completed"
+    ),
+    "data-collection-unavailable": (
+        "optional local data collection is unavailable; dictation continues"
+    ),
     "final-timeout": "final recognition timed out",
     "microphone-unavailable": "no usable microphone; reconnect or select an input",
     "adaptive-correction-failed": "adaptive correction could not be saved",
@@ -71,11 +77,15 @@ class SettingsWindow(Gtk.ApplicationWindow):
         refresh_service_on_start: bool = True,
     ) -> None:
         super().__init__(application=application, title="Open Voice Input Linux")
-        self.set_default_size(620, 760)
+        self.set_default_size(620, 820)
         self._controller = controller or SettingsController()
         self._service_busy = False
+        self._collection_busy = False
+        self._window_closed = False
         self._key_clear_armed = False
         self._correction_pairs: list[tuple[str, str]] = []
+        self._data_collection_chooser: Gtk.FileChooserNative | None = None
+        self.connect("close-request", self._on_close_request)
 
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         page.set_margin_top(20)
@@ -220,6 +230,80 @@ class SettingsWindow(Gtk.ApplicationWindow):
 
         page.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
+        microphone_title = Gtk.Label(label="Automatic microphone selection", xalign=0)
+        microphone_title.add_css_class("heading")
+        page.append(microphone_title)
+
+        self.microphone_selection_notice_label = Gtk.Label(
+            label=(
+                "Before each dictation, Open Voice Input can prefer an available "
+                "DJI Mic Mini 2 transmitter and fall back when it is unavailable. "
+                "The choice is scoped to that dictation: playback and system-wide "
+                "audio or system-wide default changes are not requested."
+            ),
+            xalign=0,
+            wrap=True,
+        )
+        page.append(self.microphone_selection_notice_label)
+
+        page.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        collection_title = Gtk.Label(
+            label="Local training-data collection (optional)", xalign=0
+        )
+        collection_title.add_css_class("heading")
+        page.append(collection_title)
+
+        self.data_collection_notice_label = Gtk.Label(
+            label=(
+                "Off by default. For an enabled utterance whose authoritative "
+                "Volcengine final is successfully committed, this stores a WAV "
+                "and provider_final (an "
+                "unreviewed pseudo-label) under openvoiceinput-dataset-v1 in the "
+                "selected folder. spoken_verbatim and preferred_output remain "
+                "empty until a later review workflow. Nothing here uploads the "
+                "local dataset or trains a model. Disabling immediately blocks "
+                "unpublished queued records; already published records are retained."
+            ),
+            xalign=0,
+            wrap=True,
+        )
+        page.append(self.data_collection_notice_label)
+
+        self.data_collection_check = Gtk.CheckButton(
+            label="Keep local WAV + unreviewed provider final"
+        )
+        page.append(self.data_collection_check)
+
+        collection_path_row = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+        )
+        self.data_collection_directory_entry = Gtk.Entry(
+            placeholder_text="Choose an absolute existing folder"
+        )
+        self.data_collection_directory_entry.set_editable(False)
+        self.data_collection_directory_entry.set_hexpand(True)
+        collection_path_row.append(self.data_collection_directory_entry)
+        self.choose_data_collection_directory_button = Gtk.Button(
+            label="Choose folder…"
+        )
+        self.choose_data_collection_directory_button.connect(
+            "clicked", self._on_choose_data_collection_directory
+        )
+        collection_path_row.append(self.choose_data_collection_directory_button)
+        page.append(collection_path_row)
+
+        self.save_data_collection_button = Gtk.Button(
+            label="Save local collection setting"
+        )
+        self.save_data_collection_button.connect(
+            "clicked", self._on_save_data_collection
+        )
+        page.append(self.save_data_collection_button)
+
+        page.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
         service_title = Gtk.Label(label="Voice service", xalign=0)
         service_title.add_css_class("heading")
         page.append(service_title)
@@ -267,6 +351,18 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self._show_error(str(error))
         else:
             self._replace_correction_rows(pairs)
+        try:
+            collection = self._controller.load_data_collection()
+        except SettingsError as error:
+            self.data_collection_check.set_active(False)
+            self.data_collection_directory_entry.set_text("")
+            self._show_error(str(error))
+        else:
+            self.data_collection_check.set_active(collection.enabled)
+            directory = collection.directory
+            self.data_collection_directory_entry.set_text(
+                str(directory) if directory is not None else ""
+            )
 
     def _set_key_state(self, state: KeyState) -> None:
         labels = {
@@ -452,6 +548,126 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self._show_message(
                 f"Saved {count} explicit correction pairs. {APPLY_NOTICE}"
             )
+
+    def _on_choose_data_collection_directory(self, button: Gtk.Button) -> None:
+        del button
+        chooser = Gtk.FileChooserNative.new(
+            "Choose local dataset folder",
+            self,
+            Gtk.FileChooserAction.SELECT_FOLDER,
+            "Select",
+            "Cancel",
+        )
+        current = self.data_collection_directory_entry.get_text().strip()
+        if current:
+            chooser.set_current_folder(Gio.File.new_for_path(current))
+        chooser.connect("response", self._on_data_collection_directory_response)
+        self._data_collection_chooser = chooser
+        chooser.show()
+
+    def _on_data_collection_directory_response(
+        self,
+        chooser: Gtk.FileChooserNative,
+        response: int,
+    ) -> None:
+        if response == Gtk.ResponseType.ACCEPT:
+            selected = chooser.get_file()
+            selected_path = selected.get_path() if selected is not None else None
+            if selected_path is None:
+                self._show_error("Choose a local filesystem folder.")
+            else:
+                self.data_collection_directory_entry.set_text(selected_path)
+        chooser.destroy()
+        if chooser is self._data_collection_chooser:
+            self._data_collection_chooser = None
+
+    def _on_save_data_collection(self, button: Gtk.Button) -> None:
+        del button
+        if self._collection_busy:
+            return
+        enabled = self.data_collection_check.get_active()
+        directory_text = self.data_collection_directory_entry.get_text().strip()
+        self._collection_busy = True
+        self.save_data_collection_button.set_sensitive(False)
+        self.choose_data_collection_directory_button.set_sensitive(False)
+
+        def worker() -> None:
+            try:
+                collection = self._controller.save_data_collection(
+                    enabled,
+                    directory_text or None,
+                )
+            except SettingsError as error:
+                GLib.idle_add(self._finish_data_collection_save, None, str(error))
+            except Exception:
+                GLib.idle_add(
+                    self._finish_data_collection_save,
+                    None,
+                    "The local data collection setting could not be saved safely.",
+                )
+            else:
+                GLib.idle_add(
+                    self._finish_data_collection_save,
+                    collection,
+                    None,
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def save_data_collection(self) -> None:
+        enabled = self.data_collection_check.get_active()
+        directory_text = self.data_collection_directory_entry.get_text().strip()
+        try:
+            collection = self._controller.save_data_collection(
+                enabled,
+                directory_text or None,
+            )
+        except SettingsError as error:
+            self._show_error(str(error))
+        except Exception:
+            self._show_error(
+                "The local data collection setting could not be saved safely."
+            )
+        else:
+            self._apply_data_collection_result(collection)
+
+    def _finish_data_collection_save(self, collection, error: str | None) -> bool:
+        self._collection_busy = False
+        if self._window_closed:
+            return GLib.SOURCE_REMOVE
+        self.save_data_collection_button.set_sensitive(True)
+        self.choose_data_collection_directory_button.set_sensitive(True)
+        if error is not None:
+            self._show_error(error)
+        elif collection is not None:
+            self._apply_data_collection_result(collection)
+        return GLib.SOURCE_REMOVE
+
+    def _apply_data_collection_result(self, collection) -> None:
+        self.data_collection_check.set_active(collection.enabled)
+        directory = collection.directory
+        self.data_collection_directory_entry.set_text(
+            str(directory) if directory is not None else ""
+        )
+        if collection.enabled:
+            self._show_message(
+                "Local WAV and unreviewed provider-final collection is enabled. "
+                "Each new dictation reads this choice."
+            )
+        else:
+            self._show_message(
+                "Local training-data collection is disabled. Current or queued "
+                "unpublished records will not be written; published records remain."
+            )
+
+    def _on_close_request(self, window: Gtk.Window) -> bool:
+        del window
+        self._window_closed = True
+        chooser = self._data_collection_chooser
+        self._data_collection_chooser = None
+        if chooser is not None:
+            chooser.destroy()
+        return False
 
     def _on_refresh_service(self, button: Gtk.Button) -> None:
         del button

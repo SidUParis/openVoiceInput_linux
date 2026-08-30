@@ -3,8 +3,7 @@ from __future__ import annotations
 import pytest
 
 from murmur_voice.audio import AudioDeviceError
-from murmur_voice.config import VoiceConfig
-from murmur_voice.config import ConfigError
+from murmur_voice.config import ConfigError, VoiceConfig
 from murmur_voice.preedit import AcquireResult, ObservationSnapshot
 from murmur_voice.session import (
     ADAPTIVE_OBSERVATION_FINISH_MARGIN_SECONDS,
@@ -62,6 +61,31 @@ class FakeAudio:
         self.order.append("audio-stop")
         self.callback = None
         self.stopped += 1
+
+
+class FakeDataRecord:
+    def __init__(self, *, commit_error=None, stop_result=True):
+        self.audio = []
+        self.stop_calls = 0
+        self.commits = []
+        self.discards = 0
+        self.commit_error = commit_error
+        self.stop_result = stop_result
+
+    def add_audio(self, data):
+        self.audio.append(data)
+
+    def stop_audio(self):
+        self.stop_calls += 1
+        return self.stop_result
+
+    def commit(self, provider_final):
+        self.commits.append(provider_final)
+        if self.commit_error is not None:
+            raise self.commit_error
+
+    def discard(self):
+        self.discards += 1
 
 
 class FakePreedit:
@@ -162,6 +186,116 @@ def test_start_acquires_focus_before_provider_and_capture():
     ]
     assert timers[0].seconds == 600.0 and timers[0].started
     assert timers[1].seconds == 540.0 and timers[1].started
+
+
+def test_opt_in_data_record_receives_exact_audio_and_authoritative_final():
+    record = FakeDataRecord()
+    factory_calls = []
+    session, asr, audio, preedit, timers, order = _session(
+        data_collection_factory=lambda utterance_id: (
+            factory_calls.append(utterance_id) or record
+        )
+    )
+    session.start()
+
+    audio.callback(b"\x01\x02")
+    asr.on_result("teacher partial")
+    asr.on_result("teacher final")
+    session.stop()
+    asr.on_finish()
+
+    assert factory_calls == ["utterance-1"]
+    assert asr.audio == [b"\x01\x02"]
+    assert record.audio == [b"\x01\x02"]
+    assert record.commits == ["teacher final"]
+    assert record.discards == 0
+    assert record.stop_calls >= 1
+
+
+def test_optional_collection_start_failure_never_blocks_dictation():
+    def fail_collection(_utterance_id):
+        raise OSError("private path must not be logged")
+
+    session, asr, audio, preedit, timers, order = _session(
+        data_collection_factory=fail_collection
+    )
+
+    reply = session.start()
+
+    assert reply.ok is True
+    assert asr.connected == 1
+    assert audio.started == 1
+    assert session.status().code == "data-collection-unavailable"
+
+
+def test_collection_write_failure_keeps_final_commit_and_reports_warning():
+    record = FakeDataRecord(commit_error=OSError("simulated storage loss"))
+    session, asr, audio, preedit, timers, order = _session(
+        data_collection_factory=lambda _utterance_id: record
+    )
+    session.start()
+    asr.on_result("authoritative")
+
+    asr.on_finish()
+
+    assert session.state is VoiceState.OBSERVING
+    assert next(call for call in preedit.calls if call[0] == "final")[-1] == (
+        "authoritative"
+    )
+    assert session.status().code == "data-collection-failed"
+
+
+def test_cancel_discards_optional_record_without_publishing_a_label():
+    record = FakeDataRecord()
+    session, asr, audio, preedit, timers, order = _session(
+        data_collection_factory=lambda _utterance_id: record
+    )
+    session.start()
+    audio.callback(b"\x01\x02")
+
+    session.cancel()
+
+    assert record.commits == []
+    assert record.discards == 1
+
+
+def test_rejected_authoritative_final_discards_optional_record():
+    record = FakeDataRecord()
+    session, asr, audio, preedit, timers, order = _session(
+        data_collection_factory=lambda _utterance_id: record
+    )
+    preedit.final_result = False
+    session.start()
+    audio.callback(b"\x01\x02")
+    asr.on_result("authoritative")
+
+    asr.on_finish()
+
+    assert record.commits == []
+    assert record.discards == 1
+    assert session.status().code == "preedit-final-rejected"
+
+
+def test_background_collection_failure_is_visible_without_blocking_status():
+    session, asr, audio, preedit, timers, order = _session(
+        data_collection_status_reader=lambda: "data-collection-failed"
+    )
+
+    assert session.status().code == "data-collection-failed"
+
+    reply = session.start()
+    assert reply.ok is True
+    assert asr.connected == 1
+    assert audio.started == 1
+
+
+def test_broken_collection_status_reader_is_reduced_to_fixed_warning():
+    def fail_status():
+        raise RuntimeError("path must not escape")
+
+    session, *_ = _session(data_collection_status_reader=fail_status)
+
+    assert session.status().code == "data-collection-failed"
 
 
 def test_rejected_preedit_never_starts_microphone_or_network():

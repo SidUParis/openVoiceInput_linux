@@ -1,12 +1,13 @@
 # Threat model for the 0.x preview
 
-Review basis: the implementation and documentation prepared together for the
-`v0.1.0-alpha.1` preview, reviewed on 2026-08-26. This document covers the
-current temporary IBus-engine switch, standalone voice daemon, and bounded
-microphone-route recovery. The five-second adaptive-correction boundary was
-added for the post-alpha feature branch on 2026-08-29. It does not claim that
-the future combined librime engine, recording retention, or local model
-training has been implemented or reviewed.
+Review basis: the implementation and documentation prepared for the
+`v0.1.0-alpha.1` preview on 2026-08-26, extended for the adaptive-correction,
+DJI Mic Mini 2 routing, and optional local-collection work through 2026-08-30.
+This document covers the current temporary IBus-engine switch, standalone voice
+daemon, per-dictation microphone selection, and disabled-by-default local
+WAV/JSON collector. It does not claim that the future combined librime engine,
+Orange transport, human label-review workflow, or local model training has been
+implemented or reviewed.
 
 ## Security and privacy objectives
 
@@ -30,13 +31,20 @@ Open Voice Input Linux is designed to preserve these properties:
 8. An offline preview accepted by the verifier contains the exact committed
    source payload and the exact locked wheelhouse described by its manifest
    and SBOM.
+9. Local recording retention is disabled by default. When explicitly enabled,
+   only an authoritative final accepted by the focused context can publish a
+   bounded, versioned WAV/JSON record; collection failure cannot block
+   dictation.
+10. DJI transmitter status affects only the daemon's new capture stream and
+    never changes a playback sink or requests a system-wide default source.
 
 ## Assets and trust boundaries
 
 Sensitive assets are the provider API key, microphone audio, live/final text,
-explicit vocabulary, manual/adaptive correction pairs, the focused input
-context and its bounded surrounding-text snapshot, the previous IBus engine,
-the selected audio source/profile, and the user's existing Rime data.
+explicit vocabulary, manual/adaptive correction pairs, local-collection
+consent/destination and published records, the focused input context and its
+bounded surrounding-text snapshot, the previous IBus engine, the selected
+audio source/profile, DJI status frames, and the user's existing Rime data.
 
 The current boundaries are:
 
@@ -45,12 +53,23 @@ The current boundaries are:
   the already acquired, focused input context; it does not use clipboard,
   AT-SPI, or global keyboard monitoring.
 - The voice daemon owns audio capture and the provider connection. It sends
-  partial/final events to the engine over the user's session D-Bus.
+  partial/final events to the engine over the user's session D-Bus. If the user
+  explicitly enabled collection, it also retains bounded PCM in memory and
+  offers an accepted final to an isolated background filesystem writer.
+- The selected local or mounted filesystem is a user-chosen trust boundary.
+  The collector creates `openvoiceinput-dataset-v1`, validates its marker, and
+  atomically publishes complete records. It provides no application-level
+  encryption, upload, or Orange transport; filesystem and mount policy
+  determine effective visibility and at-rest protection.
 - PulseAudio/PipeWire and PortAudio are host trust boundaries. The daemon may
   add input to one unambiguous output-only ALSA profile and bind its own stream
   to one verified physical source. It never directly changes mute, volume, or
   calls `set-default-source`; the host audio policy may nevertheless recompute
   its global default when a card profile is activated.
+- `libusb` and the DJI receiver's vendor status interface are host/device trust
+  boundaries for one bounded link-state probe before stream creation. Unknown,
+  inaccessible, busy, or malformed status is not treated as proof of online or
+  offline state.
 - The private Unix control socket and session D-Bus are boundaries between
   Unix users, not between applications running as the same user.
 - Volcengine is a remote processor selected by the user. Standard TLS protects
@@ -132,6 +151,14 @@ atomically. Key removal requires the managed voice service to be explicitly
 inactive. Logs contain fixed status/error classes rather than secret or
 dictated values.
 
+The separate `data-collection.json` is also private and atomic; a missing file
+means disabled. Enabling requires an existing absolute directory and
+initializes a versioned dataset marker below it. The collector applies private
+modes where the selected filesystem supports them, but does not claim that
+Unix modes provide confidentiality on every mount and does not add encryption.
+Neither configured paths, audio, provider text, nor USB status frames enter
+logs.
+
 Evidence: `voice/murmur_voice/config.py`,
 `voice/murmur_voice/settings_controller.py`, and their tests.
 
@@ -144,8 +171,50 @@ or growing memory indefinitely. Provider frames and decoded payloads are
 bounded. Old generations and late worker callbacks cannot enter a new
 utterance.
 
+Opted-in collection retains at most one 600-second PCM utterance in its active
+recorder and uses a bounded two-record background queue. The audio callback
+only appends bounded immutable chunks; WAV encoding, fsync, and rename run in
+the writer thread. A full queue or writer failure drops that optional record
+with a fixed error status instead of blocking capture, final delivery, or the
+keyboard-critical engine.
+
+Shutdown sets the writer stop event and grants a bounded 10-second drain inside
+systemd's 30-second total stop budget. It does not wait indefinitely for a
+selected filesystem. There is no fallback local spool.
+
 Evidence: `voice/murmur_voice/session.py`,
 `voice/murmur_voice/volcengine.py`, and their boundary tests.
+
+### Optional local dataset publication
+
+Collection is absent/disabled by default and reloaded at the start of every
+utterance. A recorder is created only for an explicit enabled choice. It copies
+the same successfully submitted 16 kHz mono signed 16-bit chunks into bounded
+memory, then discards them on cancel, error, missing/empty final, or rejection
+of the provider final by the focused IBus context. A record is not queued until
+that final is accepted.
+
+The background writer first creates a complete private staging directory under
+`openvoiceinput-dataset-v1/.pending`, including WAV and JSON hashes, then uses
+one atomic rename into `utterances/<utterance_id>`. The JSON identifies
+`provider_final` as `teacher-unreviewed`; it leaves both `spoken_verbatim` and
+`preferred_output` null and unreviewed. This prevents an ASR result from being
+silently presented as a human-verified acoustic label or preferred text.
+
+Configuration save and final publication share a short lock and the writer
+rechecks the dataset identity and consent before rename. Once disabling or
+redirecting collection returns, an older queued/staged record cannot become
+published. Already published records are deliberately retained; uninstall
+also preserves the private setting and all user-selected datasets. The current
+feature implements no record deletion, review workflow, Orange transfer,
+cloud-dataset upload, model training, or application-level encryption.
+If the selected filesystem stalls or disappears during staging, best-effort
+cleanup may remove or leave the hidden staging directory and the unpublished
+record may be lost; an already atomically published record is not rolled back.
+
+Evidence: `voice/murmur_voice/data_collection.py`,
+`voice/murmur_voice/session.py`, `voice/murmur_voice/settings_controller.py`,
+and their collection/session/settings tests.
 
 ### Stale or ambiguous microphone routing
 
@@ -158,6 +227,16 @@ different card identities, so
 numeric card IDs, exact device names, and exact ALSA-card/bus-path pairs are
 handled as separate strict schemas; conflicting, partial, or multiple matches
 are rejected.
+
+When exactly one DJI Mic Mini 2 source is enumerated, a bounded read-only
+vendor-status probe distinguishes a linked transmitter from a receiver that
+remains registered while silent. Proven online selects DJI for the new stream.
+Proven offline excludes it, preserving a current non-DJI default or accepting
+only one unambiguous built-in/non-DJI fallback. Unknown status preserves the
+existing default-source selection path; it is never guessed as online or
+offline. The USB frame decoder is size/count/time bounded, and frame/device
+content is neither logged nor persisted. The stream is not handed off during
+an utterance; link changes take effect only on the next start.
 
 The selected source is applied only to the daemon's PortAudio `pulse` stream.
 `PULSE_SOURCE` is changed under a process-wide lock only while that stream is
@@ -222,6 +301,11 @@ fingerprint before and after install/upgrade/uninstall/reinstall.
 - Volcengine receives microphone audio and explicit request vocabulary or
   correction pairs. Cancellation cannot retract bytes already uploaded, and
   provider retention/region/account policy is outside this project.
+- Enabling local collection deliberately creates sensitive audio/text records.
+  The selected filesystem or mount controls who can read, back up, or replicate
+  them; the application supplies no static encryption. `provider_final` is an
+  unreviewed pseudo-label and must not be treated as gold or distillation-ready
+  merely because the pair was published atomically.
 - The fallback key store is a private plaintext file rather than Secret
   Service. It protects against other local users under normal Unix permission
   assumptions, not against malware or a compromised account.
@@ -260,6 +344,11 @@ fingerprint before and after install/upgrade/uninstall/reinstall.
   beyond the normal control-response window; restarting the user service is
   the current recovery. The IBus engine remains a separate process and normal
   keyboard input is unaffected.
+- The DJI probe depends on the receiver's undocumented vendor status framing
+  and exclusive access to its USB interface. Busy, inaccessible, absent, or
+  unrecognised devices fall back to unknown/system behavior. There is no
+  mid-utterance live source handoff, so changing transmitter state while
+  speaking may leave that utterance on its already opened source.
 
 ## Review result and re-review triggers
 
@@ -272,8 +361,9 @@ development provider key plus a verified signed tag remain pre-publication
 gates; immutable release status must be verified immediately after publication.
 
 Re-review is required before adding a provider, changing D-Bus/control-socket
-ownership, reading application context or clipboard data, adding automatic
-audio retention or model training, broadening adaptive observation beyond the
-anchored IBus span, changing conflict/overlap/cycle policy, changing secret
-storage, vendoring Rime data, installing with privileges, or replacing the
-temporary engine with the combined librime engine.
+ownership, reading application context or clipboard data, changing collection
+consent/schema/publication or adding upload/deletion/review/model-training
+behavior, broadening adaptive observation beyond the anchored IBus span,
+changing conflict/overlap/cycle policy, changing secret storage, vendoring
+Rime data, installing with privileges, or replacing the temporary engine with
+the combined librime engine.

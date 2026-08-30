@@ -36,4 +36,6 @@ __pycache__/
 /vocabulary.json
 /corrections.json
 /adaptive-corrections.json
+/data-collection.json
+openvoiceinput-dataset-v1/
 /error.log

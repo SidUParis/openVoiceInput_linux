@@ -511,12 +511,15 @@ def verify_bundle_shape(root: Path) -> Path:
         "vocabulary.json",
         "corrections.json",
         "adaptive-corrections.json",
+        "data-collection.json",
         "volcengine.json",
     }
     for path in root.rglob("*"):
         relative = path.relative_to(root)
         if ".git" in relative.parts or "__pycache__" in relative.parts:
             raise VerificationError(f"repository/cache state leaked: {relative}")
+        if "openvoiceinput-dataset-v1" in relative.parts:
+            raise VerificationError(f"personal dataset leaked: {relative}")
         if not path.is_file():
             continue
         if path.name in forbidden_names or path.suffix in {

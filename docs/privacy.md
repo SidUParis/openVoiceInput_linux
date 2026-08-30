@@ -43,14 +43,19 @@ streamed to the Volcengine BigModel ASR service configured by the user.
   Unicode characters on either side, its state, and a support count. It is not
   a transcript history and stores no separate utterance/surrounding snapshot,
   timestamp, document context, edit stream, or audio.
-- API keys, transcripts, vocabulary, manual/adaptive corrections, and remote
-  payloads are not written to logs. Status and errors use fixed codes.
+- The local-collection choice is stored separately in private
+  `data-collection.json`. A missing file means disabled; saving the setting is
+  applied at the next dictation without restarting the service.
+- API keys, live transcripts, vocabulary, manual/adaptive corrections, remote
+  payloads, selected dataset paths, audio, and DJI status frames are not
+  written to logs. An explicitly enabled dataset is the sole intentional local
+  transcript/audio record described below. Status and errors use fixed codes.
 - Live text travels over the user's session D-Bus to the focused IBus engine.
   It does not use clipboard paste in the primary path.
 
 ## Five-second correction observation
 
-This observation is enabled by default in the current development branch after
+This observation is enabled by default in the current alpha after
 a nonempty authoritative final; the settings window does not yet expose a
 disable switch. It is event-driven and does not poll application text.
 
@@ -99,14 +104,62 @@ the provider's authoritative two-pass final. Pending unsent PCM is bounded to
 memory indefinitely; compressed provider responses also have a decoded-size
 limit.
 
-## Recording retention is future work
+When local collection is enabled, the recorder retains only the current
+utterance's exact PCM in bounded memory (at most the same 600-second capture
+limit) and offers a completed record to a bounded background-writer queue.
+WAV encoding, filesystem sync, and publication do not run in the audio callback
+or hold up the accepted final. An optional write failure is reported with a
+fixed status code and does not block dictation.
 
-The current daemon streams microphone audio to the configured provider but
-does not retain a local recording or copy it to another machine. A future
-personal-ASR collection mode is planned as explicit opt-in only. Its proposed
-record separates the audio, `spoken_verbatim` (what was actually said), and
-`preferred_output` (what the user wants inserted); provider text is not treated
-as unquestioned ground truth. The user's Orange machine is the intended
-user-controlled storage target for that personal deployment. Model training is
-not part of this feature and remains postponed. See
+This is best-effort direct-to-selected-folder storage, not a durable local
+spool. Normal service shutdown gives the writer 10 seconds to drain inside
+systemd's 30-second total stop budget. A stalled or unmounted destination can
+leave or remove a hidden staging directory and lose that unpublished record;
+already published records remain.
+
+## Optional local recording retention
+
+Collection is disabled by default. Enabling it requires an explicit settings
+choice and an existing absolute local or mounted directory. The application
+initializes or reopens `openvoiceinput-dataset-v1` below that directory. For an
+enabled utterance, publication happens only after the authoritative provider
+final was accepted by the focused IBus context. Cancelled, failed,
+final-rejected, empty-audio, and no-final utterances are discarded from the
+collector.
+
+Each atomically published `utterances/<utterance_id>/` contains:
+
+- `audio.wav`: the exact captured 16 kHz, mono, signed 16-bit PCM for the
+  accepted utterance;
+- `record.json`: versioned identifiers, time, audio format/frame counts and
+  hashes, provider/model identity, and three deliberately separate labels;
+- `provider_final.text`: the authoritative Volcengine result, labelled
+  `teacher-unreviewed`, which is a pseudo-label rather than ground truth;
+- `spoken_verbatim.text` and `preferred_output.text`: both `null` and
+  `unreviewed` until a separate human-review workflow exists.
+
+The collection feature does not make an extra cloud upload, copy data to the
+Orange computer, train, fine-tune, or distil a model, or add application-level
+encryption. The normal ASR path still sends the audio to Volcengine as described
+above. The selected filesystem determines effective visibility, sharing,
+backup, and at-rest protection; directory/file modes cannot strengthen a
+filesystem that does not enforce them.
+
+Disabling collection and changing its destination take effect for the next
+utterance without a service restart. A disable that has returned also prevents
+older queued or staged, unpublished records from being published. Already
+published records remain until the user deliberately removes them. The
+uninstaller preserves both `data-collection.json` and every dataset in a
+user-selected directory. Orange transport, label review, deletion tooling, and
+model training remain future work. See
 [personal-asr-data-plan.md](personal-asr-data-plan.md).
+
+## DJI Mic Mini 2 link probe
+
+Before a new dictation, a bounded USB status probe may distinguish a linked DJI
+Mic Mini 2 transmitter from its still-enumerated but silent receiver. A proven
+online link selects DJI for that new daemon stream; proven offline selects only
+an unambiguous non-DJI fallback; an unknown result preserves existing system
+behavior. The probe does not retain or log USB frames or identifiers. It never
+changes a playback sink or requests a system default-source change. There is no
+mid-utterance handoff: a link change is considered at the next dictation.

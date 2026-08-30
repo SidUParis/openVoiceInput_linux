@@ -18,6 +18,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator
 
+from .dji_microphone import is_dji_source, probe_dji_link_state
+
 SAMPLE_RATE = 16_000
 CHANNELS = 1
 SAMPLE_DTYPE = "int16"
@@ -253,6 +255,7 @@ def resolve_input_device(
     pactl_runner: Callable[[Sequence[str]], str] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    dji_link_probe: Callable[[], bool | None] = probe_dji_link_state,
 ) -> _PulseInputSelection | int | str | None:
     """Resolve one microphone afresh for each explicitly started recording.
 
@@ -283,6 +286,7 @@ def resolve_input_device(
             budget.rollback,
             sources,
             pulse_device,
+            dji_link_probe,
         )
     except FileNotFoundError as error:
         # Once pactl answered, losing it mid-transaction is an uncertain Pulse
@@ -302,6 +306,7 @@ def _ensure_pulse_input(
     rollback_runner: Callable[[Sequence[str]], str],
     sources: Sequence[_PulseSource],
     pulse_device: int,
+    dji_link_probe: Callable[[], bool | None] = probe_dji_link_state,
 ) -> _PulseInputSelection:
     default_source = _get_default_source(runner)
     if default_source is None:
@@ -309,6 +314,13 @@ def _ensure_pulse_input(
         # the current default was observed first.
         raise AudioDeviceError("PulseAudio default source could not be determined")
     usable_sources = _usable_sources(sources)
+    link_aware, usable_sources = _choose_link_aware_source(
+        usable_sources,
+        default_source,
+        dji_link_probe,
+    )
+    if link_aware is not None:
+        return _PulseInputSelection(link_aware.name, pulse_device)
     if default_source and any(
         source.name == default_source for source in usable_sources
     ):
@@ -346,6 +358,55 @@ def _ensure_pulse_input(
         return _PulseInputSelection(selected.name, pulse_device)
 
     return _PulseInputSelection(_choose_source(usable_sources).name, pulse_device)
+
+
+def _choose_link_aware_source(
+    sources: Sequence[_PulseSource],
+    default_source: str,
+    link_probe: Callable[[], bool | None],
+) -> tuple[_PulseSource | None, tuple[_PulseSource, ...]]:
+    """Prefer a linked DJI receiver or bypass its silent offline source.
+
+    This choice is scoped to the new PortAudio stream. It never changes the
+    desktop default and never touches a sink. An unknown USB probe preserves
+    the existing default-source behavior, which also composes with an external
+    routing service already holding the receiver's status interface. The
+    returned candidates exclude a receiver that was proven offline, allowing
+    the existing output-only-card recovery path when no fallback is enumerated.
+    """
+
+    candidates = tuple(sources)
+    dji_sources = tuple(source for source in candidates if is_dji_source(source.name))
+    if len(dji_sources) != 1:
+        return None, candidates
+    try:
+        online = link_probe()
+    except Exception:
+        online = None
+    if online is True:
+        return dji_sources[0], candidates
+    if online is None:
+        return None, candidates
+
+    fallbacks = tuple(source for source in candidates if source not in dji_sources)
+    current = next(
+        (source for source in fallbacks if source.name == default_source),
+        None,
+    )
+    if current is not None:
+        return current, fallbacks
+    built_in = tuple(
+        source
+        for source in fallbacks
+        if source.name.casefold().startswith("alsa_input.pci-")
+    )
+    if len(built_in) == 1:
+        return built_in[0], fallbacks
+    if len(fallbacks) == 1:
+        return fallbacks[0], fallbacks
+    if not fallbacks:
+        return None, fallbacks
+    raise AudioDeviceError("offline wireless microphone has no unambiguous fallback")
 
 
 def _list_pulse_sources(

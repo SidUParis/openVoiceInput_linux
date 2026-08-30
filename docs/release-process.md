@@ -36,14 +36,22 @@ integrity; it does not prove who published the file.
    with missing physical-microphone/provider/application-matrix evidence only
    when the release notes disclose that validation gap. A supported or
    distribution-native release must complete the matrix with a newly rotated
-   key entered locally. Record no key, dictated text, audio, or
-   credential-bearing log.
+   key entered locally. Include DJI link-state and a real mounted collection
+   destination in the matrix before claiming those paths fully validated.
+   Keep collection disabled unless the run explicitly uses a private disposable
+   folder. Record no key, selected dataset path, dictated text, audio, dataset,
+   or credential-bearing log in release evidence.
 4. Require all protected checks on the exact release commit. Build the archive
    from that trusted commit, verify it against the repository ref, and compare
    the independently built archive checksum when the supported build
    environment is available.
 5. Create a signed annotated release tag and verify that GitHub reports the tag
    signature as valid.
+6. Release notes for a collector-enabled alpha must say that collection is off
+   by default, `provider_final` is unreviewed, there is no Orange transfer,
+   encryption, review/delete UI, training, or fallback spool, and shutdown only
+   gives the writer a bounded drain. Also disclose that DJI selection is
+   per-dictation/app-scoped with no mid-utterance handoff.
 
 ## Controlled public transition
 

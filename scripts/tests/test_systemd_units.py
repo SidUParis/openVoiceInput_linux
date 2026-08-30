@@ -54,6 +54,7 @@ class SystemdUnitTests(unittest.TestCase):
                 "VOICE_VOCABULARY": "/tmp/vocabulary.json",
                 "VOICE_CORRECTIONS": "/tmp/corrections.json",
                 "VOICE_ADAPTIVE_CORRECTIONS": "/tmp/adaptive-corrections.json",
+                "VOICE_DATA_COLLECTION": "/tmp/data-collection.json",
             },
         )
 
@@ -75,9 +76,14 @@ class SystemdUnitTests(unittest.TestCase):
             '--corrections "/tmp/corrections.json"',
             voice_unit,
         )
+        self.assertIn(
+            '--data-collection "/tmp/data-collection.json"',
+            voice_unit,
+        )
         self.assertIn("UMask=0077", voice_unit)
         self.assertIn("RuntimeDirectory=murmur-ime", voice_unit)
         self.assertIn("RuntimeDirectoryMode=0700", voice_unit)
+        self.assertIn("TimeoutStopSec=30", voice_unit)
         self.assertIn("Environment=PYTHONNOUSERSITE=1", voice_unit)
         self.assertIn("RestartPreventExitStatus=2", voice_unit)
         self.assertIn("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6", voice_unit)

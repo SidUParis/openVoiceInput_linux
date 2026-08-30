@@ -126,6 +126,7 @@ voice_config="$config_home/murmur-ime/voice.json"
 voice_vocabulary="$config_home/murmur-ime/vocabulary.json"
 voice_corrections="$config_home/murmur-ime/corrections.json"
 voice_adaptive_corrections="$config_home/murmur-ime/adaptive-corrections.json"
+voice_data_collection="$config_home/murmur-ime/data-collection.json"
 voice_launcher="$install_root/murmur-voice-daemon"
 runtime_root=${XDG_RUNTIME_DIR:-}
 
@@ -713,7 +714,8 @@ python3 -I "$script_dir/render_systemd_units.py" \
   --set "VOICE_CONFIG=$voice_config" \
   --set "VOICE_VOCABULARY=$voice_vocabulary" \
   --set "VOICE_CORRECTIONS=$voice_corrections" \
-  --set "VOICE_ADAPTIVE_CORRECTIONS=$voice_adaptive_corrections"
+  --set "VOICE_ADAPTIVE_CORRECTIONS=$voice_adaptive_corrections" \
+  --set "VOICE_DATA_COLLECTION=$voice_data_collection"
 chmod 0644 "$stage_engine_unit" "$stage_voice_unit"
 
 service_active murmur-ime-engine.service && engine_was_active=true
@@ -977,6 +979,13 @@ if PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
   "$voice_adaptive_corrections" >/dev/null 2>&1; then
   voice_adaptive_corrections_ready=true
 fi
+voice_data_collection_ready=false
+if PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+  "$install_root/voice-venv/bin/python" -I -c \
+  "from murmur_voice.data_collection import load_data_collection_config; import sys; load_data_collection_config(sys.argv[1])" \
+  "$voice_data_collection" >/dev/null 2>&1; then
+  voice_data_collection_ready=true
+fi
 if [[ $voice_config_ready == true && $voice_vocabulary_ready == true && $voice_corrections_ready == true && $voice_adaptive_corrections_ready == true ]]; then
   systemctl --user enable murmur-ime-voice.service
   systemctl --user start murmur-ime-voice.service
@@ -1009,6 +1018,12 @@ if [[ $voice_adaptive_corrections_ready == false ]]; then
   printf '%s\n' \
     "Move aside the invalid private adaptive correction ledger before starting voice input:" \
     "  $voice_adaptive_corrections"
+fi
+if [[ $voice_data_collection_ready == false ]]; then
+  printf '%s\n' \
+    "Optional local training-data collection is unavailable because its private setting is invalid." \
+    "Voice input remains enabled; replace the setting from the settings window:" \
+    "  $voice_data_collection"
 fi
 if [[ $voice_config_ready == false || $voice_vocabulary_ready == false || $voice_corrections_ready == false || $voice_adaptive_corrections_ready == false ]]; then
   printf '%s\n' \

@@ -20,6 +20,13 @@ distribution and preserve their own licence files.
 | `pycparser` | Preview lock `3.0` (transitive) | cffi parser dependency on CPython | BSD-3-Clause metadata |
 | PortAudio | Distribution library | Native audio backend for sounddevice | External system package; not vendored |
 | `pactl` (`pulseaudio-utils` on Ubuntu) | Optional PulseAudio-compatible system command | Per-recording source discovery and conservative profile recovery; PortAudio fallback when absent | External system package; not vendored |
+| `libusb-1.0` (`libusb-1.0-0` on Ubuntu) | Optional distribution library, loaded dynamically | Bounded DJI Mic Mini 2 transmitter-link probe before a new dictation; unknown/system behavior when absent | LGPL-2.1-or-later; system package, not vendored |
+
+The DJI probe never changes an audio route itself. `libusb` is used only to
+read the receiver's bounded vendor status before opening a new daemon stream;
+an absent, busy, inaccessible, or unrecognised device yields unknown and keeps
+the normal system/default-source selection path. There is no mid-utterance
+source handoff.
 
 The voice wheel is GPL-3.0-only and contains its `LICENSE` plus the complete
 Doubao Murmur MIT notice in `NOTICE.md`. Adapted source boundaries are listed

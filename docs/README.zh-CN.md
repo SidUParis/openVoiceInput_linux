@@ -16,6 +16,11 @@ Open Voice Input Linux 是一个面向 Linux/IBus 的轻量语音输入技术预
 - 密码、PIN、隐私字段、失去焦点、取消和过期会话不会提交文字；
 - 普通键盘输入与网络、麦克风进程隔离，语音服务故障不应阻塞键盘；
 - 单次听写最长 600 秒，停止后最多等待最终结果 20 秒；
+- 每次听写前重新选择输入：能证明大疆 Mic Mini 2 发射器在线时，只为本次
+  录音流选择大疆；能证明离线时避开仍注册但静音的接收器；无法证明时保持
+  系统原有行为；
+- 可选的本地数据采集默认关闭。用户选择已有的本地或挂载目录后，只有已被
+  当前 IBus 上下文接受的 authoritative final 才会与对应 WAV 一起发布；
 - 当前版本是过渡实现：听写及随后最多 5 秒的观察期内临时选择
   `murmur-voice`，之后恢复原来的 IBus 引擎。观察期内普通直接键入
   仍可由应用处理，但原 Rime／其他 IBus 引擎暂不可用；再次按听写
@@ -35,14 +40,14 @@ Open Voice Input Linux 是一个面向 Linux/IBus 的轻量语音输入技术预
 
 离线预览包包含完整 Python wheelhouse，但不复制 Ubuntu 系统组件。软件
 自身采用无 root 的当前用户安装；如果系统尚未安装 IBus、GI、GTK4、
-PortAudio、`python3-venv` 或提供 `flock` 的 `util-linux`，通过 APT 补齐
+PortAudio、`libusb`、`python3-venv` 或提供 `flock` 的 `util-linux`，通过 APT 补齐
 这些系统组件仍需要管理员权限：
 
 ```bash
 sudo apt-get update
 sudo apt-get install --yes \
   ibus gir1.2-ibus-1.0 gir1.2-gtk-4.0 \
-  libportaudio2 pulseaudio-utils python3-gi python3-venv util-linux
+  libportaudio2 libusb-1.0-0 pulseaudio-utils python3-gi python3-venv util-linux
 ```
 
 ## 安装经过 CI 校验的离线预览
@@ -67,7 +72,7 @@ sha256sum --check SHA256SUMS
 包内 wheelhouse 和 `pip --no-index`；只有开发者明确传入
 `--allow-network` 时才允许在线解析 Python 依赖。
 
-## 设置 Key、词表和纠错
+## 设置 Key、词表、纠错和可选本地采集
 
 打开原生 GTK4 设置窗口：
 
@@ -80,12 +85,17 @@ sha256sum --check SHA256SUMS
 
 ![未配置 API Key 的 Open Voice Input Linux 设置窗口](assets/settings-window.png)
 
-_截图使用空临时配置；当前 0.x 设置界面为英文，页面可继续下滚到纠错与
-服务控制。_
+_截图使用空临时配置；当前 0.x 设置界面为英文，页面可继续下滚到纠错、
+麦克风选择、可选本地采集与服务控制。_
 
-设置窗口不会预填或显示已经保存的 Key。保存 Key、词表或纠错不会联网，
-也不会打断正在进行的听写；空闲后的下一次听写会重新加载，无需
-重启服务。首次完成设置后，点击 **Enable and start service**。
+设置窗口不会预填或显示已经保存的 Key。保存 Key、词表、纠错或本地采集
+选项不会联网，也不会打断正在进行的听写；空闲后的下一次听写会重新加载，
+无需重启服务。首次完成设置后，点击 **Enable and start service**。
+
+若要保留数据，勾选 **Keep local WAV + unreviewed provider final**，选择一个
+已有文件夹，再点击 **Save local collection setting**。保存立即作用于下一次
+听写，不需要重启服务。不要勾选时，缺失或不可用的采集目录不会阻止普通
+听写。
 
 ## 不用 Key 的轻量级实时光标验证
 
@@ -120,13 +130,25 @@ support 计数，不保存 surrounding 全文、独立转写记录、音频或�
 火山引擎的手动+自适应 provider view 仍最多 50 对。这是纠错内存，不是
 本地模型训练或“自回归模型”。
 
-这个开发分支在非空 authoritative final 后默认开启该 5 秒观察；它由 IBus
+本 alpha 在非空 authoritative final 后默认开启该 5 秒观察；它由 IBus
 surrounding-text 事件驱动，不轮询也不监听全局键盘。目前设置窗口尚无关闭
 开关。不支持或不能可信锚定 surrounding text 的应用只会跳过学习。
 
-本轮没有保留麦克风音频。未来的个人 ASR 数据集必须由用户显式 opt-in，将
+本地数据采集已经实现，但默认关闭。勾选后必须选择一个已存在的绝对路径
+（可以是本地目录或已经挂载的文件系统）；软件会在其中初始化
+`openvoiceinput-dataset-v1`。只有 authoritative provider final 已被当前
+IBus 上下文接受时，才会在后台发布该次听写的精确 16 kHz、单声道、signed
+16-bit WAV 和 `record.json`。`provider_final` 明确标记为未审核伪标签；
 `spoken_verbatim`（实际说了什么）与 `preferred_output`（希望最终输入什么）
-分开，个人部署可把 Orange 电脑作为用户控制的存储端；训练暂不实施。
+保持 `null`，不能把当前记录宣传成 gold label 或可直接蒸馏的数据。
+
+采集使用有界内存并在后台写盘；写盘失败不会阻塞正常听写。这个功能不会
+把本地数据上传云端或 Orange，不会训练／微调模型，也不做应用层静态加密；
+实际可见性和静态保护由用户所选文件系统决定。关闭后，尚未发布的排队记录
+不能再发布，已经发布的数据会保留。训练和 Orange 传输仍只是后续计划。
+数据会直接写向所选目录，没有备用本地 spool；服务退出时后台 writer 只在
+systemd 的 30 秒总停止预算内等待最多 10 秒。若挂载点卡住或消失，隐藏的
+staging 可能被保留或清理，该条尚未发布的记录可能丢失，已发布记录不受影响。
 详见[个人 ASR 数据计划](personal-asr-data-plan.md)。
 
 火山官方资料：
@@ -171,10 +193,21 @@ source。它不会解除静音或改变音量。无法唯一、安全地选择�
 `microphone-unavailable`；请在系统声音设置中选择或解除静音后直接再次
 听写，不需要重启服务。
 
+大疆 Mic Mini 2 的 USB 接收器在发射器关机后仍会注册一个输入 source，
+所以仅看设备列表可能选到静音接收器。守护进程在每次听写前做一次有界的
+link-state 检查：能证明发射器在线时选择大疆；能证明离线时优先使用当前
+非大疆默认输入，否则只接受唯一、明确的内置／非大疆回退；link state
+未知（例如接收器忙、不可访问或缺少 `libusb`）时保留原有系统默认选择逻辑。
+这只决定新建的应用录音流，不改变播放 sink，也不请求修改系统默认 source。
+一次听写开始后不会在中途实时换麦；收起或重新打开发射器后，下一次听写才
+会重新判断。
+
 ## 隐私和 Key 清除
 
 只有用户主动开始听写后，16 kHz 单声道 PCM 才会发送到火山引擎。
 设置页明确显示远端上传、个人账户计费和取消不可撤回已上传音频的边界。
+可选本地采集是另一项明确 opt-in：它不会取消火山上传，也不会把生成的数据
+再次上传到其他服务。
 
 要删除本地 Key，先点击 **Disable and stop**，再完成两步
 **Clear saved key** 确认。这个操作只删除经过权限和所有者校验的本地
@@ -190,9 +223,10 @@ source。它不会解除静音或改变音量。无法唯一、安全地选择�
 并从该目录运行上面的命令。
 
 卸载器会验证安装归属、停止项目服务、恢复原 IBus 引擎，并只移除项目
-管理的文件。出于防止误删凭据的考虑，私有 Key、词表和纠错文件会保留；
-可在卸载前先通过设置页清除 Key。卸载不会删除 IBus、Rime、雾凇配置或
-用户词库。
+管理的文件。出于防止误删凭据或珍贵数据的考虑，私有 Key、词表、纠错和
+`data-collection.json` 会保留；用户所选目录中的
+`openvoiceinput-dataset-v1` 也不会被删除。可在卸载前先通过设置页清除 Key。
+卸载不会删除 IBus、Rime、雾凇配置或用户词库。
 
 ## 项目状态
 

@@ -178,13 +178,25 @@ text. Report character error rate separately for:
 The audio and expected text stay outside Git. Repository tests use invented
 text and protocol fixtures only.
 
-## Future opt-in personal ASR dataset
+The default-off local collector does not create an expected-text label. Its
+saved `provider_final` is explicitly `teacher-unreviewed`; both
+`spoken_verbatim` and `preferred_output` are null. Collected records must stay
+out of CER/WER evaluation until a separate review workflow supplies the
+appropriate reference label and a leakage-safe train/development/test split.
 
-This correction loop does not retain recordings and does not train a model.
-A later, separate data-capture feature may preserve consented audio and labels
-on a user-controlled Orange machine, but it must keep a literal
+## Optional data collection and future training
+
+The separate collector can now retain an accepted utterance, but only after an
+explicit opt-in and only below an existing local or mounted folder selected by
+the user. It stores the exact 16 kHz mono signed 16-bit WAV and a versioned JSON
+record. The audio/provider-final pair is a future review candidate, not a gold
+sample or evidence that self-training is safe.
+
+Collection is bounded and written in the background. It does not transfer to a
+user-controlled Orange machine, upload a dataset, train a model, or add static
+encryption. A later workflow must keep a reviewed literal
 `spoken_verbatim` label separate from the user's edited `preferred_output`.
-Cloud output is a useful draft or pseudo-label, not automatically ground truth.
-Training and model choice are deliberately postponed until collection quality,
-consent, deletion, and evaluation rules exist. See
+Training and model choice remain postponed until label quality, deletion,
+language coverage, acoustic diversity, split hygiene, and evaluation rules
+exist. See
 [personal-asr-data-plan.md](personal-asr-data-plan.md).
