@@ -25,7 +25,10 @@ dictation uses the online provider selected by the user._
 > This is the secondary English edition of a public alpha for **Ubuntu 24.04
 > x86_64 + IBus**. The project currently serves Chinese users first; see the
 > [Chinese landing page](README.md) for the canonical product overview. Real
-> dictation uses the user's own Volcengine account and may incur provider fees.
+> dictation uses the user's own account for the selected online ASR provider
+> and may incur that provider's fees. Volcengine is the default and the only
+> path validated with a real key on the maintainer workstation; Qwen and
+> OpenAI remain experimental, without real-key acceptance in this release.
 
 ## Install on Ubuntu
 
@@ -38,10 +41,10 @@ then install it locally:
 sudo apt install ./open-voice-input-linux_*_amd64.deb
 ```
 
-Open **Open Voice Input Linux** from the application menu, save your
-own Volcengine API key, arrange microphone priority for your equipment and
-workflow, and enable the service. The current alpha does not install a
-system-wide shortcut automatically; bind any key you prefer to:
+Open **Open Voice Input Linux** from the application menu, choose an ASR
+provider, save that provider's API key, arrange microphone priority for your
+equipment and workflow, and enable the service. The current alpha does not
+install a system-wide shortcut automatically; bind any key you prefer to:
 
 ```bash
 murmur-voice-daemon toggle
@@ -123,6 +126,9 @@ is visibly planned rather than backed by an invented undocumented endpoint.
 Every provider requires the user's own account and billing. The project ships
 no shared key and no local ASR; see [provider details](docs/provider-backends.md).
 
+Audio, quota, billing, regional processing, and server-side retention are
+governed by the selected provider and the user's account configuration.
+
 The voice path is transcription, not generative writing. Provider-side DDC,
 punctuation, segmentation and inverse text normalization may clean a faithful
 transcript, but the application does not expand a short instruction into an
@@ -142,7 +148,7 @@ upload. Read the [privacy notice](docs/privacy.md) and
 | Desktop input | IBus applications with preedit support; X11 and Wayland application coverage is still being documented |
 | Keyboard IME | The alpha temporarily switches to `murmur-voice` for dictation and correction observation, then restores the exact previous IBus engine |
 | Chinese typing | Permanent librime / Rime Ice keyboard-and-voice integration is planned, not yet complete |
-| Speech provider | Volcengine `bigmodel_async` with two-pass recognition, DDC, ITN, punctuation and sentence segmentation |
+| Speech provider | Volcengine is the default and real-key-validated path; Qwen streaming and OpenAI batch transcription are experimental and fake-transport-tested only; MiniMax is planned and not selectable |
 | Local / offline ASR | Not implemented yet |
 | Shortcut / indicator | A shortcut must currently be configured by the user; a separate compatibility controller is not part of this repository's daemon package |
 | Password and private fields | Voice acquisition is refused for protected, fake or unsupported input contexts |

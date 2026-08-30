@@ -2,10 +2,11 @@
 
 This directory contains the first self-contained voice-daemon MVP. It no
 longer imports or runs a separate Doubao Murmur checkout. The foreground
-daemon captures 16 kHz mono PCM, streams it to Volcengine bigmodel_async,
-sends cumulative hypotheses and one authoritative final to the existing
-org.murmur.IME.Preedit1 engine, briefly observes bounded same-focus corrections,
-and then restores the previously selected IBus engine.
+daemon captures 16 kHz mono PCM, sends it through the user-selected online ASR
+client, and sends provider-supported cumulative hypotheses plus one
+authoritative final to the existing org.murmur.IME.Preedit1 engine. It briefly
+observes bounded same-focus corrections and then restores the previously
+selected IBus engine.
 
 There is no transcription window and no clipboard/paste fallback. Transcript
 text appears as native IBus preedit at the focused caret and is never written
@@ -42,10 +43,13 @@ fixed model. Provider endpoints are not user-controlled. Volcengine's 2.0
 resource ID, two-pass recognition, DDC, ITN, punctuation, sentence settings,
 and 200 ms chunks continue to use reviewed defaults.
 
-Each user must first activate the matching BigModel streaming speech service
-in their own Volcengine project. Audio usage, quota, and billing belong to that
-account; the project never bundles a shared key. Cancelling stops local input
-but cannot retract microphone audio already sent during the active dictation.
+Each user must first activate the matching speech service in their own provider
+account. Audio usage, quota, billing, regional processing, retention, and
+account policy belong to the selected provider and that account; the project
+never bundles a shared key. Volcengine is the default and only path validated
+with a real key on the maintainer workstation; Qwen and OpenAI remain
+experimental. Cancelling stops local input but cannot retract microphone audio
+already sent during the active dictation.
 
 Run the masked, confirmation-based prompt:
 
@@ -61,9 +65,9 @@ An installed preview also provides `open-voice-input-settings`. Its
 `Gtk.PasswordEntry` is never prefilled and is cleared after every save attempt.
 The window can edit the explicit vocabulary and optional recognition
 corrections, choose the optional local-collection destination, and explicitly
-enable/start or disable/stop the user service. Saving alone never contacts
-Volcengine or restarts an active recording. All local choices are read again at
-the next dictation without a service restart.
+enable/start or disable/stop the user service. Saving alone never contacts the
+selected provider or restarts an active recording. All local choices are read
+again at the next dictation without a service restart.
 After the service is explicitly disabled and stopped, a two-step destructive
 button can remove only the local private key file; it never contacts or revokes
 the provider credential itself.
@@ -108,8 +112,8 @@ provider's reviewed context mechanism. Volcengine receives its documented
 `request.context` hotwords JSON string; Qwen receives request vocabulary and
 OpenAI receives a prompt. Terms never come from command arguments, clipboard, selected text,
 typing history, documents, transcripts, or the Rime database, and they are
-never written to logs. Provider-side handling follows the user's Volcengine
-account policy.
+never written to logs. Provider-side handling follows the selected service's
+terms and the user's account configuration.
 
 ## Configurable microphone priority
 
@@ -142,8 +146,10 @@ each side. It rejects empty values, control characters, unexpected fields,
 and conflicting duplicate sources. Corrections are safely reloaded before each
 new dictation, so changing them does not require a service restart.
 
-Each saved pair is sent with every new dictation in Volcengine's documented
-`request.context.correct_words` map. After a nonempty authoritative final, the
+Each saved pair is compiled into the selected provider's bounded context
+mechanism: Volcengine receives `request.context.correct_words`, while Qwen and
+OpenAI receive vocabulary/prompt context without a promise of exact
+replacement. After a nonempty authoritative final, the
 current alpha enables a bounded five-second adaptive observation by default.
 If the same focused field supplies trustworthy IBus surrounding text, one
 high-confidence replacement can activate immediately; multiple independent
@@ -317,8 +323,9 @@ callbacks are ignored, and final, cancel, or error restores the previous IBus
 engine.
 
 The local single-recording limit is 600 seconds. Reaching it performs a safe
-stop and waits up to 20 seconds for Volcengine's explicit two-pass final. A
-missing final cancels preedit; it never commits the latest live hypothesis.
+stop and waits up to 20 seconds for the selected provider's authoritative
+final. A missing final cancels preedit; it never commits the latest live
+hypothesis.
 Pending raw audio is independently bounded to 10 seconds to prevent unbounded
 memory growth during network stalls. During the last 60 seconds, the status
 command reports recording-limit-warning so a desktop integration can show a

@@ -4,7 +4,8 @@ The bounded GTK4 settings MVP is implemented inside the `murmur-ime-voice`
 wheel and is available through the `open-voice-input-settings` entry point. It
 provides only the controls needed for the standalone voice preview:
 
-- save a replacement Volcengine API key through a masked `Gtk.PasswordEntry`;
+- select an available online ASR provider and save that provider's replacement
+  API key through a masked `Gtk.PasswordEntry`;
 - edit the explicit private personal vocabulary, one term per line;
 - edit bounded, explicit wrong-to-canonical recognition corrections;
 - arrange a complete microphone priority for the user's own equipment;
@@ -16,7 +17,7 @@ provides only the controls needed for the standalone voice preview:
   `murmur-ime-voice.service` user unit.
 
 The existing key is never placed in a widget or displayed. A save attempt
-always clears the password entry, does not contact Volcengine, and does not
+always clears the password entry, does not contact any provider, and does not
 restart the service. Vocabulary, corrections, provider-key,
 microphone-priority, and local-collection persistence reuse the daemon's
 validated atomic private-file APIs. Saving the collection choice initializes

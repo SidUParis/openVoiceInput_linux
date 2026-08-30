@@ -26,7 +26,7 @@
 2. **证明**：12 秒内看完、与真实 IBus 行为语义一致的交互概念动画；
 3. **行动**：下载 `.deb`，打开设置，绑定快捷键；
 4. **差异**：原生光标、自适应纠错、用户控制的数据；
-5. **代价与边界**：当前使用火山在线 ASR、自备 Key、本地 ASR 尚未完成；
+5. **代价与边界**：当前使用用户所选在线 ASR、自备 Key、本地 ASR 尚未完成；
 6. **兼容性**：Ubuntu 24.04 x86_64／IBus 是当前打包目标；
 7. **信任证明**：安全模型、checksum、签名、SBOM、可复现 archive；
 8. **内部设计**：D-Bus、0.x ABI、librime 合并计划等深层文档。
@@ -44,7 +44,7 @@
   个人词典和高级工作流；本项目也把自适应纠错放在光标输入证明之后；
 - [OpenWhispr](https://github.com/OpenWhispr/openwhispr) 用清晰的平台包和
   local/cloud 边界降低试用阻力；本项目当前只列出真正交付的 Ubuntu `.deb`
-  和火山 BYOK，不伪装成跨平台或本地 ASR；
+  和在线服务 BYOK，不伪装成跨平台或本地 ASR；
 - [Voxtype](https://github.com/peteonrails/voxtype) 用 Linux-first 的可验证结果
   建立类别，而不是把 Linux 当作附带平台；本项目进一步聚焦 IBus、中文与
   光标内 preedit。
@@ -108,7 +108,7 @@
 Release 下载 .deb
     → apt 安装本地文件
     → 打开 Settings
-    → 保存自己的火山 Key
+    → 选择服务并保存该服务的 Key
     → 绑定 toggle 快捷键
     → 第一次听写
 ```
@@ -183,7 +183,8 @@ SHA-256、SBOM、完整 wheelhouse 和无网络验证型 archive 是高级可信
 
 - 文中安装命令与当前 release 的真实 asset 名一致；
 - 演示使用的能力已在相同 commit 和公开包中存在；
-- 明确当前音频会发送到用户选择的火山账户；
+- 明确当前音频会发送到用户选择的在线 ASR 服务，计费、地域处理和服务端留存
+  遵循该服务及用户账户配置；
 - 不使用“完全离线”“永久免费 ASR”“所有 Linux”“会自动训练自己”等未实现
   承诺；
 - 区分供应商 pseudo-label、用户期望文本、局部 correction 与人工确认的
