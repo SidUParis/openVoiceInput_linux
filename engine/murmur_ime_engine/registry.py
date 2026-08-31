@@ -30,6 +30,8 @@ class EngineTarget(Protocol):
         self, owner: str, utterance_id: str
     ) -> ObservationResult: ...
 
+    def observation_supported(self, owner: str, utterance_id: str) -> bool: ...
+
     def cancel(self, owner: str, utterance_id: str) -> bool: ...
 
     def cancel_owner(self, owner: str) -> bool: ...
@@ -109,6 +111,12 @@ class EngineRegistry:
         if result.consumed or not target.has_active_session:
             self._target = None
         return result
+
+    def observation_supported(self, owner: str, utterance_id: str) -> bool:
+        target = self._target
+        return bool(
+            target is not None and target.observation_supported(owner, utterance_id)
+        )
 
     def cancel(self, owner: str, utterance_id: str) -> bool:
         target = self._target

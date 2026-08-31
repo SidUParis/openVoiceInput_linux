@@ -140,7 +140,15 @@ candidate capture, and activation are visible instead of failing silently.
 Reaching the bound fails the new update without silently evicting a pair.
 
 The settings window shows active, candidate, and conflicted counts, the latest
-reason, and confirm buttons. For applications that cannot expose trusted IBus
+reason, confirm buttons, and four separate content-free counts: explicitly
+saved vocabulary, explicitly saved manual corrections, effective adaptive
+rules, and the exact combined correction count compiled for the next request.
+The optional `vocabulary.json` and `corrections.json` files are created only by
+an explicit save; automatic learning never creates empty files or copies its
+ledger wholesale into either manual store. Their absence therefore means
+"no explicit entries", not that the adaptive runtime failed to load.
+
+For applications that cannot expose trusted IBus
 surrounding text, the same page offers an explicit fallback: the user supplies
 the provider sentence and their final sentence. The runtime diffs them in
 memory, stores only safe bounded pairs, and activates an explicitly confirmed
@@ -159,6 +167,12 @@ The private ledger may retain more observations, but the combined
 50 pairs. Reload happens at each dictation, with no service restart. These are
 provider hints and correction memory, not post-hoc local replacement, a
 generative rewrite, online model training, or an autoregressive learner.
+When the user confirms a retained candidate, the runtime atomically replaces
+the private adaptive ledger, reloads that on-disk generation, and recompiles
+the provider view before reporting that it will be available to the next
+dictation. If a manual-source conflict, cycle, cascade, overlap, or provider
+capacity prevents emission, settings and `adaptive-status` report that fixed
+reason instead of claiming success. Pair text never appears in status JSON.
 
 ### 5. Advanced managed vocabulary
 

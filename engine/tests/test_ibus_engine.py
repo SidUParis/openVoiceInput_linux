@@ -101,6 +101,8 @@ class MurmurEnginePresentationTests(unittest.TestCase):
         engine = _EngineHarness()
 
         self.assertTrue(MurmurEngine.final(engine, ":1.40", "utt-1", 1, "奔驰 Mark"))
+        self.assertTrue(MurmurEngine.observation_supported(engine, ":1.40", "utt-1"))
+        self.assertFalse(MurmurEngine.observation_supported(engine, ":1.41", "utt-1"))
         self.assertEqual(engine.commits, ["奔驰 Mark"])
         self.assertIsNotNone(engine._sessions.active)
         self.assertEqual(engine._registry.invalidations, 0)
@@ -135,6 +137,7 @@ class MurmurEnginePresentationTests(unittest.TestCase):
         engine = _EngineHarness(surrounding=False)
 
         self.assertTrue(MurmurEngine.final(engine, ":1.40", "utt-1", 1, "final"))
+        self.assertFalse(MurmurEngine.observation_supported(engine, ":1.40", "utt-1"))
         result = MurmurEngine.finish_observation(engine, ":1.40", "utt-1")
 
         self.assertTrue(result.consumed)

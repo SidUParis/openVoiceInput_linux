@@ -150,12 +150,31 @@ class SessionGuardTests(unittest.TestCase):
                 supported=False,
             )
         )
+        self.assertFalse(self.guard.observation_supported(":1.40", "utt-1", 7))
 
         result = self.guard.finish_observation(":1.40", "utt-1", 7)
 
         self.assertTrue(result.consumed)
         self.assertFalse(result.accepted)
         self.assertIsNone(self.guard.active)
+
+    def test_observation_capability_requires_exact_live_session(self) -> None:
+        self.assertTrue(self.guard.accept_text(":1.40", "utt-1", 7, 1, final=True))
+        self.assertTrue(
+            self.guard.begin_observation(
+                ":1.40",
+                "utt-1",
+                7,
+                surrounding_revision=0,
+                final_text="final",
+                supported=True,
+            )
+        )
+
+        self.assertTrue(self.guard.observation_supported(":1.40", "utt-1", 7))
+        self.assertFalse(self.guard.observation_supported(":1.41", "utt-1", 7))
+        self.assertFalse(self.guard.observation_supported(":1.40", "utt-2", 7))
+        self.assertFalse(self.guard.observation_supported(":1.40", "utt-1", 8))
 
     def test_delayed_finish_consumes_without_returning_text_after_deadline(
         self,

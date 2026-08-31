@@ -65,7 +65,7 @@ class InstallerHarness:
             self.wheelhouse / filename
             for filename in (
                 "cffi-2.1.1-py3-none-any.whl",
-                "murmur_ime_voice-0.1.0a5-py3-none-any.whl",
+                "murmur_ime_voice-0.1.0a6-py3-none-any.whl",
                 "pycparser-3.0-py3-none-any.whl",
                 "sounddevice-0.5.6-py3-none-any.whl",
                 "websockets-17.0.1-py3-none-any.whl",
@@ -345,7 +345,7 @@ class InstallerHarness:
               chmod 0755 "$launcher"
               site=$(dirname -- "$0")/../lib/python3.12/site-packages/murmur_voice
               mkdir -p "$site"
-              printf '%s\n' '__version__ = "0.1.0a5"' >"$site/__init__.py"
+              printf '%s\n' '__version__ = "0.1.0a6"' >"$site/__init__.py"
               touch "$(dirname -- "$0")/../.mock-local-wheels-installed"
               exit 0
             fi
@@ -454,8 +454,12 @@ class InstallerHarness:
                 printf '%s\n' "$service" >>"$MOCK_ACTIVE_FILE"
               fi
               if [[ $service == murmur-ime-voice.service ]]; then
-                mkdir -p -- "$XDG_RUNTIME_DIR/murmur-ime"
-                chmod 0700 "$XDG_RUNTIME_DIR/murmur-ime"
+                mkdir -p -- \
+                  "$XDG_RUNTIME_DIR/murmur-ime" \
+                  "$XDG_RUNTIME_DIR/murmur-ime-private"
+                chmod 0700 \
+                  "$XDG_RUNTIME_DIR/murmur-ime" \
+                  "$XDG_RUNTIME_DIR/murmur-ime-private"
               fi
               if [[ $command == restart \
                 && $service == murmur-ime-engine.service \
@@ -483,7 +487,9 @@ class InstallerHarness:
                 voice_unit="$XDG_CONFIG_HOME/systemd/user/$service"
                 if [[ ! -f $voice_unit ]] \
                   || ! grep -Fqx -- 'RuntimeDirectoryPreserve=yes' "$voice_unit"; then
-                  /usr/bin/rm -rf -- "$XDG_RUNTIME_DIR/murmur-ime"
+                  /usr/bin/rm -rf -- \
+                    "$XDG_RUNTIME_DIR/murmur-ime" \
+                    "$XDG_RUNTIME_DIR/murmur-ime-private"
                 fi
               fi
             fi
@@ -924,6 +930,10 @@ class UserInstallTests(unittest.TestCase):
         self.assertIn("UMask=0077", unit)
         self.assertNotIn("ConditionPathExists=", unit)
         self.assertIn("RuntimeDirectoryPreserve=yes", unit)
+        self.assertIn(
+            "RuntimeDirectory=murmur-ime murmur-ime-private",
+            unit,
+        )
         self.assertNotIn("RuntimeDirectoryPreserve=restart", unit)
         self.assertIn("Environment=PYTHONNOUSERSITE=1", unit)
         self.assertIn("%%literal$$", unit)
@@ -981,8 +991,11 @@ class UserInstallTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
         runtime_dir = self.harness.runtime / "murmur-ime"
+        private_runtime_dir = self.harness.runtime / "murmur-ime-private"
         self.assertTrue(runtime_dir.is_dir())
+        self.assertTrue(private_runtime_dir.is_dir())
         original_inode = runtime_dir.stat().st_ino
+        private_original_inode = private_runtime_dir.stat().st_ino
         controller_view = runtime_dir / "controller-bind-sentinel"
         controller_view.write_text("same-runtime-directory\n", encoding="utf-8")
 
@@ -1003,7 +1016,12 @@ class UserInstallTests(unittest.TestCase):
                 )
                 self.assertEqual(service_result.returncode, 0, service_result.stderr)
                 self.assertTrue(runtime_dir.is_dir())
+                self.assertTrue(private_runtime_dir.is_dir())
                 self.assertEqual(runtime_dir.stat().st_ino, original_inode)
+                self.assertEqual(
+                    private_runtime_dir.stat().st_ino,
+                    private_original_inode,
+                )
                 self.assertEqual(
                     controller_view.read_text(encoding="utf-8"),
                     "same-runtime-directory\n",
@@ -2152,6 +2170,7 @@ class UserInstallTests(unittest.TestCase):
         self.assertFalse((self.harness.config / "ibus/rime").exists())
         self.assertFalse(socket_path.exists())
         self.assertFalse(runtime_dir.exists())
+        self.assertFalse((self.harness.runtime / "murmur-ime-private").exists())
 
     def test_successful_uninstall_reports_quarantine_cleanup_failure(self) -> None:
         installed = self.harness.run(

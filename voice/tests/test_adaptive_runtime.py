@@ -393,3 +393,175 @@ def test_explicit_cross_application_feedback_activates_without_storing_sentences
     assert {entry.evidence for entry in load_adaptive_ledger(adaptive).entries} == {
         "explicit"
     }
+
+
+def test_status_distinguishes_explicit_adaptive_and_effective_provider_counts(
+    tmp_path,
+):
+    runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
+    del runtime, config
+    save_vocabulary(("Austral", "OpenAI"), vocabulary)
+    save_corrections((CorrectionPair("Ostro", "Austral"),), corrections)
+    save_adaptive_ledger(
+        AdaptiveLedger(
+            entries=(
+                AdaptiveEntry("alpha beta", "destination one"),
+                AdaptiveEntry("beta", "BETA"),
+            )
+        ),
+        adaptive,
+    )
+
+    status = adaptive_status_document(
+        adaptive,
+        corrections_path=corrections,
+        vocabulary_path=vocabulary,
+    )
+
+    assert status["statistics"]["active"] == 2
+    assert status["provider_view"] == {
+        "explicit_vocabulary_count": 2,
+        "manual_correction_count": 1,
+        "effective_correction_count": 2,
+        "manual_effective_count": 1,
+        "adaptive_effective_count": 1,
+        "adaptive_suppressed_count": 1,
+        "suppression_reasons": {"suppressed-overlap": 1},
+    }
+
+
+def test_confirmed_candidate_is_reloaded_and_used_by_the_next_client(
+    tmp_path, monkeypatch
+):
+    runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
+    del config
+    vocabulary.unlink()
+    corrections.unlink()
+    save_adaptive_ledger(
+        AdaptiveLedger(
+            entries=(
+                AdaptiveEntry(
+                    "Ostro",
+                    "Austral",
+                    state="candidate",
+                    evidence="medium",
+                ),
+            )
+        ),
+        adaptive,
+    )
+    captured_settings = []
+
+    class FakeClient:
+        def __init__(self, provider_settings):
+            captured_settings.append(provider_settings)
+
+    from murmur_voice import volcengine
+
+    monkeypatch.setattr(volcengine, "VolcengineASRClient", FakeClient)
+
+    result = runtime.confirm("Ostro", "Austral")
+    runtime.create_asr_client()
+
+    assert result.reason_code == "explicitly-activated"
+    assert result.activated_count == 1
+    assert captured_settings[-1]["corrections"] == (CorrectionPair("Ostro", "Austral"),)
+    persisted = load_adaptive_ledger(adaptive)
+    assert persisted.entries[0].state == "active"
+    assert persisted.last_result.reason_code == "explicitly-activated"
+    assert not vocabulary.exists()
+    assert not corrections.exists()
+    assert runtime.status_document()["provider_view"] == {
+        "explicit_vocabulary_count": 0,
+        "manual_correction_count": 0,
+        "effective_correction_count": 1,
+        "manual_effective_count": 0,
+        "adaptive_effective_count": 1,
+        "adaptive_suppressed_count": 0,
+        "suppression_reasons": {},
+    }
+
+
+def test_confirm_reports_specific_manual_suppression_and_keeps_manual_authority(
+    tmp_path,
+):
+    runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
+    del config, vocabulary
+    save_corrections((CorrectionPair("Ostro", "Australia"),), corrections)
+    save_adaptive_ledger(
+        AdaptiveLedger(
+            entries=(
+                AdaptiveEntry(
+                    "Ostro",
+                    "Austral",
+                    state="candidate",
+                    evidence="medium",
+                ),
+            )
+        ),
+        adaptive,
+    )
+
+    result = runtime.confirm("Ostro", "Austral")
+    status = runtime.status_document()
+
+    assert result.reason_code == "explicitly-suppressed-manual-source"
+    assert result.activated_count == 0
+    assert status["provider_view"]["manual_effective_count"] == 1
+    assert status["provider_view"]["adaptive_effective_count"] == 0
+    assert status["provider_view"]["suppression_reasons"] == {
+        "suppressed-manual-source": 1
+    }
+
+
+def test_confirm_never_reports_success_when_post_write_reload_cannot_verify(
+    tmp_path, monkeypatch
+):
+    runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
+    del config, vocabulary, corrections
+    save_adaptive_ledger(
+        AdaptiveLedger(
+            entries=(
+                AdaptiveEntry(
+                    "private wrong",
+                    "private canonical",
+                    state="candidate",
+                    evidence="medium",
+                ),
+            )
+        ),
+        adaptive,
+    )
+    real_load = adaptive_runtime.load_adaptive_ledger
+    loads = 0
+
+    def mismatched_reload(path=None):
+        nonlocal loads
+        loads += 1
+        if loads >= 2:
+            return AdaptiveLedger()
+        return real_load(path)
+
+    monkeypatch.setattr(adaptive_runtime, "load_adaptive_ledger", mismatched_reload)
+
+    with pytest.raises(ConfigError, match="verification failed") as captured:
+        runtime.confirm("private wrong", "private canonical")
+
+    assert loads >= 2
+    assert "private wrong" not in str(captured.value)
+    assert "private canonical" not in str(captured.value)
+
+
+def test_runtime_exposes_same_daemon_owned_explicit_feedback_path(tmp_path):
+    runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
+    del config, vocabulary, corrections
+
+    result = runtime.submit_explicit_feedback(
+        "private prefix Ostro private suffix",
+        "private prefix Austral private suffix",
+    )
+
+    assert result.reason_code == "explicit-feedback-activated"
+    raw = adaptive.read_text(encoding="utf-8")
+    assert "private prefix" not in raw
+    assert "private suffix" not in raw

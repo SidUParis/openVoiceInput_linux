@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 import gi
 
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .microphone_policy import (  # noqa: E402
@@ -103,6 +104,7 @@ _STATUS_LABELS = {
 
 _ADAPTIVE_REASON_LABELS = {
     "active-learned": "已自动启用高置信纠错",
+    "active-already-manual": "相同的明确纠错已经生效，本次只增加了学习证据",
     "active-and-candidates-saved": "已启用明确项，其余已进入候选",
     "active-suppressed": "规则已保留，但因冲突或覆盖关系未发送",
     "candidates-saved": "多处修改已拆分为候选，等待确认",
@@ -110,7 +112,10 @@ _ADAPTIVE_REASON_LABELS = {
     "diff-too-complex": "修改跨度过大，未在输入关键路径执行复杂比对",
     "edit-outside-committed-span": "检测到听写结果之外的修改，未自动推断",
     "explicitly-activated": "候选已由你明确确认",
+    "explicitly-already-manual": "相同的明确纠错已经在下次请求中生效",
     "explicit-feedback-activated": "这次明确修改已拆分并启用",
+    "explicit-feedback-already-manual": "拆出的规则已经由明确纠错生效",
+    "explicit-feedback-partially-activated": "部分规则已启用，其余被安全规则抑制",
     "explicit-feedback-suppressed": "修改已保留，但安全规则阻止了自动下发",
     "explicit-feedback-insertion-or-deletion": "修改主要是增删内容，未生成全局词汇规则",
     "explicit-feedback-no-change": "两句内容相同，没有需要学习的修改",
@@ -125,6 +130,30 @@ _ADAPTIVE_REASON_LABELS = {
     "too-many-edits": "修改范围过多，未自动生成规则",
     "unsafe-or-broad-replacement": "修改更像润色或宽泛重写，未生成全局规则",
 }
+
+_ADAPTIVE_SUPPRESSION_LABELS = {
+    "manual-source": "同一误识别已有另一条明确纠错；明确规则保持优先",
+    "conflicting-active": "同一误识别存在多个标准写法，尚不能安全下发",
+    "cycle": "该规则会形成循环替换，尚未下发",
+    "cascade": "该规则可能再次改写另一条规则的结果，尚未下发",
+    "overlap": "该规则与更具体或明确的规则重叠，尚未下发",
+    "capacity": "当前识别服务的纠错上下文容量已满，尚未下发",
+    "multiple": "存在多种安全抑制原因，尚未完整下发",
+}
+
+
+def _adaptive_reason_label(reason: str) -> str:
+    known = _ADAPTIVE_REASON_LABELS.get(reason)
+    if known is not None:
+        return known
+    marker = "-suppressed-"
+    if marker in reason:
+        suffix = reason.rsplit(marker, 1)[1]
+        explanation = _ADAPTIVE_SUPPRESSION_LABELS.get(suffix)
+        if explanation is not None:
+            return explanation
+    return "已记录，等待刷新"
+
 
 _SETTINGS_CSS = """
 .settings-shell {
@@ -274,6 +303,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self._window_closed = False
         self._key_clear_armed = False
         self._provider_selection = ProviderSelection("volcengine", None)
+        self._loaded_review_id: str | None = None
         self._correction_pairs: list[tuple[str, str]] = []
         self._microphone_priority: list[str] = list(DEFAULT_MICROPHONE_PRIORITY)
         self._data_collection_chooser: Gtk.FileChooserNative | None = None
@@ -757,7 +787,8 @@ class SettingsWindow(Gtk.ApplicationWindow):
                 "Qwen 与 OpenAI 只会把标准写法作为上下文提示，不保证执行逐项替换。"
                 "自动学习会拆分多处"
                 "替换：高置信单项可立即启用，中等置信与冲突项只进入本地候选，"
-                "不会把整句润色误当成全局规则。"
+                "不会把整句润色误当成全局规则。个人词表与明确纠错只有点击保存"
+                "才会建立；自动学习保存在独立账本，以“下次请求”统计为准。"
             ),
             xalign=0,
             wrap=True,
@@ -807,11 +838,11 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self._append_card_heading(
             adaptive_card,
             "自动学习记录",
-            "每次都会给出结果；候选只有在你确认后才会启用。",
+            "候选确认后进入学习账本；是否下发以下次请求统计为准。",
         )
         adaptive_grid = Gtk.Grid(column_spacing=10, column_homogeneous=True)
         self.adaptive_active_label = self._append_status_tile(
-            adaptive_grid, 0, "已启用", "0"
+            adaptive_grid, 0, "账本 Active", "0"
         )
         self.adaptive_candidate_label = self._append_status_tile(
             adaptive_grid, 1, "待确认", "0"
@@ -820,35 +851,51 @@ class SettingsWindow(Gtk.ApplicationWindow):
             adaptive_grid, 2, "冲突", "0"
         )
         adaptive_card.append(adaptive_grid)
+        self.adaptive_provider_view_label = Gtk.Label(
+            label=("下次请求：明确词汇 0 · 明确纠错 0 · 自适应生效 0 · 纠错上下文共 0"),
+            xalign=0,
+            wrap=True,
+        )
+        self.adaptive_provider_view_label.add_css_class("dim-label")
+        adaptive_card.append(self.adaptive_provider_view_label)
         self.adaptive_recent_label = Gtk.Label(
             label="最近结果：尚无学习记录", xalign=0, wrap=True
         )
         self.adaptive_recent_label.add_css_class("dim-label")
         adaptive_card.append(self.adaptive_recent_label)
-        fallback_label = Gtk.Label(
+        self.adaptive_feedback_notice_label = Gtk.Label(
             label=(
-                "当前应用无法自动读取修改时，可在这里提交“识别原文”和“修改后整句”。"
-                "窗口只保存拆出的短纠错对，不保存输入框周围的其他文字。"
+                "Chrome、Electron 等应用无法提供可信修改文本时，可载入最近一条"
+                "识别结果并明确复核。这里只能填写你实际说出的逐字内容；不要填写"
+                "去口头词、改写或润色结果，也不会把润色当作 ASR 标注。窗口只保存"
+                "拆出的短纠错对，不保存输入框周围的其他文字。"
             ),
             xalign=0,
             wrap=True,
         )
-        fallback_label.add_css_class("dim-label")
-        adaptive_card.append(fallback_label)
+        self.adaptive_feedback_notice_label.add_css_class("dim-label")
+        adaptive_card.append(self.adaptive_feedback_notice_label)
+        self.load_last_review_button = Gtk.Button(label="载入上一条识别")
+        self.load_last_review_button.set_halign(Gtk.Align.START)
+        self.load_last_review_button.connect("clicked", self._on_load_last_review)
+        adaptive_card.append(self.load_last_review_button)
         fallback_grid = Gtk.Grid(column_spacing=8, row_spacing=6)
         fallback_grid.attach(Gtk.Label(label="识别原文", xalign=0), 0, 0, 1, 1)
-        fallback_grid.attach(Gtk.Label(label="修改后整句", xalign=0), 1, 0, 1, 1)
-        self.adaptive_provider_entry = Gtk.Entry(placeholder_text="云端返回的这一句")
+        fallback_grid.attach(Gtk.Label(label="实际说法（逐字）", xalign=0), 1, 0, 1, 1)
+        self.adaptive_provider_entry = Gtk.Entry(
+            placeholder_text="请先载入最近一条识别"
+        )
         self.adaptive_provider_entry.set_max_length(ADAPTIVE_FEEDBACK_TEXT_LIMIT)
         self.adaptive_provider_entry.set_hexpand(True)
+        self.adaptive_provider_entry.set_editable(False)
         fallback_grid.attach(self.adaptive_provider_entry, 0, 1, 1, 1)
         self.adaptive_preferred_entry = Gtk.Entry(
-            placeholder_text="你最终希望得到的这一句"
+            placeholder_text="只填写你确实说出的内容，不做润色"
         )
         self.adaptive_preferred_entry.set_max_length(ADAPTIVE_FEEDBACK_TEXT_LIMIT)
         self.adaptive_preferred_entry.set_hexpand(True)
         fallback_grid.attach(self.adaptive_preferred_entry, 1, 1, 1, 1)
-        self.submit_adaptive_feedback_button = Gtk.Button(label="分析并学习这次修改")
+        self.submit_adaptive_feedback_button = Gtk.Button(label="确认实际说法并学习")
         self.submit_adaptive_feedback_button.connect(
             "clicked", self._on_submit_adaptive_feedback
         )
@@ -1247,8 +1294,23 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self.adaptive_recent_label.set_text("最近结果：尚无学习记录")
         else:
             reason = str(recent.get("reason_code", "unknown"))
-            explanation = _ADAPTIVE_REASON_LABELS.get(reason, "已记录，等待刷新")
+            explanation = _adaptive_reason_label(reason)
             self.adaptive_recent_label.set_text(f"最近结果：{explanation}")
+
+        provider_view = snapshot.provider_view
+        explicit_vocabulary = int(provider_view.get("explicit_vocabulary_count", 0))
+        manual_corrections = int(provider_view.get("manual_correction_count", 0))
+        adaptive_effective = int(provider_view.get("adaptive_effective_count", 0))
+        effective_total = int(provider_view.get("effective_correction_count", 0))
+        adaptive_suppressed = int(provider_view.get("adaptive_suppressed_count", 0))
+        summary = (
+            f"下次请求：明确词汇 {explicit_vocabulary} · "
+            f"明确纠错 {manual_corrections} · 自适应生效 {adaptive_effective} · "
+            f"纠错上下文共 {effective_total}"
+        )
+        if adaptive_suppressed:
+            summary += f"；另有 {adaptive_suppressed} 条自适应规则未下发"
+        self.adaptive_provider_view_label.set_text(summary)
 
         child = self.adaptive_review_list.get_first_child()
         while child is not None:
@@ -1588,6 +1650,41 @@ class SettingsWindow(Gtk.ApplicationWindow):
         del button
         self.refresh_adaptive_learning()
 
+    def _on_load_last_review(self, button: Gtk.Button) -> None:
+        del button
+        loader = getattr(self._controller, "load_last_review", None)
+        if not callable(loader):
+            self._show_error("当前设置控制器不支持载入最近识别结果。")
+            return
+        try:
+            review = loader()
+        except SettingsError as error:
+            self._loaded_review_id = None
+            self._show_error(str(error))
+            return
+        except Exception:
+            self._loaded_review_id = None
+            self._show_error("无法安全载入最近识别结果。")
+            return
+        if review is None:
+            self._loaded_review_id = None
+            self.adaptive_provider_entry.set_text("")
+            self.adaptive_preferred_entry.set_text("")
+            self._show_message("暂无可复核的最近结果；结果仅在本机内存保留十分钟。")
+            return
+        provider_text = review.provider_text
+        self._loaded_review_id = review.utterance_id
+        self.adaptive_provider_entry.set_text(provider_text)
+        self.adaptive_preferred_entry.set_text(provider_text)
+        self.adaptive_preferred_entry.grab_focus()
+        self._show_message("已载入；请只改成你实际说出的逐字内容，再明确确认。")
+
+    def open_last_review(self) -> None:
+        """Show the correction page and load the volatile last result."""
+
+        self.settings_stack.set_visible_child_name("corrections")
+        self._on_load_last_review(self.load_last_review_button)
+
     def _on_confirm_adaptive(
         self,
         button: Gtk.Button,
@@ -1595,12 +1692,23 @@ class SettingsWindow(Gtk.ApplicationWindow):
         canonical: str,
     ) -> None:
         del button
+        reason_confirmer = getattr(
+            self._controller, "confirm_adaptive_learning_reason", None
+        )
         confirmer = getattr(self._controller, "confirm_adaptive_learning", None)
-        if not callable(confirmer):
+        if not callable(reason_confirmer) and not callable(confirmer):
             self._show_error("当前设置控制器不支持确认自动纠错。")
             return
         try:
-            active = confirmer(wrong, canonical)
+            if callable(reason_confirmer):
+                reason = reason_confirmer(wrong, canonical)
+                active = reason in {
+                    "explicitly-activated",
+                    "explicitly-already-manual",
+                }
+            else:
+                active = bool(confirmer(wrong, canonical))
+                reason = "explicitly-activated" if active else "active-suppressed"
         except SettingsError as error:
             self._show_error(str(error))
             return
@@ -1611,32 +1719,52 @@ class SettingsWindow(Gtk.ApplicationWindow):
         if active:
             self._show_message("已确认并启用；下一次听写会自动读取。")
         else:
-            self._show_message("已确认，但因明确规则覆盖或安全冲突暂未发送。")
+            self._show_message(f"已确认，但{_adaptive_reason_label(reason)}。")
 
     def _on_submit_adaptive_feedback(self, button: Gtk.Button) -> None:
         del button
         provider_text = self.adaptive_provider_entry.get_text().strip()
         preferred_text = self.adaptive_preferred_entry.get_text().strip()
-        if not provider_text or not preferred_text:
-            self._show_error("请同时填写识别原文和修改后整句。")
+        review_id = self._loaded_review_id
+        if not provider_text or not preferred_text or review_id is None:
+            self._show_error("请先载入上一条识别，并填写实际说出的逐字内容。")
             return
-        submitter = getattr(self._controller, "submit_adaptive_feedback", None)
+        submitter = getattr(self._controller, "submit_last_review", None)
         if not callable(submitter):
             self._show_error("当前设置控制器不支持显式纠错反馈。")
             return
         try:
-            reason = submitter(provider_text, preferred_text)
+            outcome = submitter(review_id, preferred_text)
         except SettingsError as error:
             self._show_error(str(error))
             return
         except Exception:
             self._show_error("无法安全保存这次纠错反馈。")
             return
+        reason = outcome.reason_code
+        feedback_code = outcome.feedback_code
+        if not outcome.ok or not reason or not feedback_code:
+            self._show_error("守护进程没有确认这次纠错反馈。")
+            return
+        self._loaded_review_id = None
         self.adaptive_provider_entry.set_text("")
         self.adaptive_preferred_entry.set_text("")
         self.refresh_adaptive_learning(silent=True)
-        label = _ADAPTIVE_REASON_LABELS.get(reason, "已分析并安全记录")
-        self._show_message(f"{label}；下一次听写会自动读取可用规则。")
+        label = _adaptive_reason_label(reason)
+        effective = reason in {
+            "explicit-feedback-activated",
+            "explicit-feedback-already-manual",
+            "explicit-feedback-partially-activated",
+        }
+        feedback_label = {
+            "feedback-disabled": "数据留存未启用，因此没有训练反馈 sidecar",
+            "feedback-failed": "学习账本已更新，但训练反馈未能加入保存队列",
+            "feedback-queued": "训练反馈已进入后台写入队列，尚未确认最终落盘",
+        }.get(feedback_code, "训练反馈状态未知")
+        message = f"{label}；{feedback_label}"
+        if effective:
+            message += "；下一次听写会自动读取可用规则。"
+        self._show_message(message)
 
     def _replace_microphone_priority_rows(self, priority: Sequence[str]) -> None:
         normalized = tuple(priority)
@@ -2183,14 +2311,30 @@ class SettingsWindow(Gtk.ApplicationWindow):
 
 class SettingsApplication(Gtk.Application):
     def __init__(self, controller: SettingsController | None = None) -> None:
-        super().__init__(application_id=APPLICATION_ID)
+        super().__init__(
+            application_id=APPLICATION_ID,
+            flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE,
+        )
         self._controller = controller
         self._window: SettingsWindow | None = None
+        self._review_last_requested = False
+
+    def do_command_line(self, command_line: Gio.ApplicationCommandLine) -> int:
+        arguments = list(command_line.get_arguments())[1:]
+        if any(argument != "--review-last" for argument in arguments):
+            command_line.printerr("unsupported settings argument\n")
+            return 2
+        self._review_last_requested = "--review-last" in arguments
+        self.activate()
+        return 0
 
     def do_activate(self) -> None:
         if self._window is None:
             self._window = SettingsWindow(self, self._controller)
         self._window.present()
+        if self._review_last_requested:
+            self._review_last_requested = False
+            self._window.open_last_review()
 
 
 def main(arguments: Sequence[str] | None = None) -> int:

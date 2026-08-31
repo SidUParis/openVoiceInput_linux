@@ -199,11 +199,22 @@ def test_vocabulary_terms_cannot_be_passed_on_command_line():
         parser.parse_args(["vocabulary", "--term", "PrivateName"])
 
 
+def test_run_parser_accepts_only_a_private_review_socket_path(tmp_path):
+    review_socket = tmp_path / "runtime" / "murmur-ime-private" / "review.sock"
+
+    options = cli.build_parser().parse_args(
+        ["run", "--review-socket", str(review_socket)]
+    )
+
+    assert options.review_socket == review_socket
+
+
 def test_adaptive_status_is_content_free_and_confirm_activates_candidate(
     tmp_path, capsys, monkeypatch
 ):
     adaptive = tmp_path / "private" / "adaptive-corrections.json"
     corrections = tmp_path / "private" / "corrections.json"
+    vocabulary = tmp_path / "private" / "vocabulary.json"
     ledger = record_evidence(
         AdaptiveLedger(),
         "private wrong",
@@ -219,10 +230,26 @@ def test_adaptive_status_is_content_free_and_confirm_activates_candidate(
         "stdin",
         _AdaptivePairInput("private wrong\nprivate canonical\n"),
     )
-    assert cli.main(["adaptive-status", "--adaptive-corrections", str(adaptive)]) == 0
+    assert (
+        cli.main(
+            [
+                "adaptive-status",
+                "--adaptive-corrections",
+                str(adaptive),
+                "--corrections",
+                str(corrections),
+                "--vocabulary",
+                str(vocabulary),
+            ]
+        )
+        == 0
+    )
     status_output = capsys.readouterr().out
     status = json.loads(status_output)
     assert status["statistics"]["candidate"] == 1
+    assert status["provider_view"]["explicit_vocabulary_count"] == 0
+    assert status["provider_view"]["manual_correction_count"] == 0
+    assert status["provider_view"]["effective_correction_count"] == 0
     assert "private wrong" not in status_output
     assert "private canonical" not in status_output
 
@@ -239,7 +266,9 @@ def test_adaptive_status_is_content_free_and_confirm_activates_candidate(
         == 0
     )
     confirmation_output = capsys.readouterr().out
-    assert json.loads(confirmation_output)["activated_count"] == 1
+    confirmation = json.loads(confirmation_output)
+    assert confirmation["activated_count"] == 1
+    assert confirmation["effective_next_request"] is True
     assert "private wrong" not in confirmation_output
     assert "private canonical" not in confirmation_output
 
@@ -348,6 +377,8 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
     runtime_arguments = []
     data_runtime_arguments = []
     data_runtime_closes = []
+    server_arguments = []
+    review_socket_path = tmp_path / "runtime/murmur-ime-private/review.sock"
 
     class FakeRuntime:
         def __init__(self, **kwargs):
@@ -365,6 +396,11 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
         def observe(snapshot):
             del snapshot
             return False
+
+        @staticmethod
+        def submit_explicit_feedback(provider_text, spoken_verbatim):
+            del provider_text, spoken_verbatim
+            return object()
 
     class FakeSession:
         def __init__(self, config, **kwargs):
@@ -389,8 +425,16 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
             return True
 
     class FakeServer:
-        def __init__(self, session, socket_path, *, interaction=None):
-            del session, socket_path, interaction
+        def __init__(
+            self,
+            session,
+            socket_path,
+            *,
+            interaction=None,
+            private_review_socket_path=None,
+        ):
+            del session, interaction
+            server_arguments.append((socket_path, private_review_socket_path))
 
         @staticmethod
         def serve_forever(signal_commands):
@@ -418,6 +462,7 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
             adaptive_corrections_path=adaptive_path,
             data_collection_path=data_collection_path,
             microphone_policy_path=microphone_priority_path,
+            review_socket_path=review_socket_path,
         )
         == 0
     )
@@ -433,12 +478,14 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
     assert len(captured) == 1
     assert data_runtime_arguments == [data_collection_path]
     assert data_runtime_closes == [cli.DATA_COLLECTION_CLOSE_TIMEOUT_SECONDS]
+    assert server_arguments == [(None, review_socket_path)]
     config, options = captured[0]
     assert config.api_key == "test-key"
     assert options["asr_client_factory"] is FakeRuntime.create_asr_client
     assert isinstance(options["audio_capture"], AudioCapture)
     assert callable(options["microphone_policy_validator"])
     assert options["observation_handler"] is FakeRuntime.observe
+    assert options["explicit_feedback_handler"] is FakeRuntime.submit_explicit_feedback
     assert options["data_collection_factory"] is FakeDataCollectionRuntime.begin
     assert (
         options["data_collection_status_reader"]

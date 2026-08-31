@@ -10,14 +10,17 @@ publication therefore never run in the ASR callback or VoiceSession lock.
 
 from __future__ import annotations
 
+import array
 import fcntl
 import hashlib
 import json
 import logging
+import math
 import os
 import queue
 import shutil
 import stat
+import sys
 import threading
 import time
 import uuid
@@ -34,9 +37,11 @@ from .config import (
     _reject_duplicate_json_fields,
     _write_private_json,
 )
+from .microphone_metadata import MicrophoneCaptureMetadata
 
 DATA_COLLECTION_CONFIG_VERSION = 1
-DATA_RECORD_VERSION = 1
+DATASET_MARKER_VERSION = 1
+DATA_RECORD_VERSION = 2
 DATA_USAGE_SUMMARY_VERSION = 1
 DATA_FEEDBACK_VERSION = 1
 MAX_DATA_COLLECTION_CONFIG_BYTES = 16 * 1024
@@ -50,10 +55,13 @@ CHANNELS = 1
 SAMPLE_WIDTH_BYTES = 2
 MAX_AUDIO_BYTES = SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH_BYTES * 600
 MAX_AUDIO_CHUNK_BYTES = 1024 * 1024
+PCM_QUALITY_ANALYSIS_VERSION = 1
+PCM_CLIPPING_THRESHOLD_ABS = 32_760
+PCM_DBFS_FLOOR = -120.0
 
 _DATASET_DIRECTORY = "openvoiceinput-dataset-v1"
 _DATASET_MARKER_BASE = {
-    "schema_version": DATA_RECORD_VERSION,
+    "schema_version": DATASET_MARKER_VERSION,
     "kind": "openvoiceinput-personal-asr-dataset",
 }
 logger = logging.getLogger(__name__)
@@ -90,6 +98,7 @@ class _FrozenRecord:
     provider_name: str
     provider_model: str
     provider_resource_id: str | None
+    microphone: dict[str, Any] | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -98,6 +107,35 @@ class _FrozenFeedback:
     dataset_id: str
     utterance_id: str
     document: dict[str, Any] = field(repr=False)
+
+
+@dataclass(slots=True)
+class _PcmQualityAccumulator:
+    sample_count: int = 0
+    clipped_samples: int = 0
+    zero_samples: int = 0
+    sample_sum: int = 0
+    square_sum: int = 0
+    peak_abs: int = 0
+
+    def as_document(self) -> dict[str, int | float]:
+        if self.sample_count < 1:
+            raise DataCollectionError("data collection audio quality is unavailable")
+        rms = math.sqrt(self.square_sum / self.sample_count)
+        return {
+            "sample_count": self.sample_count,
+            "clipped_fraction": round(
+                self.clipped_samples / self.sample_count,
+                8,
+            ),
+            "rms_dbfs": _amplitude_dbfs(rms),
+            "peak_dbfs": _amplitude_dbfs(self.peak_abs),
+            "dc_offset_fraction": round(
+                self.sample_sum / self.sample_count / 32_768,
+                8,
+            ),
+            "zero_fraction": round(self.zero_samples / self.sample_count, 8),
+        }
 
 
 def default_data_collection_config_path() -> Path:
@@ -508,6 +546,7 @@ class DatasetRecorder:
         self._provider_name = "volcengine"
         self._provider_model = "bigmodel_async"
         self._provider_resource_id: str | None = "volc.seedasr.sauc.duration"
+        self._microphone_metadata: MicrophoneCaptureMetadata | None = None
 
     def set_provider_identity(
         self,
@@ -532,6 +571,16 @@ class DatasetRecorder:
             self._provider_name = name
             self._provider_model = model
             self._provider_resource_id = resource_id
+
+    def set_microphone_metadata(self, metadata: MicrophoneCaptureMetadata) -> None:
+        """Update secret-free selection/route facts while capture continues."""
+
+        if not isinstance(metadata, MicrophoneCaptureMetadata):
+            raise DataCollectionError("data collection microphone metadata is invalid")
+        with self._lock:
+            if self._committed:
+                return
+            self._microphone_metadata = metadata
 
     def add_audio(self, data: bytes) -> None:
         """Append one exact PCM chunk without disk or a blocking queue put."""
@@ -587,6 +636,11 @@ class DatasetRecorder:
                 provider_name=self._provider_name,
                 provider_model=self._provider_model,
                 provider_resource_id=self._provider_resource_id,
+                microphone=(
+                    self._microphone_metadata.as_record_document()
+                    if self._microphone_metadata is not None
+                    else None
+                ),
             )
         try:
             self._runtime._enqueue(frozen)
@@ -623,6 +677,13 @@ def _publish_record(
         audio_path = stage / "audio.wav"
         _write_wav(audio_path, record.chunks)
         file_sha256 = _sha256_file(audio_path)
+        try:
+            audio_quality = _summarize_pcm_quality(record.chunks)
+        except Exception:
+            # Diagnostics are advisory. A future implementation or platform
+            # failure must never discard otherwise valid opted-in audio.
+            logger.error("Optional PCM quality summary could not be computed")
+            audio_quality = None
         metadata = {
             "schema_version": DATA_RECORD_VERSION,
             "dataset_id": record.dataset_id,
@@ -638,6 +699,7 @@ def _publish_record(
                 "frames": record.frames,
                 "pcm_sha256": record.pcm_sha256,
                 "file_sha256": file_sha256,
+                **({"quality": audio_quality} if audio_quality is not None else {}),
             },
             "provider": {
                 "name": record.provider_name,
@@ -648,6 +710,11 @@ def _publish_record(
                     else {}
                 ),
             },
+            **(
+                {"microphone": record.microphone}
+                if record.microphone is not None
+                else {}
+            ),
             "labels": {
                 "provider_final": {
                     "text": record.provider_final,
@@ -676,6 +743,75 @@ def _publish_record(
                 shutil.rmtree(stage)
             except OSError:
                 pass
+
+
+def _summarize_pcm_quality(chunks: tuple[bytes, ...]) -> dict[str, Any]:
+    """Compute post-hoc numeric diagnostics in the background writer only."""
+
+    overall_count = 0
+    overall_clipped = 0
+    overall_zero = 0
+    overall_sum = 0
+    overall_square_sum = 0
+    overall_peak = 0
+    first_count = 0
+    first_clipped = 0
+    first_zero = 0
+    first_sum = 0
+    first_square_sum = 0
+    first_peak = 0
+    for chunk in chunks:
+        samples = array.array("h")
+        samples.frombytes(chunk)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        for sample in samples:
+            absolute = abs(sample)
+            overall_count += 1
+            overall_clipped += absolute >= PCM_CLIPPING_THRESHOLD_ABS
+            overall_zero += sample == 0
+            overall_sum += sample
+            overall_square_sum += sample * sample
+            if absolute > overall_peak:
+                overall_peak = absolute
+            if first_count < SAMPLE_RATE:
+                first_count += 1
+                first_clipped += absolute >= PCM_CLIPPING_THRESHOLD_ABS
+                first_zero += sample == 0
+                first_sum += sample
+                first_square_sum += sample * sample
+                if absolute > first_peak:
+                    first_peak = absolute
+    overall = _PcmQualityAccumulator(
+        overall_count,
+        overall_clipped,
+        overall_zero,
+        overall_sum,
+        overall_square_sum,
+        overall_peak,
+    )
+    first_second = _PcmQualityAccumulator(
+        first_count,
+        first_clipped,
+        first_zero,
+        first_sum,
+        first_square_sum,
+        first_peak,
+    )
+    return {
+        "analysis_version": PCM_QUALITY_ANALYSIS_VERSION,
+        "clipping_threshold_abs": PCM_CLIPPING_THRESHOLD_ABS,
+        "overall": overall.as_document(),
+        "first_second": first_second.as_document(),
+    }
+
+
+def _amplitude_dbfs(amplitude: float | int) -> float:
+    if amplitude <= 0:
+        return PCM_DBFS_FLOOR
+    value = max(PCM_DBFS_FLOOR, 20 * math.log10(amplitude / 32_768))
+    rounded = round(value, 3)
+    return 0.0 if rounded == 0 else rounded
 
 
 def _ensure_usage_directory(dataset_root: Path) -> Path:
@@ -793,15 +929,27 @@ def _publish_feedback(
 
 
 def _validate_private_regular_file(path: Path) -> None:
+    descriptor = -1
     try:
-        metadata = path.lstat()
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+        )
+        metadata = os.fstat(descriptor)
     except OSError as error:
         raise DataCollectionError("data collection utterance is incomplete") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    mode = stat.S_IMODE(metadata.st_mode)
     if (
         not stat.S_ISREG(metadata.st_mode)
         or metadata.st_uid != os.getuid()
-        or stat.S_IMODE(metadata.st_mode) != 0o600
-        or path.is_symlink()
+        # Some owner-mapped FUSE filesystems deliberately expose every
+        # private inode as 0700 even when the remote regular file is 0600.
+        # Owner execute does not broaden visibility; group/other bits still
+        # fail closed, and owner read/write remain mandatory.
+        or mode not in {0o600, 0o700}
     ):
         raise DataCollectionError("data collection utterance is incomplete")
 

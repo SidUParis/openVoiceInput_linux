@@ -118,6 +118,7 @@ class PreeditClient:
         self._proxy: Any | None = None
         self._utterance_id: str | None = None
         self._last_revision = 0
+        self._last_observation_supported: bool | None = None
         self._original_engine: str | None = None
         self._switched_engine = False
         self._pending_restore_engine: str | None = None
@@ -137,6 +138,13 @@ class PreeditClient:
     def last_revision(self) -> int:
         with self._lock:
             return self._last_revision
+
+    @property
+    def observation_supported(self) -> bool | None:
+        """Capability reported for the most recently accepted final."""
+
+        with self._lock:
+            return self._last_observation_supported
 
     @property
     def restore_pending(self) -> bool:
@@ -239,6 +247,7 @@ class PreeditClient:
             if accepted:
                 self._utterance_id = utterance_id
                 self._last_revision = 0
+                self._last_observation_supported = None
             return outcome
 
     def partial(self, utterance_id: str, revision: int, text: str) -> bool:
@@ -263,6 +272,31 @@ class PreeditClient:
             )
             if accepted:
                 self._last_revision = revision
+                supported = self._call_optional_bool(
+                    "ObservationSupported",
+                    GLib.Variant("(s)", (utterance_id,)),
+                    log_failure=False,
+                )
+                self._last_observation_supported = supported
+                if supported is False:
+                    # The final is already committed, but this client cannot
+                    # provide trusted surrounding text. Consume the empty
+                    # observation immediately and restore the user's engine.
+                    released = self._call_unpacked(
+                        "FinishObservation",
+                        GLib.Variant("(s)", (utterance_id,)),
+                        log_failure=False,
+                    )
+                    if released is None:
+                        self._call_optional_bool(
+                            "Cancel",
+                            GLib.Variant("(s)", (utterance_id,)),
+                            log_failure=False,
+                        )
+                    self._restore_original_engine()
+                    self._clear_session_state()
+                    self._last_observation_supported = False
+                    return True
                 # Keep murmur-voice selected for the short observation lease.
                 # finish_observation(), cancel(), or close() always restores it.
                 return True

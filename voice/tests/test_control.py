@@ -12,10 +12,16 @@ from murmur_voice.audio import MICROPHONE_PREFLIGHT_TIMEOUT_SECONDS
 from murmur_voice.control import (
     CONTROL_RESPONSE_TIMEOUT_SECONDS,
     MAX_COMMAND_BYTES,
+    REVIEW_SUBMIT_TIMEOUT_SECONDS,
     ControlError,
     ControlServer,
+    LastReview,
+    ReviewSubmitReply,
     request_command,
+    request_last_review,
+    review_socket_path,
     runtime_socket_path,
+    submit_last_review,
 )
 from murmur_voice.session import (
     PREEDIT_ACQUIRE_TIMEOUT_UPPER_BOUND_SECONDS,
@@ -30,6 +36,14 @@ class FakeSession:
         self.state = VoiceState.IDLE
         self.calls = []
         self.closed = False
+        self.review = None
+        self.review_submissions = []
+        self.review_submit_reply = ReviewSubmitReply(
+            True,
+            "review-submitted",
+            "explicit-feedback-activated",
+            "feedback-disabled",
+        )
 
     def _reply(self, command, state=None):
         self.calls.append(command)
@@ -57,6 +71,13 @@ class FakeSession:
     def close(self):
         self.closed = True
         self.state = VoiceState.IDLE
+
+    def review_last(self):
+        return self.review
+
+    def submit_last_review(self, utterance_id, spoken_verbatim):
+        self.review_submissions.append((utterance_id, spoken_verbatim))
+        return self.review_submit_reply
 
 
 class FakeInteraction:
@@ -101,9 +122,12 @@ def _start_server(runtime_dir):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     deadline = time.monotonic() + 2
-    while not server.path.exists() and time.monotonic() < deadline:
+    while (
+        not server.path.exists() or not server.review_path.exists()
+    ) and time.monotonic() < deadline:
         time.sleep(0.01)
     assert server.path.exists()
+    assert server.review_path.exists()
     return session, server, thread
 
 
@@ -114,11 +138,21 @@ def test_socket_stays_inside_private_runtime_directory(runtime_dir):
     with pytest.raises(ControlError, match="inside"):
         runtime_socket_path(runtime_dir.parent / "outside.sock")
 
+    private_path = review_socket_path()
+    assert private_path == runtime_dir / "murmur-ime-private" / "review.sock"
+    assert private_path.parent != path.parent
+    with pytest.raises(ControlError, match="inside"):
+        review_socket_path(runtime_dir.parent / "outside-review.sock")
+    with pytest.raises(ControlError, match="host-only"):
+        review_socket_path(runtime_dir / "murmur-ime" / "review.sock")
+
 
 def test_cli_commands_and_toggle_over_private_socket(runtime_dir):
     session, server, thread = _start_server(runtime_dir)
 
     assert stat.S_IMODE(server.path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(server.review_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(server.review_path.parent.stat().st_mode) == 0o700
     assert request_command("toggle")["state"] == "starting"
     assert request_command("toggle")["state"] == "stopping"
     assert request_command("cancel")["state"] == "idle"
@@ -128,6 +162,43 @@ def test_cli_commands_and_toggle_over_private_socket(runtime_dir):
     assert not thread.is_alive()
     assert session.closed
     assert not server.path.exists()
+    assert not server.review_path.exists()
+
+
+def test_review_socket_returns_only_bounded_last_result_on_sibling_path(runtime_dir):
+    session, server, thread = _start_server(runtime_dir)
+    private_text = "只在主机设置中显示的识别结果"
+    session.review = LastReview("utterance-1", private_text)
+
+    review = request_last_review()
+
+    assert review is not None
+    assert review.utterance_id == "utterance-1"
+    assert review.provider_text == private_text
+    assert private_text not in repr(review)
+    assert request_command("status").keys() == {"ok", "code", "state"}
+
+    submission = submit_last_review("utterance-1", "实际逐字内容")
+    assert submission == session.review_submit_reply
+    assert session.review_submissions == [("utterance-1", "实际逐字内容")]
+
+    session.review = None
+    assert request_last_review() is None
+    request_command("shutdown")
+    thread.join(2)
+
+
+def test_review_submission_failure_is_content_free_and_never_echoes_text(runtime_dir):
+    session, _server, thread = _start_server(runtime_dir)
+    session.review_submit_reply = ReviewSubmitReply(False, "stale-review")
+    private_text = "must-not-return-in-review-response"
+
+    with pytest.raises(ControlError, match="stale-review") as raised:
+        submit_last_review("utterance-1", private_text)
+
+    assert private_text not in str(raised.value)
+    request_command("shutdown")
+    thread.join(2)
 
 
 def test_press_release_and_cancel_route_through_interaction_controller(runtime_dir):
@@ -193,6 +264,17 @@ def test_insecure_runtime_directory_is_refused(tmp_path, monkeypatch):
         runtime_socket_path()
 
 
+def test_review_socket_refuses_symlink_escape_from_private_sibling(
+    runtime_dir, tmp_path
+):
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    (runtime_dir / "murmur-ime-private").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ControlError, match="inside"):
+        review_socket_path()
+
+
 def test_client_disconnect_after_command_does_not_break_server(runtime_dir):
     session = FakeSession()
     server = ControlServer(session)
@@ -242,3 +324,55 @@ def test_client_response_timeout_exceeds_hard_microphone_preflight_bound(
     )
     assert VOICE_START_TIMEOUT_SECONDS > PREEDIT_ACQUIRE_TIMEOUT_UPPER_BOUND_SECONDS
     assert client.closed
+
+
+def test_private_submit_client_waits_longer_without_changing_public_timeout(
+    runtime_dir, monkeypatch
+):
+    class FakeClientSocket:
+        def __init__(self):
+            self.timeout = None
+            self.closed = False
+
+        def settimeout(self, value):
+            self.timeout = value
+
+        def connect(self, path):
+            assert path == str(runtime_dir / "murmur-ime-private" / "review.sock")
+
+        def sendall(self, data):
+            document = json.loads(data.decode("utf-8"))
+            assert document["command"] == "submit-review"
+            assert document["utterance_id"] == "utterance-1"
+
+        def recv(self, maximum):
+            del maximum
+            return (
+                b'{"ok":true,"code":"review-submitted",'
+                b'"reason_code":"explicit-feedback-activated",'
+                b'"feedback_code":"feedback-disabled"}\n'
+            )
+
+        def close(self):
+            self.closed = True
+
+    client = FakeClientSocket()
+    monkeypatch.setattr(socket, "socket", lambda *args, **kwargs: client)
+
+    reply = submit_last_review("utterance-1", "actual speech")
+
+    assert reply.ok
+    assert client.timeout == REVIEW_SUBMIT_TIMEOUT_SECONDS
+    assert REVIEW_SUBMIT_TIMEOUT_SECONDS < CONTROL_RESPONSE_TIMEOUT_SECONDS
+    assert client.closed
+
+
+def test_private_server_read_timeout_remains_short(runtime_dir):
+    session = FakeSession()
+    server = ControlServer(session)
+    server_side, client_side = socket.socketpair()
+    client_side.sendall(b"review-last\n")
+
+    with server_side, client_side:
+        server._serve_review_connection(server_side)
+        assert server_side.gettimeout() == 2.0

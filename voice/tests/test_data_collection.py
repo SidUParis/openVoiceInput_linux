@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import stat
+import threading
 import wave
 
 import pytest
@@ -18,6 +19,12 @@ from murmur_voice.data_collection import (
     DataCollectionRuntime,
     load_data_collection_config,
     save_data_collection_config,
+)
+from murmur_voice.microphone_metadata import (
+    MicrophoneCaptureMetadata,
+    MicrophoneRouteObservation,
+    MicrophoneSelectionMetadata,
+    privacy_preserving_microphone_identity,
 )
 
 
@@ -169,6 +176,100 @@ def test_completed_record_is_atomic_wav_plus_unreviewed_teacher_label(tmp_path):
     assert runtime.close()
 
 
+def test_pcm_quality_is_posthoc_numeric_writer_metadata_without_filtering(
+    tmp_path,
+    monkeypatch,
+):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-quality")
+    assert recorder is not None
+    first_second = b"\xff\x7f" * SAMPLE_RATE
+    second_second = b"\x00\x00" * SAMPLE_RATE
+    pcm = first_second + second_second
+    analysis_threads = []
+    real_summarizer = data_collection._summarize_pcm_quality
+
+    def observe_writer_thread(chunks):
+        analysis_threads.append(threading.current_thread().name)
+        return real_summarizer(chunks)
+
+    monkeypatch.setattr(
+        data_collection,
+        "_summarize_pcm_quality",
+        observe_writer_thread,
+    )
+    recorder.add_audio(first_second)
+    recorder.add_audio(second_second)
+    assert analysis_threads == []
+    recorder.commit("teacher final")
+    assert runtime.wait_until_idle()
+
+    final = selected / "openvoiceinput-dataset-v1" / "utterances" / "utterance-quality"
+    quality = json.loads((final / "record.json").read_text(encoding="utf-8"))["audio"][
+        "quality"
+    ]
+    assert analysis_threads == ["openvoice-data-writer"]
+    assert quality == {
+        "analysis_version": 1,
+        "clipping_threshold_abs": 32760,
+        "overall": {
+            "sample_count": SAMPLE_RATE * 2,
+            "clipped_fraction": 0.5,
+            "rms_dbfs": -3.011,
+            "peak_dbfs": 0.0,
+            "dc_offset_fraction": 0.49998474,
+            "zero_fraction": 0.5,
+        },
+        "first_second": {
+            "sample_count": SAMPLE_RATE,
+            "clipped_fraction": 1.0,
+            "rms_dbfs": 0.0,
+            "peak_dbfs": 0.0,
+            "dc_offset_fraction": 0.99996948,
+            "zero_fraction": 0.0,
+        },
+    }
+    with wave.open(str(final / "audio.wav"), "rb") as audio:
+        assert audio.readframes(audio.getnframes()) == pcm
+    assert runtime.close()
+
+
+def test_quality_analysis_failure_never_discards_valid_audio(tmp_path, monkeypatch):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-quality-fallback")
+    assert recorder is not None
+    pcm = b"\x01\x02" * 100
+    recorder.add_audio(pcm)
+
+    def fail_quality(_chunks):
+        raise RuntimeError("simulated optional analysis failure")
+
+    monkeypatch.setattr(data_collection, "_summarize_pcm_quality", fail_quality)
+    recorder.commit("teacher final")
+    assert runtime.wait_until_idle()
+
+    final = (
+        selected
+        / "openvoiceinput-dataset-v1"
+        / "utterances"
+        / "utterance-quality-fallback"
+    )
+    document = json.loads((final / "record.json").read_text(encoding="utf-8"))
+    assert "quality" not in document["audio"]
+    with wave.open(str(final / "audio.wav"), "rb") as audio:
+        assert audio.readframes(audio.getnframes()) == pcm
+    assert runtime.status_code() == "none"
+    assert runtime.close()
+
+
 def test_record_binds_the_actual_provider_without_changing_label_semantics(tmp_path):
     selected = tmp_path / "selected"
     selected.mkdir()
@@ -197,6 +298,73 @@ def test_record_binds_the_actual_provider_without_changing_label_semantics(tmp_p
     assert document["labels"]["provider_final"]["review_status"] == (
         "teacher-unreviewed"
     )
+    assert runtime.close()
+
+
+def test_schema_v2_records_selected_and_actual_microphone_without_private_name(
+    tmp_path,
+):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-microphone")
+    assert recorder is not None
+    dji = privacy_preserving_microphone_identity(
+        "dji",
+        bus="usb",
+        vendor_id="2ca3",
+        product_id="4011",
+    )
+    built_in = privacy_preserving_microphone_identity(
+        "built-in",
+        bus="pci",
+        form_factor="internal",
+    )
+    recorder.add_audio(b"\x00\x00" * 100)
+    # Actual source-output observations are asynchronous and may arrive after
+    # audio has already started; attaching them never filters or delays audio.
+    recorder.set_microphone_metadata(
+        MicrophoneCaptureMetadata(
+            MicrophoneSelectionMetadata(
+                dji,
+                "pulse",
+                "policy-preferred",
+                "online",
+            ),
+            "pulse-source-output",
+            (
+                MicrophoneRouteObservation(dji, 8),
+                MicrophoneRouteObservation(built_in, 740),
+            ),
+        )
+    )
+    recorder.commit("teacher final")
+    assert runtime.wait_until_idle()
+
+    dataset_root = selected / "openvoiceinput-dataset-v1"
+    marker = json.loads((dataset_root / "dataset.json").read_text(encoding="utf-8"))
+    record_path = dataset_root / "utterances" / "utterance-microphone" / "record.json"
+    document = json.loads(record_path.read_text(encoding="utf-8"))
+    assert marker["schema_version"] == 1
+    assert document["schema_version"] == 2
+    assert document["microphone"]["selection"] == {
+        "backend": "pulse",
+        "category": "dji",
+        "fingerprint": dji.fingerprint,
+        "fingerprint_scope": "device-model",
+        "provenance": "policy-preferred",
+        "dji_link_state_at_selection": "online",
+    }
+    assert [
+        route["category"] for route in document["microphone"]["actual"]["routes"]
+    ] == ["dji", "built-in"]
+    assert document["microphone"]["actual"]["status"] == "observed"
+    assert document["microphone"]["actual"]["route_changed"] is True
+    serialized = json.dumps(document["microphone"])
+    assert "alsa_input" not in serialized
+    assert "serial" not in serialized
     assert runtime.close()
 
 
@@ -446,6 +614,63 @@ def test_enabled_collection_writes_feedback_sidecar_without_mutating_record(tmp_
     assert stat.S_IMODE(event_root.stat().st_mode) == 0o700
     assert stat.S_IMODE(events[0].stat().st_mode) == 0o600
     assert runtime.close()
+
+
+def test_feedback_accepts_owner_private_fuse_style_regular_files(tmp_path):
+    """SSHFS may surface remote 0600 regular files as local 0700 inodes."""
+
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-1")
+    assert recorder is not None
+    recorder.add_audio(b"\x00\x00" * 100)
+    recorder.commit("teacher final")
+    assert runtime.wait_until_idle()
+
+    utterance = selected / "openvoiceinput-dataset-v1" / "utterances" / "utterance-1"
+    (utterance / "audio.wav").chmod(0o700)
+    (utterance / "record.json").chmod(0o700)
+
+    assert runtime.record_feedback("utterance-1", _feedback_document())
+    assert runtime.wait_until_idle()
+    assert runtime.status_code() == "none"
+    assert (
+        len(
+            list(
+                (
+                    selected / "openvoiceinput-dataset-v1" / "feedback" / "utterance-1"
+                ).glob("*.json")
+            )
+        )
+        == 1
+    )
+    assert runtime.close()
+
+
+@pytest.mark.parametrize("unsafe_mode", (0o400, 0o640, 0o644, 0o755))
+def test_private_regular_validation_rejects_unsafe_or_unwritable_modes(
+    tmp_path, unsafe_mode
+):
+    target = tmp_path / "record.json"
+    target.write_text("{}", encoding="utf-8")
+    target.chmod(unsafe_mode)
+
+    with pytest.raises(DataCollectionError, match="incomplete"):
+        data_collection._validate_private_regular_file(target)
+
+
+def test_private_regular_validation_rejects_symlink(tmp_path):
+    target = tmp_path / "record.json"
+    target.write_text("{}", encoding="utf-8")
+    target.chmod(0o600)
+    link = tmp_path / "linked.json"
+    link.symlink_to(target)
+
+    with pytest.raises(DataCollectionError, match="incomplete"):
+        data_collection._validate_private_regular_file(link)
 
 
 def test_feedback_queued_immediately_after_record_preserves_fifo_publication(tmp_path):

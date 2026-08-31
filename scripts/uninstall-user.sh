@@ -585,6 +585,7 @@ fi
 
 commit_complete=true
 rmdir -- "$runtime_root/murmur-ime" 2>/dev/null || true
+rmdir -- "$runtime_root/murmur-ime-private" 2>/dev/null || true
 removed_summary="Open Voice Input Linux user services and managed installed code were removed."
 if [[ $manifest_version == 2 ]]; then
   removed_summary="Open Voice Input Linux user services, desktop entry, icon, and managed installed code were removed."

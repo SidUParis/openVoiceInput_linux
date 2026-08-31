@@ -10,11 +10,14 @@ import pytest
 from murmur_voice.adaptive_runtime import save_adaptive_ledger
 from murmur_voice.adaptive_store import AdaptiveLedger, record_evidence
 from murmur_voice.config import (
+    CorrectionPair,
     load_config,
     load_corrections as load_corrections_file,
     load_vocabulary,
+    save_corrections as save_corrections_file,
 )
 from murmur_voice.data_collection import DataCollectionConfig
+from murmur_voice.control import ControlError, LastReview, ReviewSubmitReply
 from murmur_voice.interaction import InteractionConfig, load_interaction_config
 from murmur_voice.microphone_policy import (
     DEFAULT_MICROPHONE_PRIORITY,
@@ -62,7 +65,13 @@ class RecordingRunner:
         raise AssertionError(f"unexpected action: {action}")
 
 
-def _controller(tmp_path, runner=None, status_reader=None):
+def _controller(
+    tmp_path,
+    runner=None,
+    status_reader=None,
+    review_reader=None,
+    review_submitter=None,
+):
     options = {
         "config_path": tmp_path / "private" / "voice.json",
         "vocabulary_path": tmp_path / "private" / "vocabulary.json",
@@ -77,6 +86,10 @@ def _controller(tmp_path, runner=None, status_reader=None):
     }
     if status_reader is not None:
         options["status_reader"] = status_reader
+    if review_reader is not None:
+        options["review_reader"] = review_reader
+    if review_submitter is not None:
+        options["review_submitter"] = review_submitter
     return SettingsController(**options)
 
 
@@ -326,12 +339,53 @@ def test_adaptive_snapshot_exposes_counts_recent_reason_and_confirmable_candidat
     assert snapshot.last_result is None
     assert len(snapshot.review_entries) == 1
     assert snapshot.review_entries[0].state == "candidate"
+    assert snapshot.provider_view == {
+        "explicit_vocabulary_count": 0,
+        "manual_correction_count": 0,
+        "effective_correction_count": 0,
+        "manual_effective_count": 0,
+        "adaptive_effective_count": 0,
+        "adaptive_suppressed_count": 0,
+        "suppression_reasons": {},
+    }
 
     assert controller.confirm_adaptive_learning("Ostro", "Austral") is True
     confirmed = controller.load_adaptive_learning()
     assert confirmed.statistics["active"] == 1
     assert confirmed.statistics["candidate"] == 0
     assert confirmed.last_result["reason_code"] == "explicitly-activated"
+    assert confirmed.provider_view["adaptive_effective_count"] == 1
+    assert confirmed.provider_view["effective_correction_count"] == 1
+
+
+def test_adaptive_confirmation_reason_names_manual_conflict_without_pair_leak(
+    tmp_path,
+):
+    controller = _controller(tmp_path)
+    adaptive = tmp_path / "private" / "adaptive-corrections.json"
+    corrections = tmp_path / "private" / "corrections.json"
+    ledger = record_evidence(
+        AdaptiveLedger(),
+        "private wrong",
+        "private learned target",
+        state="candidate",
+        category="recognition",
+        evidence="medium",
+    )
+    save_adaptive_ledger(ledger, adaptive)
+    save_corrections_file(
+        (CorrectionPair("private wrong", "private manual target"),), corrections
+    )
+
+    reason = controller.confirm_adaptive_learning_reason(
+        "private wrong", "private learned target"
+    )
+    snapshot = controller.load_adaptive_learning()
+
+    assert reason == "explicitly-suppressed-manual-source"
+    assert "private" not in reason
+    assert snapshot.provider_view["manual_effective_count"] == 1
+    assert snapshot.provider_view["adaptive_suppressed_count"] == 1
 
 
 def test_explicit_adaptive_feedback_is_available_when_auto_capture_is_absent(tmp_path):
@@ -346,6 +400,83 @@ def test_explicit_adaptive_feedback_is_available_when_auto_capture_is_absent(tmp
     snapshot = controller.load_adaptive_learning()
     assert snapshot.statistics["active"] == 2
     assert snapshot.last_result["reason_code"] == "explicit-feedback-activated"
+
+
+def test_last_review_uses_only_host_private_reader_and_hides_repr(tmp_path):
+    private_text = "private provider final"
+    controller = _controller(
+        tmp_path,
+        review_reader=lambda: LastReview("utterance-1", private_text),
+    )
+
+    review = controller.load_last_review()
+
+    assert review is not None
+    assert review.provider_text == private_text
+    assert private_text not in repr(review)
+
+
+def test_last_review_unavailable_is_content_free(tmp_path):
+    controller = _controller(
+        tmp_path,
+        review_reader=lambda: (_ for _ in ()).throw(
+            ControlError("review service is unavailable")
+        ),
+    )
+
+    with pytest.raises(SettingsError, match="could not be loaded safely") as raised:
+        controller.load_last_review()
+
+    assert "provider" not in str(raised.value).lower()
+
+
+def test_id_bound_review_submission_uses_daemon_transaction(tmp_path):
+    calls = []
+    expected = ReviewSubmitReply(
+        True,
+        "review-submitted",
+        "explicit-feedback-activated",
+        "feedback-queued",
+    )
+    controller = _controller(
+        tmp_path,
+        review_submitter=lambda utterance_id, spoken: (
+            calls.append((utterance_id, spoken)) or expected
+        ),
+    )
+
+    result = controller.submit_last_review("utterance-1", "actual speech")
+
+    assert result == expected
+    assert calls == [("utterance-1", "actual speech")]
+
+
+def test_stale_review_submission_has_fixed_safe_error(tmp_path):
+    controller = _controller(
+        tmp_path,
+        review_submitter=lambda utterance_id, spoken: (_ for _ in ()).throw(
+            ControlError("stale-review")
+        ),
+    )
+
+    with pytest.raises(SettingsError, match="expired or was replaced") as raised:
+        controller.submit_last_review("utterance-1", "private spoken text")
+
+    assert "private spoken text" not in str(raised.value)
+
+
+def test_active_session_review_submission_has_actionable_safe_error(tmp_path):
+    controller = _controller(
+        tmp_path,
+        review_submitter=lambda utterance_id, spoken: (_ for _ in ()).throw(
+            ControlError("session-active")
+        ),
+    )
+
+    with pytest.raises(SettingsError, match="结束当前听写") as raised:
+        controller.submit_last_review("utterance-1", "private spoken text")
+
+    assert "private spoken text" not in str(raised.value)
 
 
 def test_status_start_and_stop_use_only_fixed_argv_without_a_shell(tmp_path):

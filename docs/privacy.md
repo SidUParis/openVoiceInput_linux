@@ -77,6 +77,21 @@ polishing, text outside the span, focus/private-context changes, timeout, and
 missing surrounding-text support produce no learned entry. Another dictation
 toggle may finish the observation early.
 
+If surrounding text is unsupported, the previous IBus engine is restored
+immediately. A separate explicit `--review-last` workflow can load the latest
+accepted provider final from daemon memory. It expires after ten minutes, is
+replaced by the next accepted final, and is cleared on daemon shutdown. The
+host-only review socket lives under a separate private runtime directory not
+mounted into the compatibility Flatpak. The transcript is never put in argv,
+logs, or a persistent review file.
+
+The review submission is bound to the still-current, unexpired utterance ID.
+Only the daemon updates the adaptive ledger and offers the bounded result to
+the optional dataset feedback writer. A successful ledger update consumes the
+review once; stale, replaced, expired, and duplicate submissions are rejected.
+The UI reports feedback as disabled, enqueue-failed, or queued and awaiting
+final publication, rather than treating asynchronous enqueue as durable save.
+
 The changed block is bounded to three lexical tokens per side and must meet a
 conservative similarity floor. A one-character source is learned only when it
 can be expanded through an unchanged adjacent lexical token; case-only spelling
@@ -89,6 +104,10 @@ does not persist that snapshot. Manual corrections take priority; conflicted,
 overlapping, cascading, or cyclic adaptive rules are suppressed. The combined
 manual/adaptive provider view is still capped at 50 pairs and is reloaded at the
 next dictation without a daemon restart.
+
+The review window labels the provider text as read-only and accepts only what
+the user actually said verbatim. Removing fillers or polishing expression is a
+different preferred-output task and must not silently become ASR gold.
 
 ## Input-context safety
 
@@ -142,7 +161,9 @@ Each atomically published `utterances/<utterance_id>/` contains:
 - `audio.wav`: the exact captured 16 kHz, mono, signed 16-bit PCM for the
   accepted utterance;
 - `record.json`: versioned identifiers, time, audio format/frame counts and
-  hashes, provider/model identity, and three deliberately separate labels;
+  hashes, provider/model identity, privacy-preserving microphone provenance,
+  post-hoc numeric PCM quality summaries, and three deliberately separate
+  labels;
 - `provider_final.text`: the authoritative result from the selected provider,
   labelled
   `teacher-unreviewed`, which is a pseudo-label rather than ground truth;
@@ -153,6 +174,12 @@ The immutable utterance record remains exactly `audio.wav` + `record.json`.
 After it is published, the dataset-level `usage/<utterance_id>.json` index adds
 only time, audio duration and non-whitespace character count for private
 dashboard totals.
+
+PCM quality analysis runs only in the background writer after final acceptance.
+It records bounded overall/first-second sample counts, clipped and zero
+fractions, RMS/peak dBFS, and normalized DC offset. It does not classify a
+record as good/bad, drop or alter audio, delay capture startup, or inspect
+speech content.
 
 Dashboard aggregation runs outside the GTK thread and reads only the dataset
 marker plus `usage/<utterance_id>.json`. It never reads or displays
@@ -193,5 +220,23 @@ from its still-enumerated but silent receiver. Proven online makes DJI eligible
 at its configured position; proven offline excludes it; unknown does not promote
 it ahead of a known-working alternative. The probe does not retain or log USB
 frames or identifiers. Selection never changes a playback sink or requests a
-system default-source change. There is no mid-utterance handoff: link or device
-changes are considered at the next dictation.
+system default-source change. The daemon does not request a mid-utterance
+handoff: link or device changes are considered at the next dictation. A separate
+desktop router may nevertheless move the already-open Pulse source-output. A
+read-only background observer therefore records the actual route category and a
+bounded transition list without delaying or filtering audio.
+
+Until that source-output match succeeds, the dataset explicitly records actual
+route status as `unknown`; it does not relabel the intended selection as the
+actual microphone. Enumeration is front-loaded around stream open, backs off to
+five seconds, caches already-seen source indexes, and stops at a fixed route
+transition bound rather than continuously spawning high-frequency probes.
+
+Dataset microphone metadata never stores raw Pulse source names, USB serials,
+Bluetooth addresses, or user-visible hardware labels. Its stable fingerprint
+is derived only from allowlisted category, transport, form factor, and numeric
+vendor/product model identifiers. It is deliberately not a globally unique
+device identifier, and identical models may share it. The observer runs only
+for an active opted-in Pulse dataset capture, uses read-only
+source/source-output enumeration, and never changes a sink, volume, mute state,
+default source, or stream route.

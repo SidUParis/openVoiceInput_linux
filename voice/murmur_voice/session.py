@@ -10,6 +10,12 @@ from typing import Any
 
 from .audio import AudioCapture, AudioDeviceError, MicrophonePolicyError
 from .config import ConfigError, VoiceConfig
+from .control import (
+    MAX_REVIEW_TEXT_CODEPOINTS,
+    MAX_REVIEW_TEXT_UTF8_BYTES,
+    LastReview,
+    ReviewSubmitReply,
+)
 from .data_collection import DataCollectionError
 from .preedit import AcquireResult, PreeditClient
 from .state import CommandReply, VoiceState
@@ -33,6 +39,7 @@ VOICE_START_TIMEOUT_SECONDS = 35.0
 VOICE_START_CLEANUP_TIMEOUT_SECONDS = 8.0
 ADAPTIVE_OBSERVATION_SECONDS = 5.0
 ADAPTIVE_OBSERVATION_FINISH_MARGIN_SECONDS = 0.5
+LAST_REVIEW_TTL_SECONDS = 10 * 60.0
 
 
 class _VoiceStartTimeout(RuntimeError):
@@ -61,7 +68,10 @@ class VoiceSession:
         start_timeout_seconds: float = VOICE_START_TIMEOUT_SECONDS,
         observation_handler: Any | None = None,
         observation_result_handler: Any | None = None,
+        explicit_feedback_handler: Any | None = None,
         observation_seconds: float = ADAPTIVE_OBSERVATION_SECONDS,
+        last_review_ttl_seconds: float = LAST_REVIEW_TTL_SECONDS,
+        last_review_timer_factory: Any | None = None,
         data_collection_factory: Any | None = None,
         data_collection_status_reader: Any | None = None,
         data_collection_feedback_writer: Any | None = None,
@@ -85,7 +95,13 @@ class VoiceSession:
         self._start_timeout_seconds = max(1.0, float(start_timeout_seconds))
         self._observation_handler = observation_handler
         self._observation_result_handler = observation_result_handler
+        self._explicit_feedback_handler = explicit_feedback_handler
         self._observation_seconds = max(0.1, min(30.0, float(observation_seconds)))
+        self._last_review_ttl_seconds = max(
+            1.0,
+            min(LAST_REVIEW_TTL_SECONDS, float(last_review_ttl_seconds)),
+        )
+        self._last_review_timer_factory = last_review_timer_factory or threading.Timer
         self._data_collection_factory = data_collection_factory
         self._data_collection_status_reader = data_collection_status_reader
         self._data_collection_feedback_writer = data_collection_feedback_writer
@@ -106,6 +122,10 @@ class VoiceSession:
         self._closed = False
         self._session_serial = 0
         self._data_record: Any | None = None
+        self._last_review: LastReview | None = None
+        self._last_review_deadline: float | None = None
+        self._last_review_timer: Any | None = None
+        self._last_review_generation = 0
 
     @property
     def state(self) -> VoiceState:
@@ -132,6 +152,54 @@ class VoiceSession:
             else:
                 code = "status"
             return CommandReply(True, code, self._state)
+
+    def review_last(self) -> LastReview | None:
+        """Return one recent accepted final without persisting or logging it."""
+
+        with self._lock:
+            return self._current_last_review_locked()
+
+    def submit_last_review(
+        self,
+        utterance_id: str,
+        spoken_verbatim: str,
+    ) -> ReviewSubmitReply:
+        """Atomically learn and queue feedback for the current review only."""
+
+        with self._lock:
+            if self._state is not VoiceState.IDLE:
+                return ReviewSubmitReply(False, "session-active")
+            review = self._current_last_review_locked()
+            if review is None or utterance_id != review.utterance_id:
+                return ReviewSubmitReply(False, "stale-review")
+            if (
+                not isinstance(spoken_verbatim, str)
+                or not spoken_verbatim
+                or "\x00" in spoken_verbatim
+                or len(spoken_verbatim) > MAX_REVIEW_TEXT_CODEPOINTS
+                or len(spoken_verbatim.encode("utf-8")) > MAX_REVIEW_TEXT_UTF8_BYTES
+            ):
+                return ReviewSubmitReply(False, "invalid-request")
+            handler = self._explicit_feedback_handler
+            if handler is None:
+                return ReviewSubmitReply(False, "review-unavailable")
+            try:
+                result = handler(review.provider_text, spoken_verbatim)
+                reason_code = getattr(result, "reason_code", None)
+                if not isinstance(reason_code, str) or not reason_code:
+                    raise ValueError("invalid explicit feedback result")
+            except Exception:
+                # Neither input sentence may appear in diagnostics.
+                logger.error("Explicit adaptive correction update failed")
+                return ReviewSubmitReply(False, "review-failed")
+            feedback_code = self._write_data_feedback_locked(utterance_id, result)
+            self._clear_last_review_locked()
+            return ReviewSubmitReply(
+                True,
+                "review-submitted",
+                reason_code,
+                feedback_code,
+            )
 
     def start(self) -> CommandReply:
         with self._lock:
@@ -205,11 +273,32 @@ class VoiceSession:
                 self._revision = 1
                 self._require_start_time(start_deadline)
                 self._begin_data_record_locked(utterance_id, asr)
+                data_record = self._data_record
+                metadata_callback_setter = getattr(
+                    self._audio,
+                    "set_source_metadata_callback",
+                    None,
+                )
+                record_metadata_setter = getattr(
+                    data_record,
+                    "set_microphone_metadata",
+                    None,
+                )
+                if callable(metadata_callback_setter) and callable(
+                    record_metadata_setter
+                ):
+                    try:
+                        metadata_callback_setter(record_metadata_setter)
+                    except Exception:
+                        # Optional provenance cannot block capture and the
+                        # exception may contain a private device name.
+                        logger.error(
+                            "Optional microphone provenance could not be attached"
+                        )
                 # The provider immediately returns after creating its private
                 # event-loop thread. Network work never runs in the IBus engine.
                 asr.connect()
                 self._require_start_time(start_deadline)
-                data_record = self._data_record
                 self._audio.start(
                     lambda data: self._send_audio_chunk(asr, data_record, data)
                 )
@@ -317,6 +406,7 @@ class VoiceSession:
                 return
             if self._state is not VoiceState.IDLE:
                 self._abort_locked("daemon-shutdown")
+            self._clear_last_review_locked()
             self._closed = True
             self._preedit.close()
 
@@ -391,9 +481,30 @@ class VoiceSession:
                 return
 
             collection_failed = not self._commit_data_record_locked(provider_final)
+            self._remember_last_review_locked(utterance_id, provider_final)
             self._last_error_code = (
                 "data-collection-failed" if collection_failed else "none"
             )
+            if getattr(self._preedit, "observation_supported", None) is False:
+                observation_result = None
+                if self._observation_result_handler is not None:
+                    try:
+                        observation_result = self._observation_result_handler(
+                            "surrounding-text-unavailable"
+                        )
+                    except Exception:
+                        logger.error("Adaptive correction outcome could not be saved")
+                        if not collection_failed:
+                            self._last_error_code = "adaptive-correction-failed"
+                if observation_result is not None:
+                    self._write_data_feedback_locked(
+                        utterance_id,
+                        observation_result,
+                    )
+                    if not collection_failed:
+                        self._last_error_code = "adaptive-correction-skipped"
+                self._clear_sensitive_state_locked()
+                return
             self._revision = 0
             self._latest_text = ""
             self._duration_warning = False
@@ -562,19 +673,21 @@ class VoiceSession:
         self,
         utterance_id: str,
         observation_result: Any,
-    ) -> None:
+    ) -> str:
         writer = self._data_collection_feedback_writer
         if writer is None:
-            return
+            return "feedback-disabled"
         serializer = getattr(observation_result, "as_feedback_document", None)
         if not callable(serializer):
-            return
+            return "feedback-failed"
         try:
-            writer(utterance_id, serializer())
+            queued = writer(utterance_id, serializer())
         except Exception:
             # Feedback is optional and must not break dictation or expose text.
             logger.error("Optional local correction feedback could not be saved")
             self._last_error_code = "data-collection-failed"
+            return "feedback-failed"
+        return "feedback-queued" if queued is True else "feedback-disabled"
 
     def _abort_locked(self, code: str) -> None:
         self._cancel_warning_timer_locked()
@@ -622,6 +735,58 @@ class VoiceSession:
         self._latest_text = ""
         self._duration_warning = False
         self._observation_deadline = None
+
+    def _clear_last_review_locked(self) -> None:
+        self._last_review_generation += 1
+        timer = self._last_review_timer
+        self._last_review_timer = None
+        if timer is not None:
+            timer.cancel()
+        self._last_review = None
+        self._last_review_deadline = None
+
+    def _current_last_review_locked(self) -> LastReview | None:
+        deadline = self._last_review_deadline
+        if (
+            self._last_review is None
+            or deadline is None
+            or self._monotonic() >= deadline
+        ):
+            self._clear_last_review_locked()
+            return None
+        return self._last_review
+
+    def _remember_last_review_locked(
+        self,
+        utterance_id: str,
+        provider_final: str,
+    ) -> None:
+        self._clear_last_review_locked()
+        deadline = self._monotonic() + self._last_review_ttl_seconds
+        generation = self._last_review_generation
+        self._last_review = LastReview(utterance_id, provider_final)
+        self._last_review_deadline = deadline
+        timer = self._last_review_timer_factory(
+            self._last_review_ttl_seconds,
+            lambda: self._on_last_review_timeout(generation),
+        )
+        if hasattr(timer, "daemon"):
+            timer.daemon = True
+        self._last_review_timer = timer
+        try:
+            timer.start()
+        except Exception:
+            # Failure to arm the privacy TTL must fail closed: dictation has
+            # already succeeded, but no review text may remain unbounded.
+            self._last_review_timer = None
+            self._last_review = None
+            self._last_review_deadline = None
+
+    def _on_last_review_timeout(self, generation: int) -> None:
+        with self._lock:
+            if self._last_review_generation != generation:
+                return
+            self._clear_last_review_locked()
 
     def _begin_data_record_locked(self, utterance_id: str, asr: Any) -> None:
         self._data_record = None

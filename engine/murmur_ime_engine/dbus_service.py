@@ -48,6 +48,10 @@ INTROSPECTION_XML = f"""
       <arg name="cursor" type="u" direction="out"/>
       <arg name="anchor" type="u" direction="out"/>
     </method>
+    <method name="ObservationSupported">
+      <arg name="utterance_id" type="s" direction="in"/>
+      <arg name="supported" type="b" direction="out"/>
+    </method>
     <method name="Cancel">
       <arg name="utterance_id" type="s" direction="in"/>
       <arg name="accepted" type="b" direction="out"/>
@@ -217,6 +221,19 @@ class PreeditDBusService:
                 logger.error("Preedit D-Bus method failed")
                 result = ObservationResult()
             self._return_observation(invocation, result)
+            return
+
+        if method_name == "ObservationSupported":
+            try:
+                (utterance_id,) = parameters.unpack()
+                supported = bool(
+                    valid_utterance_id(utterance_id)
+                    and self._registry.observation_supported(sender, utterance_id)
+                )
+            except Exception:
+                logger.error("Preedit D-Bus method failed")
+                supported = False
+            self._return_bool(invocation, supported)
             return
 
         try:

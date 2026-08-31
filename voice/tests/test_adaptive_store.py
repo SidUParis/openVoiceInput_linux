@@ -11,6 +11,7 @@ from murmur_voice.adaptive_store import (
     AdaptiveStoreError,
     activate_correction,
     adaptive_statistics,
+    compile_provider_correction_report,
     compile_provider_corrections,
     normalized_key,
     parse_adaptive_ledger,
@@ -499,6 +500,78 @@ def test_limit_validation_is_bounded_by_provider_contract():
             AdaptiveLedger(),
             limit=MAX_CORRECTION_PAIRS + 1,
         )
+
+
+def test_provider_report_explains_active_suppression_without_exposing_pairs():
+    manual = (CorrectionPair("manual source", "manual target"),)
+    ledger = AdaptiveLedger(
+        entries=(
+            AdaptiveEntry("manual source", "other target"),
+            AdaptiveEntry("cycle a", "cycle b"),
+            AdaptiveEntry("cycle b", "cycle a"),
+            AdaptiveEntry("long overlapping source", "stable long target"),
+            AdaptiveEntry("source", "stable short target"),
+        )
+    )
+
+    report = compile_provider_correction_report(manual, ledger)
+
+    assert report.status_for("manual source", "other target") == (
+        "suppressed-manual-source"
+    )
+    assert report.status_for("cycle a", "cycle b") == "suppressed-cycle"
+    assert report.status_for("cycle b", "cycle a") == "suppressed-cycle"
+    assert report.status_for("long overlapping source", "stable long target") == (
+        "effective-adaptive"
+    )
+    assert report.status_for("source", "stable short target") == ("suppressed-overlap")
+    statistics = report.statistics()
+    assert statistics["effective_correction_count"] == 2
+    assert statistics["manual_effective_count"] == 1
+    assert statistics["adaptive_effective_count"] == 1
+    assert statistics["adaptive_suppressed_count"] == 4
+    assert statistics["suppression_reasons"] == {
+        "suppressed-cycle": 2,
+        "suppressed-manual-source": 1,
+        "suppressed-overlap": 1,
+    }
+    assert "manual source" not in repr(report)
+    assert "other target" not in repr(report)
+    assert "manual source" not in str(statistics)
+
+
+def test_provider_report_distinguishes_conflict_cascade_and_capacity():
+    conflict = AdaptiveLedger(
+        entries=(
+            AdaptiveEntry("same source", "first"),
+            AdaptiveEntry("SAME SOURCE", "second"),
+        )
+    )
+    conflict_report = compile_provider_correction_report((), conflict)
+    assert conflict_report.status_for("same source", "first") == (
+        "suppressed-conflicting-active"
+    )
+    assert conflict_report.status_for("same source", "second") == (
+        "suppressed-conflicting-active"
+    )
+
+    cascade = AdaptiveLedger(entries=(AdaptiveEntry("manual target", "final target"),))
+    cascade_report = compile_provider_correction_report(
+        (CorrectionPair("manual source", "manual target"),), cascade
+    )
+    assert cascade_report.status_for("manual target", "final target") == (
+        "suppressed-cascade"
+    )
+
+    full_manual = tuple(
+        CorrectionPair(f"manual-{index}", f"target-{index}")
+        for index in range(MAX_CORRECTION_PAIRS)
+    )
+    capacity_report = compile_provider_correction_report(
+        full_manual,
+        AdaptiveLedger(entries=(AdaptiveEntry("learned", "canonical"),)),
+    )
+    assert capacity_report.status_for("learned", "canonical") == ("suppressed-capacity")
 
 
 def test_direct_dataclass_values_receive_the_same_strict_validation():

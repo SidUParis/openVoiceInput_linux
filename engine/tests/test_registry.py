@@ -70,6 +70,14 @@ class FakeEngine:
             anchor=5 if self.observation_available else 0,
         )
 
+    def observation_supported(self, owner: str, utterance_id: str) -> bool:
+        return bool(
+            owner == self.owner
+            and utterance_id == self.utterance_id
+            and self.final_seen
+            and self.observation_available
+        )
+
     def cancel(self, owner: str, utterance_id: str) -> bool:
         if owner != self.owner or utterance_id != self.utterance_id:
             return False
@@ -109,6 +117,8 @@ class RegistryTests(unittest.TestCase):
         self.assertTrue(registry.final(":1.2", "u1", 2, "final"))
         self.assertFalse(registry.final(":1.2", "u1", 3, "duplicate"))
         self.assertTrue(engine.has_active_session)
+        self.assertTrue(registry.observation_supported(":1.2", "u1"))
+        self.assertFalse(registry.observation_supported(":1.3", "u1"))
         result = registry.finish_observation(":1.2", "u1")
         self.assertTrue(result.accepted)
         self.assertFalse(engine.has_active_session)

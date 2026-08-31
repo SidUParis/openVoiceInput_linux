@@ -23,6 +23,16 @@ ADAPTIVE_STATES: frozenset[str] = frozenset(
 )
 AdaptiveCategory = Literal["recognition", "terminology", "formatting"]
 AdaptiveEvidence = Literal["strong", "medium", "explicit"]
+ProviderCorrectionStatus = Literal[
+    "effective-manual",
+    "effective-adaptive",
+    "suppressed-manual-source",
+    "suppressed-conflicting-active",
+    "suppressed-cycle",
+    "suppressed-cascade",
+    "suppressed-overlap",
+    "suppressed-capacity",
+]
 ADAPTIVE_CATEGORIES = frozenset({"recognition", "terminology", "formatting"})
 ADAPTIVE_EVIDENCE = frozenset({"strong", "medium", "explicit"})
 MAX_ADAPTIVE_RESULT_COUNT = MAX_ADAPTIVE_ENTRIES
@@ -63,6 +73,74 @@ class AdaptiveLedger:
     entries: tuple[AdaptiveEntry, ...] = field(default=(), repr=False)
     last_result: AdaptiveLastResult | None = None
     version: int = ADAPTIVE_CORRECTIONS_SCHEMA_VERSION
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ProviderCorrectionDecision:
+    """One content-private compiler decision for an active correction."""
+
+    wrong: str
+    canonical: str
+    origin: Literal["manual", "adaptive"]
+    status: ProviderCorrectionStatus
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ProviderCorrectionReport:
+    """The exact bounded provider view plus content-free diagnostics."""
+
+    pairs: tuple[CorrectionPair, ...] = field(default=(), repr=False)
+    decisions: tuple[ProviderCorrectionDecision, ...] = field(default=(), repr=False)
+
+    def status_for(self, wrong: str, canonical: str) -> ProviderCorrectionStatus | None:
+        """Return the effective/suppressed decision for one normalized pair."""
+
+        identity = (normalized_key(wrong), normalized_key(canonical))
+        # A matching explicit rule is authoritative even when the adaptive
+        # ledger retains the same pair for evidence/history.
+        for decision in self.decisions:
+            if decision.origin != "manual":
+                continue
+            if (
+                normalized_key(decision.wrong),
+                normalized_key(decision.canonical),
+            ) == identity:
+                return decision.status
+        for decision in self.decisions:
+            if decision.origin != "adaptive":
+                continue
+            if (
+                normalized_key(decision.wrong),
+                normalized_key(decision.canonical),
+            ) == identity:
+                return decision.status
+        return None
+
+    def statistics(self) -> dict[str, Any]:
+        """Return only counts and allowlisted reason codes, never pair text."""
+
+        manual_effective = sum(
+            decision.status == "effective-manual" for decision in self.decisions
+        )
+        adaptive_effective = sum(
+            decision.status == "effective-adaptive" for decision in self.decisions
+        )
+        suppression_reasons: dict[str, int] = {}
+        for decision in self.decisions:
+            if decision.origin != "adaptive" or not decision.status.startswith(
+                "suppressed-"
+            ):
+                continue
+            suppression_reasons[decision.status] = (
+                suppression_reasons.get(decision.status, 0) + 1
+            )
+        return {
+            "effective_correction_count": len(self.pairs),
+            "manual_effective_count": manual_effective,
+            "adaptive_effective_count": adaptive_effective,
+            "adaptive_suppressed_count": sum(suppression_reasons.values()),
+            "suppression_reasons": dict(sorted(suppression_reasons.items())),
+        }
 
 
 def parse_adaptive_ledger(document: Any) -> AdaptiveLedger:
@@ -338,12 +416,34 @@ def compile_provider_corrections(
     truncated when the provider limit is reached.
     """
 
+    return compile_provider_correction_report(
+        manual_pairs,
+        ledger,
+        limit=limit,
+    ).pairs
+
+
+def compile_provider_correction_report(
+    manual_pairs: Iterable[CorrectionPair],
+    ledger: AdaptiveLedger,
+    *,
+    limit: int = MAX_CORRECTION_PAIRS,
+) -> ProviderCorrectionReport:
+    """Compile the exact provider view and explain every active suppression.
+
+    The report is deliberately private-by-construction: pair text is excluded
+    from ``repr`` and its public statistics contain only counts and fixed
+    reason codes.  ``compile_provider_corrections`` remains the provider-facing
+    compatibility API and delegates to this single implementation.
+    """
+
     if type(limit) is not int or limit < 0 or limit > MAX_CORRECTION_PAIRS:
         raise AdaptiveStoreError("provider correction limit is invalid")
     validated = _validated_ledger(ledger)
 
     manual = tuple(_coerce_manual_pair(pair) for pair in manual_pairs)
     selected: list[CorrectionPair] = []
+    decisions: list[ProviderCorrectionDecision] = []
     seen_manual_exact: set[tuple[str, str]] = set()
     for pair in manual:
         exact = (pair.wrong, pair.canonical)
@@ -352,8 +452,23 @@ def compile_provider_corrections(
         seen_manual_exact.add(exact)
         if len(selected) < limit:
             selected.append(pair)
-    if len(selected) >= limit:
-        return tuple(selected)
+            decisions.append(
+                ProviderCorrectionDecision(
+                    pair.wrong,
+                    pair.canonical,
+                    "manual",
+                    "effective-manual",
+                )
+            )
+        else:
+            decisions.append(
+                ProviderCorrectionDecision(
+                    pair.wrong,
+                    pair.canonical,
+                    "manual",
+                    "suppressed-capacity",
+                )
+            )
 
     manual_source_keys = {normalized_key(pair.wrong) for pair in manual}
     manual_canonical_keys = {normalized_key(pair.canonical) for pair in manual}
@@ -374,6 +489,11 @@ def compile_provider_corrections(
         for entry in active
         if len(canonicals_by_source[normalized_key(entry.wrong)]) == 1
     ]
+    ambiguous_sources = {
+        source
+        for source, canonicals in canonicals_by_source.items()
+        if len(canonicals) > 1
+    }
 
     adaptive_graph = dict(manual_graph)
     for entry in unambiguous:
@@ -420,12 +540,27 @@ def compile_provider_corrections(
             if other_source in learned_source_keys:
                 cascade_sources.add(other_source)
 
+    status_by_identity: dict[tuple[str, str], ProviderCorrectionStatus] = {}
+    for entry in active:
+        source = normalized_key(entry.wrong)
+        identity = (source, normalized_key(entry.canonical))
+        if source in manual_source_keys:
+            status_by_identity[identity] = "suppressed-manual-source"
+        elif source in ambiguous_sources:
+            status_by_identity[identity] = "suppressed-conflicting-active"
+        elif source in cyclic_sources:
+            status_by_identity[identity] = "suppressed-cycle"
+        elif source in cascade_sources:
+            status_by_identity[identity] = "suppressed-cascade"
+
     candidates = [
         entry
         for entry in unambiguous
-        if normalized_key(entry.wrong) not in manual_source_keys
-        and normalized_key(entry.wrong) not in cyclic_sources
-        and normalized_key(entry.wrong) not in cascade_sources
+        if (
+            normalized_key(entry.wrong),
+            normalized_key(entry.canonical),
+        )
+        not in status_by_identity
     ]
     candidates.sort(
         key=lambda entry: (
@@ -442,16 +577,40 @@ def compile_provider_corrections(
     emitted_adaptive_sources: set[str] = set()
     for entry in candidates:
         source = normalized_key(entry.wrong)
+        identity = (source, normalized_key(entry.canonical))
         if source in emitted_adaptive_sources:
             continue
+        if len(selected) >= limit:
+            status_by_identity[identity] = "suppressed-capacity"
+            continue
         if any(_sources_overlap(source, reserved) for reserved in reserved_sources):
+            status_by_identity[identity] = "suppressed-overlap"
             continue
         selected.append(CorrectionPair(entry.wrong, entry.canonical))
+        status_by_identity[identity] = "effective-adaptive"
         emitted_adaptive_sources.add(source)
         reserved_sources.append(source)
-        if len(selected) >= limit:
-            break
-    return tuple(selected)
+
+    for entry in active:
+        identity = (
+            normalized_key(entry.wrong),
+            normalized_key(entry.canonical),
+        )
+        status = status_by_identity.get(identity)
+        if status is None:
+            # A same-source duplicate cannot survive ledger validation unless
+            # its canonical differs, which is classified above as conflict.
+            # Keep this fail-closed fallback content-free and capacity-safe.
+            status = "suppressed-overlap"
+        decisions.append(
+            ProviderCorrectionDecision(
+                entry.wrong,
+                entry.canonical,
+                "adaptive",
+                status,
+            )
+        )
+    return ProviderCorrectionReport(tuple(selected), tuple(decisions))
 
 
 def normalized_key(text: str) -> str:

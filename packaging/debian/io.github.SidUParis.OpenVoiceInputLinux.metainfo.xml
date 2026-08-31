@@ -54,6 +54,15 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.0-alpha.6" date="2026-09-01">
+      <description>
+        <p>
+          Ubuntu 24.04 alpha with privacy-safe microphone provenance,
+          post-capture quality evidence, explicit review-last correction, and
+          verified provider-effective correction counts.
+        </p>
+      </description>
+    </release>
     <release version="0.1.0-alpha.5" date="2026-08-31">
       <description>
         <p>

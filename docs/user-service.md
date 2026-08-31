@@ -267,6 +267,46 @@ sentence polishing, changes outside the original span, focus/private-context
 changes, timeout, and unsupported surrounding text. The next `toggle` finishes
 observation early and proceeds to the next dictation.
 
+Chromium's GTK input-method path does not currently provide this surrounding
+text: its current
+[`InputMethodContextImplGtk::SetSurroundingText`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/ui/gtk/input_method_context_impl_gtk.cc)
+implementation is empty. When the engine reports that capability as unavailable, Murmur consumes
+the empty observation and restores the previous IBus engine immediately. It
+does not wait five seconds or weaken the focus/private-input checks.
+
+For an explicit cross-application review, run:
+
+```bash
+open-voice-input-settings --review-last
+```
+
+The daemon keeps only the latest accepted `provider_final` and utterance ID in
+memory for ten minutes. A new accepted result replaces it and daemon shutdown
+clears it. The host settings process reads it through
+`$XDG_RUNTIME_DIR/murmur-ime-private/review.sock`; that parent is `0700`, the
+socket is `0600`, and it is deliberately outside the separately delivered
+Flatpak controller's `murmur-ime` runtime mount. No transcript is placed in an
+argument, log, or persistent file. The provider original is read-only in the
+window. Only an explicit user-edited verbatim statement is submitted to the
+existing bounded correction extractor. Filler removal, rewriting, and
+polishing are not verbatim ASR labels.
+
+Submission returns the review ID and verbatim text to that same host-only
+socket. The daemon rejects an expired ID or one replaced by a newer accepted
+final. It alone calls the adaptive updater and, when collection is enabled,
+queues `result.as_feedback_document()` through the existing
+`DataCollectionRuntime.record_feedback()` writer under the same utterance ID.
+The review is consumed after the ledger update, including when optional
+sidecar enqueue fails, so a duplicate cannot increase support twice. The UI
+distinguishes collection disabled, enqueue failure, and queued-but-not-yet-
+published feedback. Asynchronous queue acceptance is never described as final
+storage success.
+
+The older direct settings-controller helper remains an explicit offline/manual
+fallback for administering correction rules without a running daemon. It does
+not claim an utterance ID or training-data sidecar and is never selected as an
+automatic fallback from the ID-bound review window.
+
 The changed block is limited to three lexical tokens on each side and must
 meet a conservative similarity floor. A one-character source must expand
 through an unchanged adjacent lexical token; case-only spelling corrections
