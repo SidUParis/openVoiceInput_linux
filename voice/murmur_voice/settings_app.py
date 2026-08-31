@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 import gi
 
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .microphone_policy import (  # noqa: E402
