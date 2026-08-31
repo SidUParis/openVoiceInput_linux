@@ -81,6 +81,12 @@ provider-text / preferred-text fallback for applications without trustworthy
 IBus surrounding-text support. It does not monitor global keys, AT-SPI, the
 clipboard, Rime history, or unrelated text.
 
+Explicit vocabulary and manual corrections are optional files created only by
+an explicit save. Adaptive learning uses a separate private ledger. Settings
+distinguishes all three sources from the exact correction context compiled for
+the next provider request, so a missing manual file is not presented as an
+adaptive-learning failure.
+
 This event-driven observation is enabled by default after a nonempty final in
 the current alpha; the Settings window does not yet expose a disable switch.
 The next toggle, focus loss, cancellation or timeout ends it.

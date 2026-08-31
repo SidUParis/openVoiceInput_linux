@@ -5,6 +5,84 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.6] - 2026-09-01
+
+### Added
+
+- New opted-in dataset records distinguish the microphone selected by policy
+  from the actual Pulse source-output observed during capture. They retain only
+  category, a privacy-safe non-unique fingerprint, selection/link provenance,
+  and a bounded route-transition list—never raw source names, USB serials,
+  Bluetooth addresses, or custom hardware labels.
+- The background dataset writer adds numeric whole-record/first-second PCM
+  clipping, RMS/peak, DC-offset, and zero-fraction evidence for later review.
+  It neither filters nor changes recordings and never runs in the startup or
+  real-time audio callback path.
+- `open-voice-input-settings --review-last` provides an explicit correction
+  path for applications that cannot expose trustworthy IBus surrounding text.
+  The daemon retains only the latest accepted provider final in memory for at
+  most ten minutes and serves it over a host-only private runtime socket; no
+  review transcript is placed in process arguments, logs, or a persistent
+  review file.
+- A review is bound to the still-current utterance ID and is consumed exactly
+  once after the daemon updates the adaptive ledger. When collection is
+  enabled, the same bounded result is queued as that utterance's append-only
+  training-feedback sidecar; the UI distinguishes disabled, enqueue failure,
+  and queued-but-not-yet-durable states.
+- The adaptive page now distinguishes explicit vocabulary, explicit manual
+  corrections, effective adaptive rules, and the exact combined correction
+  count compiled for the next provider request. Confirming a candidate
+  reloads the stored generation and reports success only when the rule is
+  actually present in that bounded provider view.
+
+### Changed
+
+- `record.json` advances to schema v2 while the dataset marker and two-file
+  utterance layout remain compatible with existing v1 datasets. Actual route
+  state is explicitly `unknown` until observed; read-only route discovery runs
+  asynchronously, quickly backs off to five seconds, and never gates audio.
+- Applications such as Chromium that report surrounding text as unsupported
+  now restore the exact previous IBus engine immediately instead of holding
+  the five-second observation lease. A correction can still be submitted
+  explicitly through review-last, but the application never reads Chrome's
+  later edits automatically, weakens focus checks, or monitors global input.
+- Missing `vocabulary.json` and `corrections.json` files now remain the normal
+  representation of zero explicit entries. Automatic learning writes only
+  the separate private adaptive ledger and does not create empty manual files
+  or copy provider output wholesale into them.
+
+### Privacy and data quality
+
+- Microphone provenance is deliberately privacy-safe: it stores a broad
+  category, non-unique fingerprint, policy/link evidence, and bounded route
+  transitions, not Pulse source names, USB serials, Bluetooth addresses, or
+  custom device labels.
+- Audio quality evidence is calculated only after an opted-in recording has
+  finished. Alpha.6 adds no startup quality gate, warm-up delay, automatic
+  rejection, filtering, gain change, or modification of the provider stream;
+  the metrics exist so later dataset review can separate useful and damaged
+  examples.
+- Review-last accepts only an explicit user-edited verbatim statement. It does
+  not silently treat filler removal, rewriting, or polished prose as spoken
+  ASR ground truth, and it never reads the clipboard, AT-SPI tree, global key
+  events, Rime history, or Chrome edits.
+- Owner-mapped FUSE filesystems that expose an owner-private regular file as
+  `0700` are accepted for feedback validation alongside `0600`; symlinks,
+  missing owner read/write permission, foreign ownership, and every
+  group/other permission still fail closed.
+
+### Known limitations
+
+- The post-hoc metrics do not decide whether an utterance is suitable for
+  training and do not repair already clipped or otherwise damaged audio.
+- Automatic same-field correction still depends on an application exposing
+  trustworthy IBus surrounding text. Chromium/Electron users must explicitly
+  open review-last while its memory-only ten-minute record is still available.
+- Explicit vocabulary and manual corrections remain optional user-managed
+  hints. Their files may legitimately be absent; learned adaptive pairs live
+  in `adaptive-corrections.json` and only effective, conflict-safe pairs reach
+  the next provider request.
+
 ## [0.1.0-alpha.5] - 2026-08-31
 
 ### Added

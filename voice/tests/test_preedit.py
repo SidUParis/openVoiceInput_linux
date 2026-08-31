@@ -100,10 +100,50 @@ def test_acquire_partial_final_observation_reuses_proxy_and_restores_rime(tmp_pa
         "Acquire",
         "Partial",
         "Final",
+        "ObservationSupported",
         "FinishObservation",
     ]
     assert not client.active
     assert state.load() is None
+
+
+def test_unsupported_surrounding_is_consumed_and_restored_immediately(tmp_path):
+    proxy = FakeProxy()
+    proxy.responses["ObservationSupported"] = False
+    state = _restore_state(tmp_path)
+    client, runner, _ = _client(proxy=proxy, restore_state=state)
+
+    assert client.acquire("utterance-1")
+    assert client.final("utterance-1", 1, "private final")
+
+    assert client.observation_supported is False
+    assert not client.active
+    assert runner.engine == "rime"
+    assert state.load() is None
+    assert [method for method, _ in proxy.calls] == [
+        "Acquire",
+        "Final",
+        "ObservationSupported",
+        "FinishObservation",
+    ]
+
+
+def test_old_engine_without_capability_method_keeps_compatible_observation(tmp_path):
+    proxy = FakeProxy()
+    proxy.fail_methods.add("ObservationSupported")
+    client, runner, _ = _client(
+        proxy=proxy,
+        restore_state=_restore_state(tmp_path),
+    )
+
+    assert client.acquire("utterance-1")
+    assert client.final("utterance-1", 1, "private final")
+
+    assert client.observation_supported is None
+    assert client.active
+    assert runner.engine == PREEDIT_ENGINE
+    assert client.finish_observation("utterance-1") is None
+    assert runner.engine == "rime"
 
 
 def test_unavailable_observation_still_restores_rime(tmp_path):

@@ -88,7 +88,10 @@ class SystemdUnitTests(unittest.TestCase):
         )
         self.assertIn('--interaction "/tmp/interaction.json"', voice_unit)
         self.assertIn("UMask=0077", voice_unit)
-        self.assertIn("RuntimeDirectory=murmur-ime", voice_unit)
+        self.assertIn(
+            "RuntimeDirectory=murmur-ime murmur-ime-private",
+            voice_unit,
+        )
         self.assertIn("RuntimeDirectoryMode=0700", voice_unit)
         self.assertIn("RuntimeDirectoryPreserve=yes", voice_unit)
         self.assertNotIn("RuntimeDirectoryPreserve=restart", voice_unit)

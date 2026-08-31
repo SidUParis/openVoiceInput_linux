@@ -12,6 +12,7 @@ from murmur_voice.preedit import AcquireResult, ObservationSnapshot
 from murmur_voice.session import (
     ADAPTIVE_OBSERVATION_FINISH_MARGIN_SECONDS,
     ADAPTIVE_OBSERVATION_SECONDS,
+    LAST_REVIEW_TTL_SECONDS,
     VOICE_START_TIMEOUT_SECONDS,
     VoiceSession,
 )
@@ -55,6 +56,10 @@ class FakeAudio:
         self.callback = None
         self.started = 0
         self.stopped = 0
+        self.metadata_callback = None
+
+    def set_source_metadata_callback(self, callback):
+        self.metadata_callback = callback
 
     def start(self, callback):
         self.order.append("audio-start")
@@ -75,6 +80,7 @@ class FakeDataRecord:
         self.discards = 0
         self.commit_error = commit_error
         self.stop_result = stop_result
+        self.microphone_metadata = []
 
     def add_audio(self, data):
         self.audio.append(data)
@@ -91,6 +97,9 @@ class FakeDataRecord:
     def discard(self):
         self.discards += 1
 
+    def set_microphone_metadata(self, metadata):
+        self.microphone_metadata.append(metadata)
+
 
 class FakePreedit:
     def __init__(self, order, acquisition=AcquireResult.ACQUIRED):
@@ -103,6 +112,7 @@ class FakePreedit:
         self.acquire_hook = None
         self.final_hook = None
         self.observation_result = None
+        self.observation_supported = None
 
     def acquire_result(self, utterance_id):
         self.order.append("preedit-acquire")
@@ -163,16 +173,291 @@ def _session(acquisition=AcquireResult.ACQUIRED, **session_options):
         timers.append(timer)
         return timer
 
+    last_review_timer_factory = session_options.pop(
+        "last_review_timer_factory",
+        lambda seconds, callback: FakeTimer(seconds, callback),
+    )
+
+    utterance_factory = session_options.pop("utterance_factory", lambda: "utterance-1")
     session = VoiceSession(
         VoiceConfig("test-key"),
         asr_client=asr,
         audio_capture=audio,
         preedit_client=preedit,
         timer_factory=timer_factory,
-        utterance_factory=lambda: "utterance-1",
+        utterance_factory=utterance_factory,
+        last_review_timer_factory=last_review_timer_factory,
         **session_options,
     )
     return session, asr, audio, preedit, timers, order
+
+
+def test_recent_accepted_final_is_memory_only_bounded_and_cleared_on_close():
+    now = [10.0]
+    review_timers = []
+
+    def review_timer_factory(seconds, callback):
+        timer = FakeTimer(seconds, callback)
+        review_timers.append(timer)
+        return timer
+
+    session, asr, _audio, preedit, _timers, _order = _session(
+        monotonic=lambda: now[0],
+        last_review_ttl_seconds=LAST_REVIEW_TTL_SECONDS,
+        last_review_timer_factory=review_timer_factory,
+    )
+    preedit.observation_supported = False
+    session.start()
+    asr.on_result("private provider final")
+    asr.on_finish()
+
+    review = session.review_last()
+    assert review is not None
+    assert review.utterance_id == "utterance-1"
+    assert review.provider_text == "private provider final"
+    assert "private provider final" not in repr(review)
+    assert len(review_timers) == 1
+    assert review_timers[0].seconds == LAST_REVIEW_TTL_SECONDS
+    assert review_timers[0].started
+
+    review_timers[0].fire()
+    assert session.review_last() is None
+    assert session.submit_last_review("utterance-1", "late text").code == (
+        "stale-review"
+    )
+
+    session.close()
+    assert session.review_last() is None
+
+
+def test_new_accepted_final_overwrites_the_previous_review():
+    utterances = iter(("utterance-1", "utterance-2"))
+    review_timers = []
+
+    def review_timer_factory(seconds, callback):
+        timer = FakeTimer(seconds, callback)
+        review_timers.append(timer)
+        return timer
+
+    session, asr, _audio, preedit, _timers, _order = _session(
+        utterance_factory=lambda: next(utterances),
+        last_review_timer_factory=review_timer_factory,
+    )
+    preedit.observation_supported = False
+    session.start()
+    asr.on_result("first private final")
+    asr.on_finish()
+
+    session.start()
+    asr.on_result("second private final")
+    asr.on_finish()
+
+    review = session.review_last()
+    assert review is not None
+    assert review.utterance_id == "utterance-2"
+    assert review.provider_text == "second private final"
+    assert "first private final" not in repr(review)
+    assert session.submit_last_review("utterance-1", "old correction").code == (
+        "stale-review"
+    )
+    assert session.review_last() == review
+    assert len(review_timers) == 2
+    assert review_timers[0].cancelled
+    assert review_timers[1].started
+    review_timers[0].fire()
+    assert session.review_last() == review
+    assert [call[0] for call in preedit.calls].count("final") == 2
+
+
+def test_daemon_close_cancels_review_ttl_and_clears_text_immediately():
+    review_timers = []
+
+    def review_timer_factory(seconds, callback):
+        timer = FakeTimer(seconds, callback)
+        review_timers.append(timer)
+        return timer
+
+    session, asr, _audio, _preedit, _timers, _order = _session(
+        last_review_timer_factory=review_timer_factory,
+    )
+    session.start()
+    asr.on_result("private final cleared by shutdown")
+    asr.on_finish()
+    assert session.review_last() is not None
+
+    session.close()
+
+    assert session.review_last() is None
+    assert len(review_timers) == 1
+    assert review_timers[0].cancelled
+
+
+def test_review_ttl_timer_failure_drops_text_without_failing_dictation():
+    class BrokenTimer(FakeTimer):
+        def start(self):
+            raise RuntimeError("no timer thread")
+
+    session, asr, _audio, _preedit, _timers, _order = _session(
+        last_review_timer_factory=BrokenTimer,
+    )
+    session.start()
+    asr.on_result("private final must not remain unbounded")
+
+    asr.on_finish()
+
+    assert session.state is VoiceState.OBSERVING
+    assert session.review_last() is None
+
+
+def test_review_submission_is_id_bound_writes_feedback_and_consumes_once():
+    handler_calls = []
+    feedback = []
+    result = AdaptiveObservationResult(
+        "explicit-feedback-activated",
+        captured_count=1,
+        activated_count=1,
+        candidates=(
+            AdaptiveObservedCandidate(
+                "Ostro", "Austral", "recognition", "explicit", "active"
+            ),
+        ),
+    )
+
+    def handle(provider_text, spoken_verbatim):
+        handler_calls.append((provider_text, spoken_verbatim))
+        return result
+
+    def write_feedback(utterance_id, document):
+        feedback.append((utterance_id, document))
+        return True
+
+    session, asr, _audio, preedit, _timers, _order = _session(
+        explicit_feedback_handler=handle,
+        data_collection_feedback_writer=write_feedback,
+    )
+    preedit.observation_supported = False
+    session.start()
+    asr.on_result("Ostro")
+    asr.on_finish()
+
+    reply = session.submit_last_review("utterance-1", "Austral")
+
+    assert reply.ok
+    assert reply.reason_code == "explicit-feedback-activated"
+    assert reply.feedback_code == "feedback-queued"
+    assert handler_calls == [("Ostro", "Austral")]
+    assert feedback[0][0] == "utterance-1"
+    assert feedback[0][1] == result.as_feedback_document()
+    assert session.review_last() is None
+    assert session.state is VoiceState.IDLE
+    assert [call[0] for call in preedit.calls].count("finish-observation") == 0
+
+    duplicate = session.submit_last_review("utterance-1", "Austral")
+    assert not duplicate.ok
+    assert duplicate.code == "stale-review"
+    assert handler_calls == [("Ostro", "Austral")]
+    assert len(feedback) == 1
+
+
+def test_stale_review_id_is_rejected_without_consuming_current_result():
+    handler_calls = []
+    session, asr, _audio, preedit, _timers, _order = _session(
+        explicit_feedback_handler=lambda provider, spoken: handler_calls.append(
+            (provider, spoken)
+        )
+    )
+    preedit.observation_supported = False
+    session.start()
+    asr.on_result("current provider final")
+    asr.on_finish()
+
+    reply = session.submit_last_review("older-utterance", "actual speech")
+
+    assert not reply.ok
+    assert reply.code == "stale-review"
+    assert handler_calls == []
+    assert session.review_last() is not None
+
+
+@pytest.mark.parametrize(
+    "active_state",
+    (
+        VoiceState.STARTING,
+        VoiceState.RECORDING,
+        VoiceState.STOPPING,
+        VoiceState.OBSERVING,
+    ),
+)
+def test_review_submission_rejects_every_active_state_without_side_effects(
+    active_state,
+):
+    handler_calls = []
+    writer_calls = []
+    session, asr, _audio, preedit, _timers, _order = _session(
+        explicit_feedback_handler=lambda provider, spoken: handler_calls.append(
+            (provider, spoken)
+        ),
+        data_collection_feedback_writer=lambda utterance_id, document: (
+            writer_calls.append((utterance_id, document))
+        ),
+    )
+    preedit.observation_supported = False
+    session.start()
+    asr.on_result("provider final")
+    asr.on_finish()
+    review = session.review_last()
+    assert review is not None
+    with session._lock:
+        session._state = active_state
+
+    reply = session.submit_last_review(review.utterance_id, "spoken verbatim")
+
+    assert not reply.ok
+    assert reply.code == "session-active"
+    assert handler_calls == []
+    assert writer_calls == []
+    assert session.review_last() == review
+
+
+def test_review_submission_with_collection_disabled_still_learns_and_consumes():
+    result = AdaptiveObservationResult("explicit-feedback-no-change")
+    session, asr, _audio, preedit, _timers, _order = _session(
+        explicit_feedback_handler=lambda provider, spoken: result,
+    )
+    preedit.observation_supported = False
+    session.start()
+    asr.on_result("same words")
+    asr.on_finish()
+
+    reply = session.submit_last_review("utterance-1", "same words")
+
+    assert reply.ok
+    assert reply.feedback_code == "feedback-disabled"
+    assert session.review_last() is None
+
+
+def test_review_feedback_enqueue_failure_is_distinct_after_ledger_success():
+    result = AdaptiveObservationResult("explicit-feedback-activated")
+
+    def fail_feedback(_utterance_id, _document):
+        raise OSError("simulated sidecar enqueue failure")
+
+    session, asr, _audio, preedit, _timers, _order = _session(
+        explicit_feedback_handler=lambda provider, spoken: result,
+        data_collection_feedback_writer=fail_feedback,
+    )
+    preedit.observation_supported = False
+    session.start()
+    asr.on_result("provider final")
+    asr.on_finish()
+
+    reply = session.submit_last_review("utterance-1", "spoken verbatim")
+
+    assert reply.ok
+    assert reply.reason_code == "explicit-feedback-activated"
+    assert reply.feedback_code == "feedback-failed"
+    assert session.status().code == "data-collection-failed"
+    assert session.review_last() is None
 
 
 def test_start_acquires_focus_before_provider_and_capture():
@@ -214,6 +499,20 @@ def test_opt_in_data_record_receives_exact_audio_and_authoritative_final():
     assert record.commits == ["teacher final"]
     assert record.discards == 0
     assert record.stop_calls >= 1
+
+
+def test_opt_in_record_receives_late_microphone_route_metadata():
+    record = FakeDataRecord()
+    session, asr, audio, preedit, timers, order = _session(
+        data_collection_factory=lambda _utterance_id: record
+    )
+
+    session.start()
+    assert callable(audio.metadata_callback)
+    metadata = object()
+    audio.metadata_callback(metadata)
+
+    assert record.microphone_metadata == [metadata]
 
 
 def test_optional_collection_start_failure_never_blocks_dictation():
@@ -647,6 +946,32 @@ def test_observation_learns_once_after_provider_and_capture_are_closed():
     assert learned == [preedit.observation_result]
     assert session.status().code == "adaptive-correction-learned"
     assert [call[0] for call in preedit.calls].count("finish-observation") == 1
+
+
+def test_unsupported_surrounding_restores_without_waiting_and_keeps_review():
+    outcomes = []
+
+    def report(reason):
+        outcomes.append(reason)
+        return AdaptiveObservationResult(reason_code=reason)
+
+    session, asr, _audio, preedit, timers, _order = _session(
+        observation_result_handler=report,
+    )
+    preedit.observation_supported = False
+    session.start()
+    asr.on_result("provider final for explicit review")
+
+    asr.on_finish()
+
+    assert session.state is VoiceState.IDLE
+    assert outcomes == ["surrounding-text-unavailable"]
+    assert session.status().code == "adaptive-correction-skipped"
+    assert [call[0] for call in preedit.calls].count("finish-observation") == 0
+    assert len(timers) == 2
+    review = session.review_last()
+    assert review is not None
+    assert review.provider_text == "provider final for explicit review"
 
 
 def test_observation_timer_accounts_for_the_final_dbus_round_trip():

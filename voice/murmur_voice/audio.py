@@ -19,6 +19,14 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 
 from .dji_microphone import is_dji_source, probe_dji_link_state
+from .microphone_metadata import (
+    MAX_ROUTE_OBSERVATIONS,
+    MicrophoneCaptureMetadata,
+    MicrophoneIdentity,
+    MicrophoneRouteObservation,
+    MicrophoneSelectionMetadata,
+    privacy_preserving_microphone_identity,
+)
 from .microphone_policy import MicrophonePolicyConfig
 
 SAMPLE_RATE = 16_000
@@ -31,6 +39,11 @@ _SOURCE_REENUMERATION_DELAYS = (0.0, 0.05, 0.1, 0.2, 0.4)
 _PACTL_COMMAND_TIMEOUT_SECONDS = 0.5
 _PREFLIGHT_FORWARD_TIMEOUT_SECONDS = 3.0
 _PREFLIGHT_ROLLBACK_TIMEOUT_SECONDS = 7.0
+# Catch the existing router's open-time move, then keep a ten-minute capture
+# near 120 read-only source-output probes rather than thousands of processes.
+_ROUTE_INITIAL_OBSERVATION_DELAYS_SECONDS = (0.25, 1.0)
+_ROUTE_STEADY_OBSERVATION_INTERVAL_SECONDS = 5.0
+_ROUTE_OBSERVATION_TIMEOUT_SECONDS = 0.5
 MICROPHONE_PREFLIGHT_TIMEOUT_SECONDS = (
     _PREFLIGHT_FORWARD_TIMEOUT_SECONDS + _PREFLIGHT_ROLLBACK_TIMEOUT_SECONDS
 )
@@ -58,6 +71,8 @@ class _PulseSource:
     card_index: int | None = None
     category: str | None = None
     available: bool | None = None
+    index: int | None = None
+    identity: MicrophoneIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,13 +81,37 @@ class _PulseInputSelection:
 
     source: str
     portaudio_device: int
+    metadata: MicrophoneSelectionMetadata | None = None
 
     def __post_init__(self) -> None:
         if (
             _safe_name(self.source) != self.source
             or _pulse_index(self.portaudio_device) is None
+            or (
+                self.metadata is not None
+                and not isinstance(self.metadata, MicrophoneSelectionMetadata)
+            )
         ):
             raise AudioDeviceError("invalid PulseAudio input selection")
+
+
+class _PortAudioInputSelection(int):
+    """An int-compatible PortAudio index carrying privacy-safe provenance."""
+
+    metadata: MicrophoneSelectionMetadata
+
+    def __new__(
+        cls,
+        index: int,
+        metadata: MicrophoneSelectionMetadata,
+    ) -> _PortAudioInputSelection:
+        if _pulse_index(index) is None or not isinstance(
+            metadata, MicrophoneSelectionMetadata
+        ):
+            raise AudioDeviceError("invalid PortAudio input selection")
+        instance = int.__new__(cls, index)
+        instance.metadata = metadata
+        return instance
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +186,7 @@ class AudioCapture:
         stream_factory: Callable[..., Any] | None = None,
         input_resolver: Callable[[], _PulseInputSelection | int | str | None]
         | None = None,
+        route_observation_runner: Callable[[Sequence[str]], str] | None = None,
     ) -> None:
         self._stream_factory = stream_factory or _default_stream_factory
         # A custom stream factory is an offline-test boundary by default. A
@@ -157,10 +197,28 @@ class AudioCapture:
             self._input_resolver = resolve_input_device
         else:
             self._input_resolver = lambda: None
+        if route_observation_runner is not None:
+            self._route_observation_runner = route_observation_runner
+        elif stream_factory is None:
+            self._route_observation_runner = lambda arguments: _run_pactl(
+                arguments,
+                timeout=_ROUTE_OBSERVATION_TIMEOUT_SECONDS,
+            )
+        else:
+            # An injected stream is an offline-test boundary unless a matching
+            # read-only route observer is explicitly injected too.
+            self._route_observation_runner = None
         self._stream: Any | None = None
         self._prepared_device: _PulseInputSelection | int | str | None = None
         self._is_prepared = False
         self._on_audio_data: Callable[[bytes], None] | None = None
+        self._on_source_metadata: Callable[[MicrophoneCaptureMetadata], None] | None = (
+            None
+        )
+        self._source_metadata: MicrophoneCaptureMetadata | None = None
+        self._route_generation = 0
+        self._route_stop_event: threading.Event | None = None
+        self._route_thread: threading.Thread | None = None
         self._lock = threading.RLock()
 
     @property
@@ -168,6 +226,27 @@ class AudioCapture:
         with self._lock:
             stream = self._stream
         return bool(stream is not None and getattr(stream, "active", False))
+
+    @property
+    def source_metadata(self) -> MicrophoneCaptureMetadata | None:
+        """Return the latest secret-free selection/actual-route snapshot."""
+
+        with self._lock:
+            return self._source_metadata
+
+    def set_source_metadata_callback(
+        self,
+        callback: Callable[[MicrophoneCaptureMetadata], None] | None,
+    ) -> None:
+        """Register a lightweight callback; route discovery remains async."""
+
+        if callback is not None and not callable(callback):
+            raise TypeError("source metadata callback must be callable")
+        with self._lock:
+            self._on_source_metadata = callback
+            snapshot = self._source_metadata
+        if callback is not None and snapshot is not None:
+            self._call_source_metadata_callback(callback, snapshot)
 
     def prepare(self) -> None:
         """Resolve a fresh input without opening it or capturing any audio."""
@@ -181,7 +260,12 @@ class AudioCapture:
                 raise
             except Exception as error:
                 raise AudioDeviceError("microphone discovery failed") from error
+            self._source_metadata = _initial_capture_metadata(self._prepared_device)
             self._is_prepared = True
+            callback = self._on_source_metadata
+            snapshot = self._source_metadata
+        if callback is not None and snapshot is not None:
+            self._call_source_metadata_callback(callback, snapshot)
 
     def start(self, on_audio_data: Callable[[bytes], None]) -> None:
         """Start capture; the callback runs on PortAudio's audio thread."""
@@ -220,7 +304,9 @@ class AudioCapture:
                     stream = self._stream_factory(**stream_options)
                     self._stream = stream
                     stream.start()
+                    self._start_route_observer_locked(device)
             except Exception as error:
+                self._invalidate_route_observer_locked()
                 self._stream = None
                 self._on_audio_data = None
                 if stream is not None:
@@ -235,9 +321,11 @@ class AudioCapture:
         with self._lock:
             stream = self._stream
             self._stream = None
+            self._invalidate_route_observer_locked()
             self._prepared_device = None
             self._is_prepared = False
             self._on_audio_data = None
+            self._on_source_metadata = None
         if stream is None:
             return
         try:
@@ -245,6 +333,125 @@ class AudioCapture:
         finally:
             stream.close()
         logger.info("Audio capture stopped")
+
+    def _start_route_observer_locked(
+        self,
+        device: _PulseInputSelection | int | str | None,
+    ) -> None:
+        if not isinstance(device, _PulseInputSelection):
+            return
+        selection = device.metadata
+        runner = self._route_observation_runner
+        if selection is None or runner is None or self._on_source_metadata is None:
+            return
+        self._route_generation += 1
+        generation = self._route_generation
+        stop_event = threading.Event()
+        self._route_stop_event = stop_event
+        thread = threading.Thread(
+            target=self._observe_pulse_routes,
+            args=(generation, stop_event, runner, selection),
+            name="openvoice-microphone-route-observer",
+            daemon=True,
+        )
+        self._route_thread = thread
+        thread.start()
+
+    def _invalidate_route_observer_locked(self) -> None:
+        self._route_generation += 1
+        stop_event = self._route_stop_event
+        self._route_stop_event = None
+        self._route_thread = None
+        if stop_event is not None:
+            stop_event.set()
+
+    def _observe_pulse_routes(
+        self,
+        generation: int,
+        stop_event: threading.Event,
+        runner: Callable[[Sequence[str]], str],
+        selection: MicrophoneSelectionMetadata,
+    ) -> None:
+        started = time.monotonic()
+        routes: list[MicrophoneRouteObservation] = []
+        truncated = False
+        identity_cache: dict[int, MicrophoneIdentity] = {}
+        last_source_index: int | None = None
+        poll_number = 0
+        while not stop_event.is_set():
+            try:
+                source_index = _observe_process_pulse_source_index(
+                    runner,
+                    os.getpid(),
+                )
+            except Exception:
+                source_index = None
+            if source_index is not None and source_index != last_source_index:
+                identity = identity_cache.get(source_index)
+                if identity is None:
+                    try:
+                        identity = _pulse_source_identity_by_index(
+                            runner,
+                            source_index,
+                        )
+                    except Exception:
+                        identity = None
+                    if identity is not None:
+                        identity_cache[source_index] = identity
+                if identity is not None:
+                    elapsed_ms = min(
+                        600_000,
+                        max(0, round((time.monotonic() - started) * 1000)),
+                    )
+                    if len(routes) < MAX_ROUTE_OBSERVATIONS:
+                        routes.append(MicrophoneRouteObservation(identity, elapsed_ms))
+                        if len(routes) == MAX_ROUTE_OBSERVATIONS:
+                            truncated = True
+                    else:
+                        truncated = True
+                    self._publish_source_metadata(
+                        generation,
+                        MicrophoneCaptureMetadata(
+                            selection,
+                            "pulse-source-output",
+                            tuple(routes),
+                            truncated,
+                        ),
+                    )
+                    if truncated:
+                        return
+                last_source_index = source_index
+            if poll_number < len(_ROUTE_INITIAL_OBSERVATION_DELAYS_SECONDS):
+                delay = _ROUTE_INITIAL_OBSERVATION_DELAYS_SECONDS[poll_number]
+            else:
+                delay = _ROUTE_STEADY_OBSERVATION_INTERVAL_SECONDS
+            poll_number += 1
+            stop_event.wait(delay)
+
+    def _publish_source_metadata(
+        self,
+        generation: int,
+        snapshot: MicrophoneCaptureMetadata,
+    ) -> None:
+        with self._lock:
+            if generation != self._route_generation or self._stream is None:
+                return
+            self._source_metadata = snapshot
+            callback = self._on_source_metadata
+        if callback is not None:
+            self._call_source_metadata_callback(callback, snapshot)
+
+    @staticmethod
+    def _call_source_metadata_callback(
+        callback: Callable[[MicrophoneCaptureMetadata], None],
+        snapshot: MicrophoneCaptureMetadata,
+    ) -> None:
+        try:
+            callback(snapshot)
+        except Exception:
+            # Metadata is optional and must never interrupt dictation or expose
+            # a source name through an exception string.
+            logger.error("Optional microphone provenance callback failed")
 
     def _audio_callback(self, indata, frames, time_info, status) -> None:
         del frames, time_info
@@ -327,20 +534,36 @@ def _ensure_pulse_input(
         # the current default was observed first.
         raise AudioDeviceError("PulseAudio default source could not be determined")
     usable_sources = _usable_sources(sources)
-    selected, eligible_sources, unknown_dji_default = _choose_policy_source(
+    (
+        selected,
+        eligible_sources,
+        unknown_dji_default,
+        dji_link_state,
+        selection_provenance,
+    ) = _choose_policy_source(
         usable_sources,
         default_source,
         dji_link_probe,
         microphone_policy,
     )
     fallback = selected or unknown_dji_default
+    fallback_provenance = (
+        selection_provenance
+        if selected is not None
+        else "current-dji-default-link-unknown"
+    )
     if not _should_attempt_builtin_recovery(
         microphone_policy,
         eligible_sources,
         selected,
     ):
         if fallback is not None:
-            return _PulseInputSelection(fallback.name, pulse_device)
+            return _pulse_input_selection(
+                fallback,
+                pulse_device,
+                fallback_provenance,
+                dji_link_state,
+            )
         raise AudioDeviceError("microphone policy has no unambiguous available source")
 
     # A hidden built-in input is a policy candidate, not merely a last-resort
@@ -351,7 +574,12 @@ def _ensure_pulse_input(
         recovery = _choose_profile_recovery(_list_cards(runner))
     except Exception:
         if fallback is not None:
-            return _PulseInputSelection(fallback.name, pulse_device)
+            return _pulse_input_selection(
+                fallback,
+                pulse_device,
+                fallback_provenance,
+                dji_link_state,
+            )
         raise
 
     try:
@@ -366,7 +594,12 @@ def _ensure_pulse_input(
             recovery,
             default_source,
         ):
-            return _PulseInputSelection(fallback.name, pulse_device)
+            return _pulse_input_selection(
+                fallback,
+                pulse_device,
+                fallback_provenance,
+                dji_link_state,
+            )
         if isinstance(error, (AudioDeviceError, FileNotFoundError)):
             raise
         raise AudioDeviceError("microphone profile recovery failed") from error
@@ -384,11 +617,21 @@ def _ensure_pulse_input(
             recovery,
             default_source,
         ):
-            return _PulseInputSelection(fallback.name, pulse_device)
+            return _pulse_input_selection(
+                fallback,
+                pulse_device,
+                fallback_provenance,
+                dji_link_state,
+            )
         raise
     # Keeping this same-output duplex profile is intentional: the exact
     # recovered source is bound only to this recording stream below.
-    return _PulseInputSelection(recovered.name, pulse_device)
+    return _pulse_input_selection(
+        recovered,
+        pulse_device,
+        "recovered-built-in-profile",
+        dji_link_state,
+    )
 
 
 def _choose_policy_source(
@@ -396,7 +639,13 @@ def _choose_policy_source(
     default_source: str,
     link_probe: Callable[[], bool | None],
     policy: MicrophonePolicyConfig,
-) -> tuple[_PulseSource | None, tuple[_PulseSource, ...], _PulseSource | None]:
+) -> tuple[
+    _PulseSource | None,
+    tuple[_PulseSource, ...],
+    _PulseSource | None,
+    str,
+    str,
+]:
     """Select the first unambiguous currently usable policy category.
 
     DJI sources are eligible only after a positive link probe. A negative
@@ -421,6 +670,17 @@ def _choose_policy_source(
         except Exception:
             online = None
 
+    if not dji_sources:
+        dji_link_state = "not-present"
+    elif len(dji_sources) != 1:
+        dji_link_state = "not-probed-multiple"
+    elif online is True:
+        dji_link_state = "online"
+    elif online is False:
+        dji_link_state = "offline"
+    else:
+        dji_link_state = "unknown"
+
     if online is True or not dji_sources:
         eligible = candidates
     else:
@@ -442,6 +702,8 @@ def _choose_policy_source(
                     preferred[0],
                     eligible,
                     _unknown_dji_default(dji_sources, default_source, online),
+                    dji_link_state,
+                    "policy-preferred",
                 )
         current = tuple(
             source for source in category_sources if source.name == default_source
@@ -451,12 +713,16 @@ def _choose_policy_source(
                 current[0],
                 eligible,
                 _unknown_dji_default(dji_sources, default_source, online),
+                dji_link_state,
+                "system-default-within-category",
             )
         if len(category_sources) == 1:
             return (
                 category_sources[0],
                 eligible,
                 _unknown_dji_default(dji_sources, default_source, online),
+                dji_link_state,
+                "unique-policy-candidate",
             )
 
     return (
@@ -467,6 +733,8 @@ def _choose_policy_source(
             default_source,
             online,
         ),
+        dji_link_state,
+        "unique-policy-candidate",
     )
 
 
@@ -479,6 +747,23 @@ def _unknown_dji_default(
         return None
     source = dji_sources[0]
     return source if source.name == default_source else None
+
+
+def _pulse_input_selection(
+    source: _PulseSource,
+    portaudio_device: int,
+    provenance: str,
+    dji_link_state: str,
+) -> _PulseInputSelection:
+    category = _source_category(source)
+    identity = source.identity or privacy_preserving_microphone_identity(category)
+    metadata = MicrophoneSelectionMetadata(
+        identity,
+        "pulse",
+        provenance,
+        dji_link_state,
+    )
+    return _PulseInputSelection(source.name, portaudio_device, metadata)
 
 
 def _should_attempt_builtin_recovery(
@@ -564,7 +849,22 @@ def _list_pulse_sources(
             malformed = True
             continue
         state = fields[-1].strip().upper() if len(fields) >= 5 else "UNKNOWN"
-        sources.append(_PulseSource(name, state, category=_category_from_name(name)))
+        category = _category_from_name(name)
+        index = _nonnegative_int(fields[0])
+        identity = (
+            privacy_preserving_microphone_identity(category)
+            if category != "monitor"
+            else None
+        )
+        sources.append(
+            _PulseSource(
+                name,
+                state,
+                category=category,
+                index=index,
+                identity=identity,
+            )
+        )
     if malformed and not sources:
         raise AudioDeviceError("PulseAudio returned an invalid source list")
     return tuple(sources)
@@ -590,7 +890,37 @@ def _pulse_source_from_json(value: Any) -> _PulseSource | None:
         category = _category_from_metadata(name, value, safe_properties)
     available = _active_port_available(value)
     state = str(value.get("state") or "UNKNOWN").strip().upper()
-    return _PulseSource(name, state, card_index, category, available)
+    index = _pulse_index(value.get("index"))
+    vendor_id = _normalized_hex_identifier(
+        safe_properties.get("device.vendor.id")
+        or safe_properties.get("device.vendor_id")
+        or safe_properties.get("usb.vendor_id")
+    )
+    product_id = _normalized_hex_identifier(
+        safe_properties.get("device.product.id")
+        or safe_properties.get("device.product_id")
+        or safe_properties.get("usb.product_id")
+    )
+    identity = (
+        privacy_preserving_microphone_identity(
+            category,
+            bus=safe_properties.get("device.bus"),
+            vendor_id=vendor_id,
+            product_id=product_id,
+            form_factor=safe_properties.get("device.form_factor"),
+        )
+        if category != "monitor"
+        else None
+    )
+    return _PulseSource(
+        name,
+        state,
+        card_index,
+        category,
+        available,
+        index,
+        identity,
+    )
 
 
 def _category_from_metadata(
@@ -1178,7 +1508,11 @@ def _resolve_portaudio_input(sounddevice_module: Any) -> int | str | None:
         except Exception:
             pass
         else:
-            return default_index
+            return _portaudio_input_selection(
+                default_index,
+                default,
+                "portaudio-default",
+            )
 
     try:
         devices = sounddevice_module.query_devices()
@@ -1200,7 +1534,116 @@ def _resolve_portaudio_input(sounddevice_module: Any) -> int | str | None:
         candidates.append(index)
     if len(candidates) != 1:
         raise AudioDeviceError("no unique usable microphone is available")
-    return candidates[0]
+    candidate_index = candidates[0]
+    return _portaudio_input_selection(
+        candidate_index,
+        devices[candidate_index],
+        "unique-portaudio-candidate",
+    )
+
+
+def _portaudio_input_selection(
+    index: int,
+    device: Mapping[Any, Any],
+    provenance: str,
+) -> _PortAudioInputSelection:
+    name = str(device.get("name") or "")
+    normalized = name.casefold()
+    if is_dji_source(name):
+        category = "dji"
+        dji_link_state = "unknown"
+    elif any(
+        marker in normalized
+        for marker in ("headset", "headphone", "handsfree", "hands-free", "earbud")
+    ):
+        category = "headset"
+        dji_link_state = "not-present"
+    elif any(marker in normalized for marker in ("built-in", "internal", "integrated")):
+        category = "built-in"
+        dji_link_state = "not-present"
+    else:
+        category = "external"
+        dji_link_state = "not-present"
+    identity = privacy_preserving_microphone_identity(category)
+    return _PortAudioInputSelection(
+        index,
+        MicrophoneSelectionMetadata(
+            identity,
+            "portaudio",
+            provenance,
+            dji_link_state,
+        ),
+    )
+
+
+def _initial_capture_metadata(
+    device: _PulseInputSelection | int | str | None,
+) -> MicrophoneCaptureMetadata | None:
+    if isinstance(device, _PulseInputSelection) and device.metadata is not None:
+        return MicrophoneCaptureMetadata(
+            device.metadata,
+            "pulse-source-output",
+        )
+    if isinstance(device, _PortAudioInputSelection):
+        return MicrophoneCaptureMetadata(
+            device.metadata,
+            "portaudio-opened-device",
+            (MicrophoneRouteObservation(device.metadata.identity, 0),),
+        )
+    return None
+
+
+def _observe_process_pulse_source_index(
+    runner: Callable[[Sequence[str]], str],
+    process_id: int,
+) -> int | None:
+    """Resolve this daemon's unique live source-output index read-only."""
+
+    output = runner(("--format=json", "list", "source-outputs"))
+    if len(output.encode("utf-8", errors="replace")) > _MAX_PACTL_OUTPUT_BYTES:
+        return None
+    try:
+        document = json.loads(output)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(document, list):
+        return None
+    source_indexes: list[int] = []
+    expected_pid = str(process_id)
+    for item in document:
+        if not isinstance(item, Mapping):
+            continue
+        properties = item.get("properties")
+        if not isinstance(properties, Mapping):
+            continue
+        observed_pid = properties.get("application.process.id")
+        if isinstance(observed_pid, bool) or str(observed_pid) != expected_pid:
+            continue
+        source_index = _pulse_index(item.get("source"))
+        if source_index is not None:
+            source_indexes.append(source_index)
+    if len(source_indexes) != 1:
+        return None
+    return source_indexes[0]
+
+
+def _pulse_source_identity_by_index(
+    runner: Callable[[Sequence[str]], str],
+    source_index: int,
+) -> MicrophoneIdentity | None:
+    """Resolve one new route index to privacy-safe identity, then cache it."""
+
+    matches = [
+        source
+        for source in _list_pulse_sources(runner)
+        if source.index == source_index and _source_category(source) != "monitor"
+    ]
+    if len(matches) != 1:
+        return None
+    source = matches[0]
+    return source.identity or privacy_preserving_microphone_identity(
+        _source_category(source)
+    )
 
 
 def _is_trustworthy_portaudio_device(device: Any) -> bool:

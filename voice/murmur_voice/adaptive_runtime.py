@@ -27,6 +27,7 @@ from .adaptive_store import (
     AdaptiveStoreError,
     activate_correction,
     adaptive_statistics,
+    compile_provider_correction_report,
     compile_provider_corrections,
     normalized_key,
     parse_adaptive_ledger,
@@ -251,7 +252,9 @@ class AdaptiveCorrectionRuntime:
                             evidence=candidate.evidence,
                         )
                     manual = load_corrections(self._corrections_path)
-                    provider_view = compile_provider_corrections(manual, updated)
+                    provider_report = compile_provider_correction_report(
+                        manual, updated
+                    )
                 except AdaptiveStoreError as error:
                     raise ConfigError(
                         "adaptive correction ledger is invalid"
@@ -261,17 +264,17 @@ class AdaptiveCorrectionRuntime:
                     _observed_candidate(candidate, updated)
                     for candidate in extraction.candidates
                 )
-                provider_identities = {
-                    (normalized_key(pair.wrong), normalized_key(pair.canonical))
-                    for pair in provider_view
-                }
-                manual_sources = {normalized_key(pair.wrong) for pair in manual}
-                activated_count = sum(
-                    item.state == "active"
-                    and normalized_key(item.wrong) not in manual_sources
-                    and (normalized_key(item.wrong), normalized_key(item.canonical))
-                    in provider_identities
+                provider_statuses = tuple(
+                    provider_report.status_for(item.wrong, item.canonical)
+                    if item.state == "active"
+                    else None
                     for item in observed
+                )
+                # ``learned`` remains about adaptive activation.  An identical
+                # explicit rule is already effective, but observing it again
+                # must not claim that a new adaptive rule was learned.
+                activated_count = sum(
+                    status == "effective-adaptive" for status in provider_statuses
                 )
                 candidate_count = sum(item.state == "candidate" for item in observed)
                 conflicted_count = sum(item.state == "conflicted" for item in observed)
@@ -279,6 +282,7 @@ class AdaptiveCorrectionRuntime:
                     activated_count,
                     candidate_count,
                     conflicted_count,
+                    provider_statuses,
                 )
                 result = AdaptiveObservationResult(
                     reason_code=reason,
@@ -310,11 +314,31 @@ class AdaptiveCorrectionRuntime:
                 canonical,
             )
 
+    def submit_explicit_feedback(
+        self,
+        provider_text: str,
+        spoken_verbatim: str,
+    ) -> AdaptiveObservationResult:
+        """Apply one daemon-authorized verbatim review through this runtime."""
+
+        with self._lock:
+            return submit_explicit_feedback(
+                self._adaptive_path,
+                self._corrections_path,
+                self._vocabulary_path,
+                provider_text,
+                spoken_verbatim,
+            )
+
     def status_document(self) -> dict[str, Any]:
         """Read content-free statistics and the most recent result."""
 
         with self._lock:
-            return adaptive_status_document(self._adaptive_path)
+            return adaptive_status_document(
+                self._adaptive_path,
+                corrections_path=self._corrections_path,
+                vocabulary_path=self._vocabulary_path,
+            )
 
     def _record_result(
         self,
@@ -344,12 +368,22 @@ class AdaptiveCorrectionRuntime:
         return config, vocabulary, manual, ledger
 
 
-def adaptive_status_document(path: str | Path | None = None) -> dict[str, Any]:
-    """Return transcript-free lifecycle statistics for settings and CLI."""
+def adaptive_status_document(
+    path: str | Path | None = None,
+    *,
+    corrections_path: str | Path | None = None,
+    vocabulary_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Return content-free source and effective-provider statistics.
+
+    ``vocabulary.json`` and ``corrections.json`` remain optional explicit
+    inputs.  Supplying their paths lets settings/CLI distinguish them from the
+    adaptive ledger and from the exact compiled view used by a new dictation.
+    """
 
     ledger = load_adaptive_ledger(path)
     recent = ledger.last_result
-    return {
+    document: dict[str, Any] = {
         "schema_version": ledger.version,
         "statistics": adaptive_statistics(ledger),
         "last_result": (
@@ -365,6 +399,20 @@ def adaptive_status_document(path: str | Path | None = None) -> dict[str, Any]:
             else None
         ),
     }
+    if corrections_path is not None or vocabulary_path is not None:
+        manual = (
+            load_corrections(corrections_path) if corrections_path is not None else ()
+        )
+        vocabulary = (
+            load_vocabulary(vocabulary_path) if vocabulary_path is not None else ()
+        )
+        report = compile_provider_correction_report(manual, ledger)
+        document["provider_view"] = {
+            "explicit_vocabulary_count": len(vocabulary),
+            "manual_correction_count": len(manual),
+            **report.statistics(),
+        }
+    return document
 
 
 def adaptive_review_entries(
@@ -393,18 +441,12 @@ def confirm_adaptive_correction(
         try:
             updated = activate_correction(ledger, wrong, canonical)
             manual = load_corrections(corrections_path)
-            provider_view = compile_provider_corrections(manual, updated)
+            provider_report = compile_provider_correction_report(manual, updated)
         except AdaptiveStoreError as error:
             raise ConfigError("adaptive correction ledger is invalid") from error
         identity = (normalized_key(wrong), normalized_key(canonical))
-        manual_sources = {normalized_key(pair.wrong) for pair in manual}
-        activated = int(
-            identity[0] not in manual_sources
-            and any(
-                (normalized_key(pair.wrong), normalized_key(pair.canonical)) == identity
-                for pair in provider_view
-            )
-        )
+        provider_status = provider_report.status_for(wrong, canonical)
+        activated = int(provider_status in {"effective-manual", "effective-adaptive"})
         chosen = next(
             entry
             for entry in updated.entries
@@ -419,7 +461,7 @@ def confirm_adaptive_correction(
             chosen.state,
         )
         result = AdaptiveObservationResult(
-            reason_code=("explicitly-activated" if activated else "active-suppressed"),
+            reason_code=_confirmation_reason(provider_status),
             captured_count=1,
             activated_count=activated,
             candidates=(observed,),
@@ -428,6 +470,37 @@ def confirm_adaptive_correction(
             with_last_result(updated, _last_result(result)),
             path,
         )
+        # The user-visible success boundary is the on-disk generation that a
+        # later daemon process will read, not merely the in-memory mutation.
+        # Reload both sources and re-run the same compiler before promising
+        # that the next request will contain this rule.
+        persisted = load_adaptive_ledger(path)
+        persisted_manual = load_corrections(corrections_path)
+        try:
+            persisted_report = compile_provider_correction_report(
+                persisted_manual, persisted
+            )
+        except AdaptiveStoreError as error:
+            raise ConfigError("adaptive correction verification failed") from error
+        persisted_status = persisted_report.status_for(wrong, canonical)
+        persisted_chosen = next(
+            (
+                entry
+                for entry in persisted.entries
+                if (
+                    normalized_key(entry.wrong),
+                    normalized_key(entry.canonical),
+                )
+                == identity
+            ),
+            None,
+        )
+        if (
+            persisted_chosen is None
+            or persisted_chosen.state != "active"
+            or persisted_status != provider_status
+        ):
+            raise ConfigError("adaptive correction verification failed")
         return result
 
 
@@ -490,31 +563,22 @@ def submit_explicit_feedback(
                     updated, candidate.wrong, candidate.canonical
                 )
             manual = load_corrections(corrections_path)
-            provider_view = compile_provider_corrections(manual, updated)
+            provider_report = compile_provider_correction_report(manual, updated)
         except AdaptiveStoreError as error:
             raise ConfigError("adaptive correction ledger is invalid") from error
-        provider_identities = {
-            (normalized_key(pair.wrong), normalized_key(pair.canonical))
-            for pair in provider_view
-        }
-        manual_sources = {normalized_key(pair.wrong) for pair in manual}
         observed = tuple(
             _observed_candidate(candidate, updated)
             for candidate in extraction.candidates
         )
+        provider_statuses = tuple(
+            provider_report.status_for(item.wrong, item.canonical) for item in observed
+        )
         activated = sum(
-            item.state == "active"
-            and normalized_key(item.wrong) not in manual_sources
-            and (normalized_key(item.wrong), normalized_key(item.canonical))
-            in provider_identities
-            for item in observed
+            status in {"effective-manual", "effective-adaptive"}
+            for status in provider_statuses
         )
         result = AdaptiveObservationResult(
-            reason_code=(
-                "explicit-feedback-activated"
-                if activated
-                else "explicit-feedback-suppressed"
-            ),
+            reason_code=_explicit_feedback_reason(activated, provider_statuses),
             captured_count=len(observed),
             activated_count=activated,
             replacement_hunks=extraction.replacement_hunks,
@@ -524,6 +588,19 @@ def submit_explicit_feedback(
             with_last_result(updated, _last_result(result)),
             path,
         )
+        persisted = load_adaptive_ledger(path)
+        persisted_manual = load_corrections(corrections_path)
+        try:
+            persisted_report = compile_provider_correction_report(
+                persisted_manual, persisted
+            )
+        except AdaptiveStoreError as error:
+            raise ConfigError("adaptive correction verification failed") from error
+        persisted_statuses = tuple(
+            persisted_report.status_for(item.wrong, item.canonical) for item in observed
+        )
+        if persisted_statuses != provider_statuses:
+            raise ConfigError("adaptive correction verification failed")
         return result
 
 
@@ -546,7 +623,12 @@ def _observed_candidate(
     )
 
 
-def _decision_reason(activated: int, candidates: int, conflicted: int) -> str:
+def _decision_reason(
+    activated: int,
+    candidates: int,
+    conflicted: int,
+    provider_statuses: tuple[str | None, ...] = (),
+) -> str:
     if conflicted:
         return "conflict-recorded"
     if activated and candidates:
@@ -555,7 +637,47 @@ def _decision_reason(activated: int, candidates: int, conflicted: int) -> str:
         return "candidates-saved"
     if activated:
         return "active-learned"
-    return "active-suppressed"
+    if provider_statuses and all(
+        status == "effective-manual" for status in provider_statuses
+    ):
+        return "active-already-manual"
+    return _suppressed_reason("active", provider_statuses)
+
+
+def _confirmation_reason(provider_status: str | None) -> str:
+    if provider_status == "effective-adaptive":
+        return "explicitly-activated"
+    if provider_status == "effective-manual":
+        return "explicitly-already-manual"
+    return _suppressed_reason("explicitly", (provider_status,))
+
+
+def _explicit_feedback_reason(
+    activated: int,
+    provider_statuses: tuple[str | None, ...],
+) -> str:
+    if activated == len(provider_statuses):
+        if provider_statuses and all(
+            status == "effective-manual" for status in provider_statuses
+        ):
+            return "explicit-feedback-already-manual"
+        return "explicit-feedback-activated"
+    if activated:
+        return "explicit-feedback-partially-activated"
+    return _suppressed_reason("explicit-feedback", provider_statuses)
+
+
+def _suppressed_reason(prefix: str, statuses: tuple[str | None, ...]) -> str:
+    reasons = {
+        status.removeprefix("suppressed-")
+        for status in statuses
+        if isinstance(status, str) and status.startswith("suppressed-")
+    }
+    if len(reasons) == 1:
+        return f"{prefix}-suppressed-{next(iter(reasons))}"
+    if len(reasons) > 1:
+        return f"{prefix}-suppressed-multiple"
+    return f"{prefix}-suppressed"
 
 
 def _last_result(result: AdaptiveObservationResult) -> AdaptiveLastResult:

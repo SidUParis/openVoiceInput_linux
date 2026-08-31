@@ -81,6 +81,26 @@ class SessionGuard:
             session is not None and session.final_seen and session.observation_started
         )
 
+    def observation_supported(
+        self,
+        owner: str,
+        utterance_id: str,
+        focus_token: int,
+    ) -> bool:
+        """Whether the active client advertised trusted surrounding text."""
+
+        session = self._active
+        return bool(
+            session is not None
+            and session.final_seen
+            and session.observation_started
+            and session.observation_supported
+            and session.owner == owner
+            and session.utterance_id == utterance_id
+            and session.focus_token == focus_token
+            and self._monotonic() < session.observation_deadline
+        )
+
     def acquire(self, owner: str, utterance_id: str, focus_token: int) -> bool:
         if not owner or not utterance_id:
             return False

@@ -40,7 +40,7 @@ silently alter `spoken_verbatim`. This separation permits ASR acoustic/language
 adaptation to use the faithful label while a later correction or formatting
 layer can learn the preferred output.
 
-## Implemented opt-in record (schema v1)
+## Implemented opt-in record (schema v2)
 
 The GTK settings window keeps collection off by default. Enabling requires an
 existing absolute local or mounted folder and initializes or reopens a marked
@@ -56,9 +56,20 @@ and no-final sessions publish nothing. One random utterance directory contains:
 - `record.json`, with schema/dataset/utterance/session IDs, UTC time, explicit
   opt-in consent, audio format/frame count and PCM/file SHA-256 values;
 - Volcengine provider/model/resource identity;
+- privacy-preserving microphone provenance: the selected category and why it
+  won, DJI link state at selection, plus asynchronously observed actual Pulse
+  source-output route categories (including a mid-recording route change);
 - the three text roles and review states described above.
 
-The immutable v1 utterance directory remains the established two-file
+After final acceptance, the background writer also computes bounded numeric PCM
+diagnostics under `audio.quality`: overall and first-second clipped-sample
+fractions (absolute sample threshold 32760), RMS/peak dBFS, normalized DC
+offset, zero fraction, and sample count. This is post-hoc metadata for later
+filtering; it never runs in the audio callback or startup path, rejects no
+record, delays no dictation result, and does not modify a PCM sample. Quality
+thresholds for eventual training remain a later review decision.
+
+The immutable utterance directory remains the established two-file
 `audio.wav` + `record.json` contract. After that pair is published, a separate
 dataset-level `usage/<utterance_id>.json` index stores only the utterance ID,
 timestamp, audio duration and non-whitespace character count. Existing training
@@ -78,8 +89,32 @@ records remain.
 
 The audio and manifest stay outside the public Git repository. Keys, tokens,
 desktop text surrounding the utterance, clipboard contents, global keyboard
-events, and Rime data are never dataset fields. The five-second adaptive
-ledger is not itself an audio dataset and must not be reinterpreted as one.
+events, raw Pulse source names, USB serials, Bluetooth addresses, custom
+hardware labels, and Rime data are never dataset fields. Microphone
+fingerprints are hashes of an allowlisted category/model description only;
+identical models may intentionally share one fingerprint. The five-second
+adaptive ledger is not itself an audio dataset and must not be reinterpreted as
+one.
+
+### Schema-v1 migration policy
+
+Existing schema-v1 `record.json` files remain immutable and valid. The dataset
+marker and directory name remain version 1, so a dataset may contain both old
+v1 and new v2 utterances without moving or rewriting audio. Schema v2 only adds
+the optional top-level `microphone` object and numeric `audio.quality` summary;
+the prior audio fields, provider, and label paths keep their meanings. A strict
+v1 reader should skip records whose
+`schema_version` is greater than 1. To migrate a reader, accept versions 1 and
+2, treat missing `microphone`/`audio.quality` objects as “not observed,” and
+otherwise leave all v1 parsing unchanged. Do not synthesize microphone
+provenance or quality for old records from filenames or current desktop state.
+
+`microphone.actual.status` is `unknown` until the read-only observer has matched
+the daemon's live Pulse source-output; the selected source is never substituted
+as an alleged actual route. Observation is front-loaded at stream open and then
+backs off to a five-second interval. Source details are fetched only when the
+source-output index changes, and observation stops at the bounded transition
+limit. None of this gates startup, drops audio, or adds a quality delay.
 
 The GTK dashboard reads only the dataset marker and bounded
 `usage/<utterance_id>.json`
@@ -126,17 +161,16 @@ pending item rather than drop valuable data silently.
    transcript-free usage summary and private aggregate dashboard, plus the
    three separate text roles, exact audio hashes, atomic publication, hot
    enable/disable/path reload, and no change to the provider stream.
-2. Stabilize schema-v1 migration/validation policy before declaring long-term
-   corpus compatibility; add an explicit review/delete/keep interface.
+2. Add an explicit review/delete/keep interface and publish a standalone
+   schema validator before declaring long-term corpus compatibility.
 3. Implement first-party resumable Orange transfer and verify record counts,
    hashes, partial-transfer recovery, and delete behavior on both owned
    machines.
 4. Build a lightweight review queue for `spoken_verbatim`; do not treat either
    cloud output or a quick preferred edit as a literal speech label. Review
    `preferred_output` independently.
-5. Add language/code-switch and microphone/session annotations only with a
-   documented purpose and bounded schema; do not infer them from unrelated
-   desktop context.
+5. Add language/code-switch annotations only with a documented purpose and
+   bounded schema; do not infer them from unrelated desktop context.
 6. Create train/development/test splits by session or day so near-duplicate
    utterances do not leak across evaluation boundaries.
 7. Establish baselines for Mandarin, English, French, and code-switch segments,

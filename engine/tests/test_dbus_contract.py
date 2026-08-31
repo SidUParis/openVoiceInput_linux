@@ -31,6 +31,10 @@ class _Registry:
         self.calls.append((owner, utterance_id))
         return self.result
 
+    def observation_supported(self, owner: str, utterance_id: str) -> bool:
+        self.calls.append((owner, utterance_id))
+        return True
+
 
 class DBusContractTests(unittest.TestCase):
     def test_exact_bridge_signatures(self) -> None:
@@ -51,6 +55,7 @@ class DBusContractTests(unittest.TestCase):
                 "Partial": ("sts", "b"),
                 "Final": ("sts", "b"),
                 "FinishObservation": ("s", "bsuusuu"),
+                "ObservationSupported": ("s", "b"),
                 "Cancel": ("s", "b"),
             },
         )
@@ -86,6 +91,24 @@ class DBusContractTests(unittest.TestCase):
             invocation.value.unpack(),
             (True, "前奔驰 Mark", 1, 8, "前bench Mark", 6, 6),
         )
+
+    def test_observation_capability_is_bound_to_sender_and_utterance(self) -> None:
+        registry = _Registry(ObservationResult())
+        service = PreeditDBusService(registry)  # type: ignore[arg-type]
+        invocation = _Invocation()
+
+        service._on_method_call(
+            None,  # type: ignore[arg-type]
+            ":1.41",
+            "/org/murmur/IME/Preedit1",
+            DBUS_INTERFACE,
+            "ObservationSupported",
+            GLib.Variant("(s)", ("utt-2",)),
+            invocation,  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(registry.calls, [(":1.41", "utt-2")])
+        self.assertEqual(invocation.value.unpack(), (True,))
 
 
 if __name__ == "__main__":

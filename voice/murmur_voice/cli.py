@@ -131,6 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=default_interaction_config_path(),
     )
     run_parser.add_argument("--socket", type=Path)
+    run_parser.add_argument("--review-socket", type=Path)
     run_parser.add_argument("--verbose", action="store_true")
 
     configure_parser = subparsers.add_parser(
@@ -168,6 +169,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--adaptive-corrections",
         type=Path,
         default=default_adaptive_corrections_path(),
+    )
+    adaptive_status_parser.add_argument(
+        "--corrections", type=Path, default=default_corrections_path()
+    )
+    adaptive_status_parser.add_argument(
+        "--vocabulary", type=Path, default=default_vocabulary_path()
     )
 
     adaptive_confirm_parser = subparsers.add_parser(
@@ -211,7 +218,11 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if options.command == "vocabulary":
         return _configure_vocabulary(options.vocabulary, options.import_file)
     if options.command == "adaptive-status":
-        return _adaptive_status(options.adaptive_corrections)
+        return _adaptive_status(
+            options.adaptive_corrections,
+            options.corrections,
+            options.vocabulary,
+        )
     if options.command == "adaptive-confirm":
         return _adaptive_confirm(
             options.adaptive_corrections,
@@ -230,6 +241,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             data_collection_path=options.data_collection,
             microphone_policy_path=options.microphone_priority,
             interaction_path=options.interaction,
+            review_socket_path=options.review_socket,
         )
     try:
         response = request_command(options.command, options.socket)
@@ -286,11 +298,19 @@ def _configure_vocabulary(path: Path, import_path: Path | None) -> int:
     return 0
 
 
-def _adaptive_status(path: Path) -> int:
+def _adaptive_status(
+    path: Path,
+    corrections_path: Path,
+    vocabulary_path: Path,
+) -> int:
     from .adaptive_runtime import adaptive_status_document
 
     try:
-        document = adaptive_status_document(path)
+        document = adaptive_status_document(
+            path,
+            corrections_path=corrections_path,
+            vocabulary_path=vocabulary_path,
+        )
     except ConfigError as error:
         print(str(error), file=sys.stderr)
         return 2
@@ -327,6 +347,7 @@ def _adaptive_confirm(
                 "ok": True,
                 "reason_code": result.reason_code,
                 "activated_count": result.activated_count,
+                "effective_next_request": result.activated_count > 0,
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -366,6 +387,7 @@ def _run(
     data_collection_path: Path | None = None,
     microphone_policy_path: Path | None = None,
     interaction_path: Path | None = None,
+    review_socket_path: Path | None = None,
 ) -> int:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -417,6 +439,11 @@ def _run(
             microphone_policy_validator=microphone_resolver.validate,
             observation_handler=getattr(runtime, "observe_result", runtime.observe),
             observation_result_handler=getattr(runtime, "record_external_result", None),
+            explicit_feedback_handler=getattr(
+                runtime,
+                "submit_explicit_feedback",
+                None,
+            ),
             data_collection_factory=(
                 data_collection_runtime.begin
                 if data_collection_runtime is not None
@@ -443,11 +470,10 @@ def _run(
             session,
             config_reader=lambda: load_interaction_config(resolved_interaction_path),
         )
-        server = ControlServer(
-            session,
-            socket_path,
-            interaction=interaction,
-        )
+        server_options: dict[str, Any] = {"interaction": interaction}
+        if review_socket_path is not None:
+            server_options["private_review_socket_path"] = review_socket_path
+        server = ControlServer(session, socket_path, **server_options)
     except (ConfigError, ControlError, ImportError, RuntimeError) as error:
         _close_data_collection_runtime(data_collection_runtime)
         # Configuration/control errors are authored locally and contain no key.

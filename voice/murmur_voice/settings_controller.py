@@ -6,7 +6,7 @@ import json
 import os
 import stat
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -39,7 +39,14 @@ from .config import (
     save_provider_config,
     save_vocabulary,
 )
-from .control import ControlError, request_command
+from .control import (
+    ControlError,
+    LastReview,
+    ReviewSubmitReply,
+    request_command,
+    request_last_review,
+    submit_last_review as request_review_submission,
+)
 from .data_collection import (
     DataCollectionConfig,
     default_data_collection_config_path,
@@ -172,6 +179,7 @@ class AdaptiveLearningSnapshot:
     statistics: dict[str, int]
     last_result: dict[str, Any] | None
     review_entries: tuple[AdaptiveReviewEntry, ...]
+    provider_view: dict[str, Any] = field(default_factory=dict)
 
 
 class CompletedProcessLike(Protocol):
@@ -181,6 +189,8 @@ class CompletedProcessLike(Protocol):
 
 Runner = Callable[..., CompletedProcessLike]
 StatusReader = Callable[[str], dict[str, Any]]
+ReviewReader = Callable[[], LastReview | None]
+ReviewSubmitter = Callable[[str, str], ReviewSubmitReply]
 
 
 class SettingsController:
@@ -198,6 +208,8 @@ class SettingsController:
         interaction_path: str | Path | None = None,
         runner: Runner = subprocess.run,
         status_reader: StatusReader = request_command,
+        review_reader: ReviewReader = request_last_review,
+        review_submitter: ReviewSubmitter = request_review_submission,
     ) -> None:
         self._config_path = (
             Path(config_path) if config_path is not None else default_config_path()
@@ -234,6 +246,8 @@ class SettingsController:
         )
         self._runner = runner
         self._status_reader = status_reader
+        self._review_reader = review_reader
+        self._review_submitter = review_submitter
 
     def key_state(self) -> KeyState:
         """Validate the key file without returning its value to the view."""
@@ -280,7 +294,11 @@ class SettingsController:
         """Load counts, recent reason, and locally reviewable candidates."""
 
         try:
-            status = adaptive_status_document(self._adaptive_corrections_path)
+            status = adaptive_status_document(
+                self._adaptive_corrections_path,
+                corrections_path=self._corrections_path,
+                vocabulary_path=self._vocabulary_path,
+            )
             entries = adaptive_review_entries(self._adaptive_corrections_path)
         except ConfigError as error:
             raise SettingsError(
@@ -303,10 +321,21 @@ class SettingsController:
                 )
                 for entry in entries
             ),
+            provider_view=dict(status.get("provider_view", {})),
         )
 
     def confirm_adaptive_learning(self, wrong: str, canonical: str) -> bool:
         """Explicitly activate one candidate without restarting the service."""
+
+        return self._confirm_adaptive_learning(wrong, canonical).activated_count > 0
+
+    def confirm_adaptive_learning_reason(self, wrong: str, canonical: str) -> str:
+        """Activate one candidate and return its content-free compiler reason."""
+
+        return self._confirm_adaptive_learning(wrong, canonical).reason_code
+
+    def _confirm_adaptive_learning(self, wrong: str, canonical: str) -> Any:
+        """Run one verified confirmation while keeping pair text out of errors."""
 
         try:
             result = confirm_adaptive_correction(
@@ -319,7 +348,7 @@ class SettingsController:
             raise SettingsError(
                 "The adaptive correction could not be confirmed safely."
             ) from error
-        return result.activated_count > 0
+        return result
 
     def submit_adaptive_feedback(
         self,
@@ -341,6 +370,41 @@ class SettingsController:
                 "The explicit adaptive feedback could not be saved safely."
             ) from error
         return result.reason_code
+
+    def load_last_review(self) -> LastReview | None:
+        """Load one recent provider final from the host-only volatile channel."""
+
+        try:
+            return self._review_reader()
+        except (ControlError, OSError, ValueError) as error:
+            raise SettingsError(
+                "The recent recognition result could not be loaded safely."
+            ) from error
+
+    def submit_last_review(
+        self,
+        utterance_id: str,
+        spoken_verbatim: str,
+    ) -> ReviewSubmitReply:
+        """Submit one ID-bound review through the daemon-owned transaction."""
+
+        try:
+            result = self._review_submitter(utterance_id, spoken_verbatim)
+        except ControlError as error:
+            if str(error) == "stale-review":
+                raise SettingsError(
+                    "The recent recognition result expired or was replaced."
+                ) from error
+            if str(error) == "session-active":
+                raise SettingsError("请先结束当前听写，再重新提交这次复核。") from error
+            raise SettingsError(
+                "The reviewed recognition result could not be submitted safely."
+            ) from error
+        if not isinstance(result, ReviewSubmitReply) or not result.ok:
+            raise SettingsError(
+                "The reviewed recognition result was not accepted by the daemon."
+            )
+        return result
 
     def save_key(self, api_key: str) -> None:
         """Persist a replacement key without testing it or restarting services."""

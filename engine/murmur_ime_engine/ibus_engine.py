@@ -168,6 +168,15 @@ class MurmurEngine(IBus.Engine):
             )
         return result
 
+    def observation_supported(self, owner: str, utterance_id: str) -> bool:
+        """Report capability only for the exact active focus-bound session."""
+
+        return self._sessions.observation_supported(
+            owner,
+            utterance_id,
+            self._focus_token,
+        )
+
     def cancel(self, owner: str, utterance_id: str) -> bool:
         if not self._sessions.cancel(owner, utterance_id):
             return False

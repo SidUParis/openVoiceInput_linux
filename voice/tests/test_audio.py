@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+import murmur_voice.audio as audio_module
 from murmur_voice.audio import (
     AudioCapture,
     AudioDeviceError,
@@ -16,8 +17,13 @@ from murmur_voice.audio import (
     SAMPLE_RATE,
     _PreflightBudget,
     _PulseInputSelection,
+    _pulse_source_from_json,
     _resolve_pulse_portaudio_device,
     resolve_input_device as _resolve_input_device,
+)
+from murmur_voice.microphone_metadata import (
+    MicrophoneSelectionMetadata,
+    privacy_preserving_microphone_identity,
 )
 from murmur_voice.microphone_policy import (
     MicrophonePolicyConfig,
@@ -144,6 +150,221 @@ def test_audio_capture_resolves_again_for_every_recording():
     capture.stop()
 
     assert [stream.kwargs["device"] for stream in streams] == [3, 7]
+
+
+def test_actual_pulse_route_observation_is_async_and_tracks_external_moves():
+    intended_source = "alsa_input.usb-private-serial.dji"
+    built_in_source = "alsa_input.pci-private-label.internal"
+    identity = privacy_preserving_microphone_identity(
+        "dji",
+        bus="usb",
+        vendor_id="2ca3",
+        product_id="4011",
+    )
+    selection = _PulseInputSelection(
+        intended_source,
+        17,
+        MicrophoneSelectionMetadata(
+            identity,
+            "pulse",
+            "policy-preferred",
+            "online",
+        ),
+    )
+    first_query_entered = threading.Event()
+    release_first_query = threading.Event()
+    calls = []
+    active_source_index = [9]
+
+    def runner(arguments):
+        command = tuple(arguments)
+        calls.append(command)
+        if command == ("--format=json", "list", "source-outputs"):
+            if not first_query_entered.is_set():
+                first_query_entered.set()
+                assert release_first_query.wait(timeout=1)
+            return json.dumps(
+                [
+                    {
+                        "source": active_source_index[0],
+                        "properties": {"application.process.id": str(os.getpid())},
+                    }
+                ]
+            )
+        if command == ("--format=json", "list", "sources"):
+            return json.dumps(
+                [
+                    {
+                        "index": 9,
+                        "name": intended_source,
+                        "state": "RUNNING",
+                        "properties": {
+                            "device.class": "sound",
+                            "media.class": "Audio/Source",
+                            "device.bus": "usb",
+                            "device.vendor.id": "2ca3",
+                            "device.product.id": "4011",
+                        },
+                    },
+                    {
+                        "index": 8,
+                        "name": built_in_source,
+                        "state": "RUNNING",
+                        "properties": {
+                            "device.class": "sound",
+                            "media.class": "Audio/Source",
+                            "device.bus": "pci",
+                            "device.form_factor": "internal",
+                        },
+                    },
+                ]
+            )
+        raise AssertionError(f"unexpected mutating or unrelated pactl call: {command}")
+
+    snapshots = []
+    capture = AudioCapture(
+        stream_factory=FakeStream,
+        input_resolver=lambda: selection,
+        route_observation_runner=runner,
+    )
+    capture.set_source_metadata_callback(snapshots.append)
+    started = time.monotonic()
+    capture.start(lambda _data: None)
+
+    # The recorder is already running while the first read-only pactl query is
+    # deliberately blocked; provenance discovery is not a startup gate.
+    assert time.monotonic() - started < 0.5
+    assert capture.is_capturing
+    assert first_query_entered.wait(timeout=1)
+    assert snapshots[-1].as_record_document()["actual"]["status"] == "unknown"
+    release_first_query.set()
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not any(
+        snapshot.actual_routes for snapshot in snapshots
+    ):
+        time.sleep(0.01)
+    assert snapshots[-1].actual_routes[0].identity.category == "dji"
+
+    # The 250 ms follow-up checks only the source-output index. The expensive
+    # source identity list remains cached while that index is unchanged.
+    time.sleep(0.4)
+    assert calls.count(("--format=json", "list", "sources")) == 1
+    active_source_index[0] = 8
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and len(snapshots[-1].actual_routes) < 2:
+        time.sleep(0.01)
+    capture.stop()
+
+    document = snapshots[-1].as_record_document()
+    assert [route["category"] for route in document["actual"]["routes"]] == [
+        "dji",
+        "built-in",
+    ]
+    assert document["actual"]["route_changed"] is True
+    assert document["actual"]["status"] == "observed"
+    serialized = json.dumps(document)
+    assert intended_source not in serialized
+    assert built_in_source not in serialized
+    assert set(calls) <= {
+        ("--format=json", "list", "source-outputs"),
+        ("--format=json", "list", "sources"),
+    }
+    assert calls.count(("--format=json", "list", "sources")) == 2
+
+
+def test_route_observer_stops_at_bounded_transition_limit(monkeypatch):
+    monkeypatch.setattr(audio_module, "_ROUTE_INITIAL_OBSERVATION_DELAYS_SECONDS", ())
+    monkeypatch.setattr(
+        audio_module,
+        "_ROUTE_STEADY_OBSERVATION_INTERVAL_SECONDS",
+        0.0,
+    )
+    identity = privacy_preserving_microphone_identity("external", bus="usb")
+    selection = _PulseInputSelection(
+        "alsa_input.usb-private-1",
+        17,
+        MicrophoneSelectionMetadata(
+            identity,
+            "pulse",
+            "unique-policy-candidate",
+            "not-present",
+        ),
+    )
+    source_output_reads = [0]
+    source_reads = [0]
+
+    def runner(arguments):
+        command = tuple(arguments)
+        if command == ("--format=json", "list", "source-outputs"):
+            source_output_reads[0] += 1
+            return json.dumps(
+                [
+                    {
+                        "source": source_output_reads[0],
+                        "properties": {"application.process.id": str(os.getpid())},
+                    }
+                ]
+            )
+        if command == ("--format=json", "list", "sources"):
+            source_reads[0] += 1
+            return json.dumps(
+                [
+                    {
+                        "index": source_output_reads[0],
+                        "name": f"alsa_input.usb-private-{source_output_reads[0]}",
+                        "properties": {
+                            "device.class": "sound",
+                            "media.class": "Audio/Source",
+                            "device.bus": "usb",
+                        },
+                    }
+                ]
+            )
+        raise AssertionError(f"unexpected pactl call: {command}")
+
+    snapshots = []
+    capture = AudioCapture(
+        stream_factory=FakeStream,
+        input_resolver=lambda: selection,
+        route_observation_runner=runner,
+    )
+    capture.set_source_metadata_callback(snapshots.append)
+    capture.start(lambda _data: None)
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not snapshots[-1].observation_truncated:
+        time.sleep(0.01)
+    capture.stop()
+
+    assert snapshots[-1].observation_truncated is True
+    assert len(snapshots[-1].actual_routes) == 16
+    assert source_output_reads[0] == 16
+    assert source_reads[0] == 16
+
+
+def test_route_observer_does_not_run_without_opted_in_metadata_consumer():
+    identity = privacy_preserving_microphone_identity("built-in", bus="pci")
+    selection = _PulseInputSelection(
+        "alsa_input.pci-private.internal",
+        17,
+        MicrophoneSelectionMetadata(
+            identity,
+            "pulse",
+            "system-default-within-category",
+            "not-present",
+        ),
+    )
+    calls = []
+    capture = AudioCapture(
+        stream_factory=FakeStream,
+        input_resolver=lambda: selection,
+        route_observation_runner=lambda arguments: calls.append(arguments) or "[]",
+    )
+
+    capture.start(lambda _data: None)
+    time.sleep(0.05)
+    capture.stop()
+
+    assert calls == []
 
 
 def test_pulse_route_is_present_through_factory_and_start_then_restored(monkeypatch):
@@ -493,6 +714,75 @@ def test_linked_dji_is_bound_for_this_stream_without_changing_system_default():
     assert not any(call[0].startswith("set-") for call in pactl.calls)
 
 
+def test_selection_metadata_records_policy_reason_and_link_without_private_name():
+    built_in = "alsa_input.pci-user-private-label.analog-stereo"
+    dji = "alsa_input.usb-DJI_private_USB_serial.analog-stereo"
+    pactl = FakePactl(
+        sources=_short_source(8, built_in) + _short_source(9, dji),
+        default=built_in,
+        json_sources=[
+            _json_source(
+                built_in,
+                2,
+                extra_properties={
+                    "device.bus": "pci",
+                    "device.form_factor": "internal",
+                },
+            ),
+            _json_source(
+                dji,
+                4,
+                extra_properties={
+                    "device.bus": "usb",
+                    "device.vendor.id": "0x2ca3",
+                    "device.product.id": "0x4011",
+                },
+            ),
+        ],
+    )
+
+    selection = resolve_input_device(
+        pactl_runner=pactl,
+        dji_link_probe=lambda: True,
+    )
+
+    assert selection.metadata is not None
+    document = selection.metadata.as_record_document()
+    assert document["category"] == "dji"
+    assert document["provenance"] == "unique-policy-candidate"
+    assert document["dji_link_state_at_selection"] == "online"
+    assert document["fingerprint_scope"] == "device-model"
+    assert dji not in json.dumps(document)
+
+
+def test_microphone_fingerprint_does_not_depend_on_raw_source_name_or_serial():
+    properties = {
+        "device.class": "sound",
+        "media.class": "Audio/Source",
+        "device.bus": "usb",
+        "device.vendor.id": "2ca3",
+        "device.product.id": "4011",
+    }
+    first = _pulse_source_from_json(
+        {
+            "index": 1,
+            "name": "alsa_input.usb-DJI-secret-serial-one",
+            "properties": properties,
+        }
+    )
+    second = _pulse_source_from_json(
+        {
+            "index": 2,
+            "name": "alsa_input.usb-DJI-secret-serial-two",
+            "properties": properties,
+        }
+    )
+
+    assert first is not None and second is not None
+    assert first.identity == second.identity
+    assert "secret" not in first.identity.fingerprint
+
+
 def test_offline_dji_falls_back_to_unique_built_in_for_this_stream():
     built_in = "alsa_input.pci-test.analog-stereo"
     dji = "alsa_input.usb-DJI_Technology_Co.__Ltd._Wireless_Mic_Rx.analog-stereo"
@@ -507,6 +797,9 @@ def test_offline_dji_falls_back_to_unique_built_in_for_this_stream():
     )
 
     _assert_pulse_selection(selection, built_in)
+    assert selection.metadata is not None
+    assert selection.metadata.identity.category == "built-in"
+    assert selection.metadata.dji_link_state_at_selection == "offline"
     assert pactl.default == dji
     assert not any(call[0].startswith("set-") for call in pactl.calls)
 
@@ -1994,13 +2287,14 @@ def _missing_pactl(arguments):
 
 
 def test_missing_pactl_uses_inspectable_portaudio_default():
-    assert (
-        resolve_input_device(
-            pactl_runner=_missing_pactl,
-            sounddevice_module=FakeSoundDevice(),
-        )
-        == 4
+    selection = resolve_input_device(
+        pactl_runner=_missing_pactl,
+        sounddevice_module=FakeSoundDevice(),
     )
+
+    assert selection == 4
+    assert selection.metadata.identity.category == "built-in"
+    assert selection.metadata.provenance == "portaudio-default"
 
 
 def test_unindexed_physical_default_is_frozen_only_after_unique_enumeration():

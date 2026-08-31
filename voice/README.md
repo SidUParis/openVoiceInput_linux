@@ -182,10 +182,26 @@ no final, and incomplete audio publish nothing.
 
 Each atomically published `utterances/<utterance_id>/` contains `audio.wav` and
 versioned `record.json` with identifiers, UTC time, explicit-opt-in consent,
-audio format/frame counts and hashes, provider/model identity, and three label
-roles. `provider_final` is `teacher-unreviewed`: it is a pseudo-label, not
+audio format/frame counts and hashes, provider/model identity, microphone
+selection/actual-route provenance, and three label roles. `provider_final` is
+`teacher-unreviewed`: it is a pseudo-label, not
 ground truth. `spoken_verbatim` and `preferred_output` are both null/unreviewed
 until a separate human-review workflow exists.
+
+New records use schema v2. Existing v1 records are not rewritten; both versions
+can coexist below the unchanged `openvoiceinput-dataset-v1` marker. The v2
+`microphone` object stores category, a non-unique privacy-safe fingerprint,
+selection provenance, DJI link state at selection, and bounded actual Pulse
+source-output route transitions. It stores no raw Pulse source name, USB serial,
+Bluetooth address, or custom device label. See
+[`docs/personal-asr-data-plan.md`](../docs/personal-asr-data-plan.md) for the
+reader migration rule.
+
+Schema v2 also adds numeric `audio.quality` diagnostics computed after final
+acceptance by the background writer: overall/first-second clipping and zero
+fractions, RMS/peak dBFS, normalized DC offset, and sample count. This is only
+future filtering evidence. It runs outside the callback/start path, rejects no
+record, and changes no PCM sample.
 
 After post-commit learning finishes, an enabled collection may add an atomic,
 append-only `feedback/<utterance_id>/<event_id>.json` event with bounded

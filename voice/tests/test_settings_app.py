@@ -19,14 +19,20 @@ if not Gtk.init_check():
     pytest.skip("a GTK display is not available", allow_module_level=True)
 
 from murmur_voice.data_collection import DataCollectionConfig  # noqa: E402
+from murmur_voice.control import LastReview, ReviewSubmitReply  # noqa: E402
 from murmur_voice.interaction import InteractionConfig  # noqa: E402
 from murmur_voice.microphone_policy import (  # noqa: E402
     DEFAULT_MICROPHONE_PRIORITY,
     MicrophonePolicyConfig,
 )
-from murmur_voice.settings_app import APPLY_NOTICE, SettingsWindow  # noqa: E402
+from murmur_voice.settings_app import (  # noqa: E402
+    APPLY_NOTICE,
+    SettingsApplication,
+    SettingsWindow,
+)
 from murmur_voice.settings_controller import (  # noqa: E402
     CORRECTION_TEXT_LIMIT,
+    AdaptiveLearningSnapshot,
     DatasetStatistics,
     KeyState,
     ProviderSelection,
@@ -47,6 +53,15 @@ class FakeController:
         self.saved_data_collection = None
         self.saved_interaction = None
         self.submitted_adaptive_feedback = None
+        self.submitted_last_review = None
+        self.review_submit_reply = ReviewSubmitReply(
+            True,
+            "review-submitted",
+            "explicit-feedback-activated",
+            "feedback-disabled",
+        )
+        self.loaded_last_review = LastReview("utterance-1", "Ostro uses openai")
+        self.last_review_error = None
         self.service_actions = []
         self.key_error = None
         self.clear_key_error = None
@@ -120,6 +135,15 @@ class FakeController:
     def submit_adaptive_feedback(self, provider_text, preferred_text):
         self.submitted_adaptive_feedback = (provider_text, preferred_text)
         return "explicit-feedback-activated"
+
+    def load_last_review(self):
+        if self.last_review_error is not None:
+            raise self.last_review_error
+        return self.loaded_last_review
+
+    def submit_last_review(self, utterance_id, spoken_verbatim):
+        self.submitted_last_review = (utterance_id, spoken_verbatim)
+        return self.review_submit_reply
 
     def load_microphone_policy(self):
         if self.microphone_policy_error is not None:
@@ -699,22 +723,173 @@ def test_correction_explanation_names_provider_scope_and_bounded_learning(window
     assert "中等置信与冲突项" in explanation
 
 
+def test_adaptive_view_distinguishes_sources_from_effective_provider_context(window):
+    settings_window, _ = window
+    settings_window._replace_adaptive_learning(
+        AdaptiveLearningSnapshot(
+            statistics={
+                "active": 3,
+                "candidate": 2,
+                "conflicted": 1,
+                "suspended": 0,
+                "archived": 0,
+                "total": 6,
+            },
+            last_result={"reason_code": "explicitly-suppressed-capacity"},
+            review_entries=(),
+            provider_view={
+                "explicit_vocabulary_count": 4,
+                "manual_correction_count": 2,
+                "effective_correction_count": 4,
+                "manual_effective_count": 2,
+                "adaptive_effective_count": 2,
+                "adaptive_suppressed_count": 1,
+                "suppression_reasons": {"suppressed-capacity": 1},
+            },
+        )
+    )
+
+    summary = settings_window.adaptive_provider_view_label.get_text()
+    assert "明确词汇 4" in summary
+    assert "明确纠错 2" in summary
+    assert "自适应生效 2" in summary
+    assert "纠错上下文共 4" in summary
+    assert "另有 1 条" in summary
+    assert "容量已满" in settings_window.adaptive_recent_label.get_text()
+
+
 def test_cross_application_feedback_entry_is_explicit_and_clears_after_submit(window):
     settings_window, controller = window
-    settings_window.adaptive_provider_entry.set_text("Ostro uses openai")
+    assert settings_window.adaptive_provider_entry.get_editable() is False
+    settings_window._on_load_last_review(settings_window.load_last_review_button)
+    assert settings_window.adaptive_provider_entry.get_text() == "Ostro uses openai"
+    assert settings_window.adaptive_preferred_entry.get_text() == "Ostro uses openai"
     settings_window.adaptive_preferred_entry.set_text("Austral uses OpenAI")
 
     settings_window._on_submit_adaptive_feedback(
         settings_window.submit_adaptive_feedback_button
     )
 
-    assert controller.submitted_adaptive_feedback == (
-        "Ostro uses openai",
+    assert controller.submitted_last_review == (
+        "utterance-1",
         "Austral uses OpenAI",
     )
     assert settings_window.adaptive_provider_entry.get_text() == ""
     assert settings_window.adaptive_preferred_entry.get_text() == ""
-    assert "下一次听写" in settings_window.message_label.get_text()
+    message = settings_window.message_label.get_text()
+    assert "下一次听写" in message
+    assert "数据留存未启用" in message
+
+
+def test_review_last_opens_correction_page_and_never_calls_service(window):
+    settings_window, controller = window
+
+    settings_window.open_last_review()
+
+    assert settings_window.settings_stack.get_visible_child_name() == "corrections"
+    assert settings_window.adaptive_provider_entry.get_text() == "Ostro uses openai"
+    assert settings_window.adaptive_provider_entry.get_editable() is False
+    assert "实际说出的逐字内容" in settings_window.message_label.get_text()
+    assert controller.service_actions == []
+
+
+@pytest.mark.parametrize(
+    ("feedback_code", "expected"),
+    (
+        ("feedback-failed", "训练反馈未能加入保存队列"),
+        ("feedback-queued", "尚未确认最终落盘"),
+    ),
+)
+def test_review_submission_distinguishes_feedback_persistence(
+    window, feedback_code, expected
+):
+    settings_window, controller = window
+    controller.review_submit_reply = ReviewSubmitReply(
+        True,
+        "review-submitted",
+        "explicit-feedback-activated",
+        feedback_code,
+    )
+    settings_window.open_last_review()
+    settings_window.adaptive_preferred_entry.set_text("Austral uses OpenAI")
+
+    settings_window._on_submit_adaptive_feedback(
+        settings_window.submit_adaptive_feedback_button
+    )
+
+    assert expected in settings_window.message_label.get_text()
+    assert settings_window._loaded_review_id is None
+
+
+def test_review_copy_forbids_polishing_language_and_handles_expiry(window):
+    settings_window, controller = window
+    controller.loaded_last_review = None
+
+    settings_window._on_load_last_review(settings_window.load_last_review_button)
+
+    assert settings_window.adaptive_provider_entry.get_text() == ""
+    assert settings_window.adaptive_preferred_entry.get_text() == ""
+    assert "十分钟" in settings_window.message_label.get_text()
+    notice = settings_window.adaptive_feedback_notice_label.get_text()
+    assert "去口头词" in notice
+    assert "润色" in notice
+    assert "ASR 标注" in notice
+
+
+def test_review_last_command_line_is_forwardable_without_registering_a_hotkey():
+    class Window:
+        def __init__(self):
+            self.presentations = 0
+            self.reviews = 0
+
+        def present(self):
+            self.presentations += 1
+
+        def open_last_review(self):
+            self.reviews += 1
+
+    class RecordingApplication(SettingsApplication):
+        def __init__(self):
+            super().__init__(FakeController())
+            self.activations = 0
+            self._window = Window()
+
+        def activate(self):
+            self.activations += 1
+            self.do_activate()
+
+    class CommandLine:
+        def __init__(self, arguments):
+            self.arguments = arguments
+            self.errors = []
+
+        def get_arguments(self):
+            return self.arguments
+
+        def printerr(self, message):
+            self.errors.append(message)
+
+    application = RecordingApplication()
+    command_line = CommandLine(["open-voice-input-settings", "--review-last"])
+
+    assert application.do_command_line(command_line) == 0
+    assert application.activations == 1
+    assert application._review_last_requested is False
+    assert application._window.presentations == 1
+    assert application._window.reviews == 1
+    assert command_line.errors == []
+
+    # A second process forwards the same command line to the already-running
+    # application instance and reopens/reloads the same review page.
+    assert application.do_command_line(command_line) == 0
+    assert application.activations == 2
+    assert application._window.presentations == 2
+    assert application._window.reviews == 2
+
+    invalid = CommandLine(["open-voice-input-settings", "--listen-to-all-keys"])
+    assert application.do_command_line(invalid) == 2
+    assert application.activations == 2
+    assert invalid.errors == ["unsupported settings argument\n"]
 
 
 def test_service_controls_are_explicit_and_offer_no_restart(window):
