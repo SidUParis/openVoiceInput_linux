@@ -37,8 +37,9 @@ is the default and remains fully usable without one. A user who explicitly
 selects the remote-desktop target must install the helper matching the active
 graphical session (`xclip` for X11 or `wl-clipboard` for Wayland). Runtime
 preflight fails before microphone/provider use if that explicit target cannot
-be supported. The packaged dependency is an alternative rather than vendored
-code; session mismatch is still reported honestly at runtime.
+be supported. The package installs both small external system helpers rather
+than vendoring either one; session mismatch is still reported honestly at
+runtime.
 
 The voice wheel is GPL-3.0-only and contains its `LICENSE` plus the complete
 Doubao Murmur MIT notice in `NOTICE.md`. Adapted source boundaries are listed
