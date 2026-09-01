@@ -242,7 +242,11 @@ class ClipboardWriter:
                     _XCLIP,
                     (_XCLIP, "-selection", "clipboard", "-in"),
                     x11_socket,
-                    frozenset({uid}) | trusted_system_uids,
+                    # The display itself must belong to this desktop user.
+                    # overflowuid can represent any unmapped host account, so
+                    # it is trusted for fixed root-owned files/directories but
+                    # never for a per-session X socket.
+                    frozenset({uid}),
                 )
             )
         for backend, path, command, display_socket, socket_owners in candidates:

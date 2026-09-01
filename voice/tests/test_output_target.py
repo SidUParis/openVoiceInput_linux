@@ -307,6 +307,32 @@ def test_clipboard_preflight_rejects_overflow_owner_without_user_namespace():
         writer.preflight()
 
 
+def test_clipboard_preflight_rejects_unmapped_other_user_x_socket():
+    def namespace_binary(_path):
+        return SimpleNamespace(st_mode=stat.S_IFREG | 0o755, st_uid=65534)
+
+    def namespace_socket(path):
+        value = os.fspath(path)
+        if value == "/tmp/.X11-unix":
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o1777, st_uid=65534)
+        if value == "/tmp/.X11-unix/X0":
+            return SimpleNamespace(st_mode=stat.S_IFSOCK | 0o777, st_uid=65534)
+        raise FileNotFoundError
+
+    writer = ClipboardWriter(
+        metadata_reader=namespace_binary,
+        socket_metadata_reader=namespace_socket,
+        socket_probe=_successful_socket_probe,
+        uid_reader=lambda: 1000,
+        uid_map_reader=lambda: "1000 1000 1\n",
+        overflow_uid_reader=lambda: 65534,
+        environment={"DISPLAY": ":0"},
+    )
+
+    with pytest.raises(ClipboardError, match="unavailable"):
+        writer.preflight()
+
+
 def test_clipboard_write_uses_only_bounded_stdin_and_never_transcript_argv():
     calls = []
     private_text = "远程 private transcript"
