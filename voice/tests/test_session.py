@@ -9,6 +9,7 @@ from murmur_voice.adaptive_runtime import (
 from murmur_voice.audio import AudioDeviceError, MicrophonePolicyError
 from murmur_voice.config import ConfigError, VoiceConfig
 from murmur_voice.preedit import AcquireResult, ObservationSnapshot
+from murmur_voice.output_style import OutputDelivery, OutputStyleConfig
 from murmur_voice.session import (
     ADAPTIVE_OBSERVATION_FINISH_MARGIN_SECONDS,
     ADAPTIVE_OBSERVATION_SECONDS,
@@ -77,6 +78,7 @@ class FakeDataRecord:
         self.audio = []
         self.stop_calls = 0
         self.commits = []
+        self.deliveries = []
         self.discards = 0
         self.commit_error = commit_error
         self.stop_result = stop_result
@@ -89,8 +91,9 @@ class FakeDataRecord:
         self.stop_calls += 1
         return self.stop_result
 
-    def commit(self, provider_final):
+    def commit(self, provider_final, delivery):
         self.commits.append(provider_final)
+        self.deliveries.append(delivery)
         if self.commit_error is not None:
             raise self.commit_error
 
@@ -809,6 +812,140 @@ def test_partials_and_authoritative_final_use_strict_revisions_once():
     assert preedit.calls[2][2] == 2
     assert preedit.calls[3][2] == 3
     assert preedit.calls[4][2:] == (4, "第二版")
+
+
+def test_clean_mode_keeps_partials_raw_and_cleans_only_terminal_delivery():
+    reasons = []
+    learned = []
+    session, asr, _audio, preedit, timers, _order = _session(
+        output_style_reader=lambda: OutputStyleConfig("clean"),
+        observation_handler=lambda snapshot: learned.append(snapshot),
+        observation_result_handler=lambda reason: (
+            reasons.append(reason) or AdaptiveObservationResult(reason)
+        ),
+    )
+    session.start()
+
+    asr.on_result("我我觉得，呃，可以。")
+    partial = [call for call in preedit.calls if call[0] == "partial"][-1]
+    assert partial[-1] == "我我觉得，呃，可以。"
+    asr.on_finish()
+
+    final = next(call for call in preedit.calls if call[0] == "final")
+    assert final[-1] == "我觉得，可以。"
+    assert session.state is VoiceState.IDLE
+    assert reasons == ["postprocessed-output-not-safe-for-asr-learning"]
+    assert learned == []
+    assert [call[0] for call in preedit.calls].count("finish-observation") == 1
+    assert len(timers) == 2
+    review = session.review_last()
+    assert review is not None
+    assert review.provider_text == "我我觉得，呃，可以。"
+    assert review.delivered_text == "我觉得，可以。"
+
+
+def test_clean_mode_is_frozen_at_start_and_a_save_applies_next_utterance():
+    current = [OutputStyleConfig("clean")]
+    utterances = iter(("utterance-1", "utterance-2"))
+    session, asr, _audio, preedit, _timers, _order = _session(
+        utterance_factory=lambda: next(utterances),
+        output_style_reader=lambda: current[0],
+    )
+    session.start()
+    current[0] = OutputStyleConfig("faithful")
+    asr.on_result("我我继续。")
+    asr.on_finish()
+
+    first_final = [call for call in preedit.calls if call[0] == "final"][-1]
+    assert first_final[-1] == "我继续。"
+    assert session.state is VoiceState.IDLE
+
+    session.start()
+    asr.on_result("我我继续。")
+    asr.on_finish()
+    second_final = [call for call in preedit.calls if call[0] == "final"][-1]
+    assert second_final[-1] == "我我继续。"
+    assert session.state is VoiceState.OBSERVING
+
+
+def test_invalid_output_style_fails_before_focus_provider_or_microphone():
+    def invalid():
+        raise ConfigError("private mode must not escape")
+
+    session, asr, audio, preedit, timers, order = _session(
+        output_style_reader=invalid,
+    )
+
+    reply = session.start()
+
+    assert reply.code == "output-style-invalid"
+    assert reply.state is VoiceState.IDLE
+    assert asr.connected == 0
+    assert audio.started == 0
+    assert preedit.calls == []
+    assert timers == []
+    assert order == []
+
+
+def test_clean_processor_failure_delivers_raw_and_preserves_observation():
+    def fail(_provider_final, _mode):
+        raise RuntimeError("private transcript must not escape")
+
+    session, asr, _audio, preedit, timers, _order = _session(
+        output_style_reader=lambda: OutputStyleConfig("clean"),
+        output_delivery_factory=fail,
+    )
+    session.start()
+    asr.on_result("我我继续。")
+
+    asr.on_finish()
+
+    final = next(call for call in preedit.calls if call[0] == "final")
+    assert final[-1] == "我我继续。"
+    assert session.state is VoiceState.OBSERVING
+    assert len(timers) == 3
+
+
+def test_malformed_delivery_factory_can_never_commit_arbitrary_terminal_text():
+    session, asr, _audio, preedit, _timers, _order = _session(
+        output_style_reader=lambda: OutputStyleConfig("clean"),
+        output_delivery_factory=lambda _raw, _mode: OutputDelivery(
+            mode="clean",
+            text="arbitrary replacement",
+            processor="openvoice-clean-expression",
+            processor_version=1,
+            outcome="cleaned",
+        ),
+    )
+    session.start()
+    asr.on_result("raw provider final")
+
+    asr.on_finish()
+
+    final = next(call for call in preedit.calls if call[0] == "final")
+    assert final[-1] == "raw provider final"
+    assert "arbitrary replacement" not in repr(session.review_last())
+    assert session.state is VoiceState.OBSERVING
+
+
+def test_explicit_review_learns_from_raw_provider_not_cleaned_delivery():
+    submissions = []
+    session, asr, _audio, _preedit, _timers, _order = _session(
+        output_style_reader=lambda: OutputStyleConfig("clean"),
+        observation_result_handler=lambda reason: AdaptiveObservationResult(reason),
+        explicit_feedback_handler=lambda raw, spoken: (
+            submissions.append((raw, spoken))
+            or AdaptiveObservationResult("explicit-feedback-activated")
+        ),
+    )
+    session.start()
+    asr.on_result("我我觉得，呃，可以。")
+    asr.on_finish()
+
+    reply = session.submit_last_review("utterance-1", "我觉得可以。")
+
+    assert reply.ok is True
+    assert submissions == [("我我觉得，呃，可以。", "我觉得可以。")]
 
 
 @pytest.mark.parametrize("failure", ("factory", "start"))

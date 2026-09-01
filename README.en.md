@@ -166,6 +166,9 @@ See [known changes and limitations](CHANGELOG.md) and the
 
 - Cumulative partial text at the active caret and one authoritative final
   commit, without clipboard paste.
+- Faithful final delivery by default, or optional final-only local clean
+  delivery using bounded, deterministic deletion rules. Partials remain raw;
+  cleanup adds no LLM or extra network request and falls back to raw safely.
 - Focus token, D-Bus sender, utterance ID and monotonically increasing revision
   checks; stale or late results are rejected.
 - Cancellation on focus loss, engine disable or sidecar disappearance.
@@ -194,7 +197,7 @@ open-voice-input-settings
 ```
 
 The saved key is never prefilled into the window. Saving a key, vocabulary,
-correction, microphone order or collection choice does not contact the
+correction, microphone order, output style, or collection choice does not contact the
 provider or interrupt an active recording. Changes are loaded for the next
 dictation.
 
@@ -224,7 +227,7 @@ already happened.
 
 ### Optional personal-ASR records
 
-Enable the explicitly labelled WAV + unreviewed `provider_final` collection
+Enable the explicitly labelled WAV + raw-provider + actual-delivery collection
 checkbox only if you want to retain data. Select an existing absolute local path or an operating-
 system-mounted filesystem. The application itself does not log in to a remote
 host, mount SSH storage or accept a Google Drive URL. See the
@@ -234,6 +237,12 @@ asynchronous `rclone` backup boundaries.
 Direct writes have no local fallback spool. A stalled or disconnected mount
 can lose an unpublished staged record, while already published records remain.
 The selected filesystem controls its effective access and at-rest protection.
+
+New schema-v3 records keep raw `provider_final`, null human
+`spoken_verbatim`/`preferred_output`, and actual
+`machine-derived-unreviewed` delivery as separate fields. Clean deletions are
+replayable from original offsets. Existing v1/v2 records remain immutable;
+usage schema v2 counts delivered characters while retaining v1-reader support.
 
 ## Architecture and safety boundaries
 

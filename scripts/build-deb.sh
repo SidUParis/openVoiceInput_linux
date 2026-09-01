@@ -290,7 +290,7 @@ fi
 [[ $(dpkg-deb -f "$package_temporary" Architecture) == amd64 ]] || die \
   "Built package has the wrong architecture" 2
 if dpkg-deb --fsys-tarfile "$package_temporary" | tar -tf - \
-  | grep -Eq '(^|/)(voice\.json|vocabulary\.json|corrections\.json|adaptive-corrections\.json|data-collection\.json|microphone-priority\.json)$'; then
+  | grep -Eq '(^|/)(voice\.json|vocabulary\.json|corrections\.json|adaptive-corrections\.json|data-collection\.json|interaction\.json|microphone-priority\.json|output-style\.json)$'; then
   die "Built package unexpectedly owns a private user configuration filename" 2
 fi
 

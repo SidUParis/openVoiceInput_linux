@@ -2,7 +2,8 @@
 
 Open Voice Input Linux treats a live ASR hypothesis as a draft. It can be wrong
 and may be replaced several times before the provider emits the authoritative
-two-pass result. Only that final result is committed.
+two-pass result. Only that final result is eligible for terminal delivery; the
+user can choose the raw final or conservative local deletion-only cleanup.
 
 ## Accuracy layers
 
@@ -19,7 +20,69 @@ This layer fixes many errors without another model and must run before any
 local correction rule is considered. The live preedit is intentionally
 replaceable; the final text is committed once.
 
-### 2. Explicit personal vocabulary
+For Volcengine responses, `result.text` remains the compatibility fallback.
+When the documented `result.utterances` structure is present, the client uses
+the millisecond `start_time`/`end_time` fields to retain completed sentences
+across response frames and lets `definite: true` two-pass text replace the
+streaming hypothesis for the same sentence. Repeated full-result frames are
+deduplicated by their provider time slot. If a later two-pass response changes
+sentence boundaries, its definite time interval replaces every overlapping
+older interval; an incremental later sentence cannot discard a separate,
+earlier completed sentence. A connection-level terminal frame may contain no
+new text, so it finishes the retained assembly instead of replacing it with an
+empty value. That retained assembly includes the last nondefinite trailing
+sentence when no newer two-pass tail was provided, avoiding silent loss of
+already displayed speech. The client never guesses an overlap from transcript
+content when the documented timing fields are absent. Incremental assembly is
+bounded to the same 4,096-codepoint/16-KiB limit as the focused preedit; an
+oversized provider transcript fails the utterance instead of growing retained
+sentence state across frames.
+
+Utterance parsing is all-or-nothing for each provider frame. If any member of
+an advertised utterance list lacks its documented text, Boolean `definite`, or
+integer time interval, none of that frame's intervals enter the retained
+assembly. In validated `result_type: full` mode, a non-empty cumulative
+`result.text` is delivered as the compatibility fallback for that frame; if it
+is empty, the last safe assembly remains. In validated `result_type: single`
+mode, that field contains only the current sentence and cannot be safely joined
+without its time interval, so a malformed frame raises a content-free protocol
+error and never reaches the connection-finish callback. Later fully valid
+frames can still build on the definite intervals retained before a malformed
+frame. Any result type other than `full` or `single` is rejected when the
+client is initialized.
+
+### 2. Faithful or clean terminal delivery
+
+The private `output-style.json` has two modes and is frozen when each utterance
+starts. A missing file means `faithful`, so an upgrade never silently changes
+output. Saving during a recording affects only the next utterance.
+
+- `faithful` commits the raw authoritative provider final unchanged.
+- `clean` keeps every live partial raw, then runs a bounded deterministic local
+  cleaner only after the provider terminal event. It deletes only standalone
+  high-confidence hesitations and adjacent exact/self-restart fragments. It
+  does not call an LLM, make an extra network request, insert words, change a
+  term, number or letter case, or globally normalize punctuation. A separator
+  attached to a removed filler can be deleted with that filler.
+
+The cleaner accepts at most 4,096 codepoints and 64 deletion operations. An
+exception, oversized input, excessive edit count, non-replayable result, or a
+result that would remove all lexical content falls back to the raw provider
+final. Cleanup therefore never turns a valid final into an input failure. Each
+successful deletion retains original-codepoint offsets, source text, kind,
+reason and empty replacement so an opted-in schema-v3 record can replay the
+exact delivered text from `provider_final`.
+
+When clean delivery differs from the provider final, the daemon immediately
+consumes the IBus observation lease and records the content-free reason
+`postprocessed-output-not-safe-for-asr-learning`. It does not run adaptive
+extraction for that utterance: edits to machine-cleaned text are not safe
+evidence about the raw ASR span. Explicit review still uses raw
+`provider_final` as the only correction source; delivered text is read-only
+context. If cleanup is unchanged or falls back to raw, normal observation is
+preserved.
+
+### 3. Explicit personal vocabulary
 
 The standalone daemon implements an optional, explicit personal vocabulary for
 names, project terms, acronyms, place names, and specialised vocabulary. It is
@@ -49,7 +112,7 @@ to 10, and one table per request. See the official
 [hotword documentation](https://www.volcengine.com/docs/6561/155739) and
 [streaming SDK example](https://www.volcengine.com/docs/6561/1395846).
 
-### 3. Explicit provider-side correction pairs
+### 4. Explicit provider-side correction pairs
 
 When the final result repeatedly contains the same wrong form, the settings
 window lets the user explicitly enter `recognized as` and `correct to` values.
@@ -69,15 +132,16 @@ request-level pair count, phrase-length limit, or matching-boundary guarantee:
 For a non-empty mapping, the daemon merges `correct_words` with any existing
 `hotwords` inside the same compact `request.context` JSON string documented by
 Volcengine. The provider performs the correction during recognition. The
-client does not run `.replace()` or any other post-hoc local rewrite, so it
-cannot accidentally alter an unrelated committed phrase. Nothing is learned
+client does not run `.replace()` or a post-hoc term substitution, so it cannot
+accidentally alter an unrelated committed phrase. The optional clean delivery
+above is deletion-only and cannot change one spelling into another. Nothing is learned
 from partial hypotheses or from unrelated typing or clipboard content.
 
 See the official [streaming SDK
 example](https://www.volcengine.com/docs/6561/1395846), which documents
 `{"correct_words":{"deep seek":"DeepSeek"}}` inside `context`.
 
-### 4. Bounded adaptive correction memory
+### 5. Bounded adaptive correction memory
 
 After the provider's authoritative final is committed, `murmur-voice` retains
 the same focused IBus context for at most five seconds. If the application
@@ -88,6 +152,10 @@ extracts only changed portions inside the span. One high-confidence bounded
 replacement can activate immediately. Several independent bounded
 replacements are split into medium-confidence candidates and stay inactive
 until the user confirms them; the daemon never rewrites text already corrected.
+
+If clean terminal delivery removed anything, this observation is consumed
+without extraction as described above. Unchanged clean output and faithful
+output continue through the normal five-second path.
 
 This intentionally rejects ambiguous feedback:
 
@@ -149,8 +217,10 @@ ledger wholesale into either manual store. Their absence therefore means
 "no explicit entries", not that the adaptive runtime failed to load.
 
 For applications that cannot expose trusted IBus
-surrounding text, the same page offers an explicit fallback: the user supplies
-the provider sentence and their final sentence. The runtime diffs them in
+surrounding text, the same page offers an explicit fallback: the daemon shows
+the raw provider sentence and the user supplies what they actually said
+verbatim. Delivered text may be displayed read-only but is never the correction
+source. The runtime diffs raw provider and spoken text in
 memory, stores only safe bounded pairs, and activates an explicitly confirmed
 choice. It never reads the clipboard or global keyboard state and never stores
 the two complete sentences in the adaptive ledger. The CLI exposes content-free
@@ -174,7 +244,7 @@ dictation. If a manual-source conflict, cycle, cascade, overlap, or provider
 capacity prevents emission, settings and `adaptive-status` report that fixed
 reason instead of claiming success. Pair text never appears in status JSON.
 
-### 5. Advanced managed vocabulary
+### 6. Advanced managed vocabulary
 
 Teams with a large stable domain list may create a table in Volcengine's
 self-learning console and configure its `boosting_table_id`. This remains an
@@ -206,7 +276,9 @@ text. Report character error rate separately for:
 2. two-pass final;
 3. two-pass final plus personal vocabulary;
 4. two-pass final plus explicit correction pairs;
-5. two-pass final plus the bounded active adaptive-correction view.
+5. two-pass final plus the bounded active adaptive-correction view;
+6. raw provider final versus deterministic clean delivery, reported separately
+   because cleanup quality is not ASR accuracy.
 
 The audio and expected text stay outside Git. Repository tests use invented
 text and protocol fixtures only.
@@ -227,7 +299,9 @@ is written while collection is disabled.
 The separate collector can now retain an accepted utterance, but only after an
 explicit opt-in and only below an existing local or mounted folder selected by
 the user. It stores the exact 16 kHz mono signed 16-bit WAV and a versioned JSON
-record. The audio/provider-final pair is a future review candidate, not a gold
+schema-v3 record. It retains raw `provider_final` as the pseudo-label and stores
+the actual machine-derived delivery plus replayable deletions separately. The
+audio/provider-final pair is a future review candidate, not a gold
 sample or evidence that self-training is safe.
 
 Collection is bounded and written in the background. The application does not

@@ -57,6 +57,7 @@ class SystemdUnitTests(unittest.TestCase):
                 "VOICE_DATA_COLLECTION": "/tmp/data-collection.json",
                 "VOICE_MICROPHONE_PRIORITY": "/tmp/microphone-priority.json",
                 "VOICE_INTERACTION": "/tmp/interaction.json",
+                "VOICE_OUTPUT_STYLE": "/tmp/output-style.json",
             },
         )
 
@@ -87,6 +88,7 @@ class SystemdUnitTests(unittest.TestCase):
             voice_unit,
         )
         self.assertIn('--interaction "/tmp/interaction.json"', voice_unit)
+        self.assertIn('--output-style "/tmp/output-style.json"', voice_unit)
         self.assertIn("UMask=0077", voice_unit)
         self.assertIn(
             "RuntimeDirectory=murmur-ime murmur-ime-private",

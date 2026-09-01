@@ -21,14 +21,17 @@ if not Gtk.init_check():
 from murmur_voice.data_collection import DataCollectionConfig  # noqa: E402
 from murmur_voice.control import LastReview, ReviewSubmitReply  # noqa: E402
 from murmur_voice.interaction import InteractionConfig  # noqa: E402
+from murmur_voice.output_style import OutputStyleConfig  # noqa: E402
 from murmur_voice.microphone_policy import (  # noqa: E402
     DEFAULT_MICROPHONE_PRIORITY,
     MicrophonePolicyConfig,
 )
 from murmur_voice.settings_app import (  # noqa: E402
     APPLY_NOTICE,
+    SETTINGS_HELP,
     SettingsApplication,
     SettingsWindow,
+    main,
 )
 from murmur_voice.settings_controller import (  # noqa: E402
     CORRECTION_TEXT_LIMIT,
@@ -52,6 +55,7 @@ class FakeController:
         self.saved_microphone_priority = None
         self.saved_data_collection = None
         self.saved_interaction = None
+        self.saved_output_style = None
         self.submitted_adaptive_feedback = None
         self.submitted_last_review = None
         self.review_submit_reply = ReviewSubmitReply(
@@ -60,7 +64,11 @@ class FakeController:
             "explicit-feedback-activated",
             "feedback-disabled",
         )
-        self.loaded_last_review = LastReview("utterance-1", "Ostro uses openai")
+        self.loaded_last_review = LastReview(
+            "utterance-1",
+            "Ostro uses openai",
+            "Ostro uses OpenAI",
+        )
         self.last_review_error = None
         self.service_actions = []
         self.key_error = None
@@ -75,6 +83,7 @@ class FakeController:
         self.data_collection_error = None
         self.loaded_data_collection = DataCollectionConfig()
         self.loaded_interaction = InteractionConfig()
+        self.loaded_output_style = OutputStyleConfig()
         self.loaded_dataset_statistics = DatasetStatistics("disabled")
         self.dataset_statistics_calls = 0
         self.dataset_statistics_started = threading.Event()
@@ -185,6 +194,14 @@ class FakeController:
         )
         self.loaded_interaction = InteractionConfig(*self.saved_interaction)
         return self.loaded_interaction
+
+    def load_output_style(self):
+        return self.loaded_output_style
+
+    def save_output_style(self, mode):
+        self.saved_output_style = mode
+        self.loaded_output_style = OutputStyleConfig(mode)
+        return self.loaded_output_style
 
     def load_dataset_statistics(self):
         self.dataset_statistics_calls += 1
@@ -485,6 +502,32 @@ def test_ready_provider_can_be_selected_without_exposing_an_existing_key(window)
     assert "MiniMax" not in settings_window.provider_description_label.get_text()
 
 
+def test_output_style_is_faithful_by_default_and_discloses_clean_boundary(window):
+    settings_window, _ = window
+
+    assert settings_window.faithful_output_button.get_active() is True
+    assert settings_window.clean_output_button.get_active() is False
+    notice = settings_window.output_style_notice_label.get_text()
+    assert "本机" in notice
+    assert "不调用 LLM" in notice
+    assert "不会为清理发起额外网络请求" in notice
+    assert "术语、数字、大小写" in notice
+    assert "回退为识别原文" in notice
+    assert "跳过自动学习" in notice
+
+
+def test_clean_output_style_save_applies_next_utterance_without_service_action(window):
+    settings_window, controller = window
+    settings_window.clean_output_button.set_active(True)
+
+    settings_window.save_output_style()
+
+    assert controller.saved_output_style == "clean"
+    assert settings_window.clean_output_button.get_active() is True
+    assert "下一条听写" in settings_window.message_label.get_text()
+    assert controller.service_actions == []
+
+
 def test_key_save_clears_entry_and_never_restarts_service(window):
     settings_window, controller = window
     secret = "private-key-sentinel"
@@ -764,6 +807,8 @@ def test_cross_application_feedback_entry_is_explicit_and_clears_after_submit(wi
     settings_window._on_load_last_review(settings_window.load_last_review_button)
     assert settings_window.adaptive_provider_entry.get_text() == "Ostro uses openai"
     assert settings_window.adaptive_preferred_entry.get_text() == "Ostro uses openai"
+    assert settings_window.adaptive_delivered_entry.get_text() == "Ostro uses OpenAI"
+    assert settings_window.adaptive_delivered_entry.get_editable() is False
     settings_window.adaptive_preferred_entry.set_text("Austral uses OpenAI")
 
     settings_window._on_submit_adaptive_feedback(
@@ -776,6 +821,7 @@ def test_cross_application_feedback_entry_is_explicit_and_clears_after_submit(wi
     )
     assert settings_window.adaptive_provider_entry.get_text() == ""
     assert settings_window.adaptive_preferred_entry.get_text() == ""
+    assert settings_window.adaptive_delivered_entry.get_text() == ""
     message = settings_window.message_label.get_text()
     assert "下一次听写" in message
     assert "数据留存未启用" in message
@@ -789,6 +835,7 @@ def test_review_last_opens_correction_page_and_never_calls_service(window):
     assert settings_window.settings_stack.get_visible_child_name() == "corrections"
     assert settings_window.adaptive_provider_entry.get_text() == "Ostro uses openai"
     assert settings_window.adaptive_provider_entry.get_editable() is False
+    assert settings_window.adaptive_delivered_entry.get_text() == "Ostro uses OpenAI"
     assert "实际说出的逐字内容" in settings_window.message_label.get_text()
     assert controller.service_actions == []
 
@@ -829,11 +876,52 @@ def test_review_copy_forbids_polishing_language_and_handles_expiry(window):
 
     assert settings_window.adaptive_provider_entry.get_text() == ""
     assert settings_window.adaptive_preferred_entry.get_text() == ""
+    assert settings_window.adaptive_delivered_entry.get_text() == ""
     assert "十分钟" in settings_window.message_label.get_text()
     notice = settings_window.adaptive_feedback_notice_label.get_text()
     assert "去口头词" in notice
     assert "润色" in notice
     assert "ASR 标注" in notice
+
+
+def test_failed_review_reload_clears_all_previous_private_text(window):
+    settings_window, controller = window
+    settings_window.open_last_review()
+    assert settings_window.adaptive_provider_entry.get_text()
+    assert settings_window.adaptive_preferred_entry.get_text()
+    assert settings_window.adaptive_delivered_entry.get_text()
+    controller.last_review_error = SettingsError("review unavailable")
+
+    settings_window._on_load_last_review(settings_window.load_last_review_button)
+
+    assert settings_window._loaded_review_id is None
+    assert settings_window.adaptive_provider_entry.get_text() == ""
+    assert settings_window.adaptive_preferred_entry.get_text() == ""
+    assert settings_window.adaptive_delivered_entry.get_text() == ""
+
+
+@pytest.mark.parametrize("failure_kind", ("settings-error", "non-ok"))
+def test_failed_review_submission_clears_all_private_text(window, failure_kind):
+    settings_window, controller = window
+    settings_window.open_last_review()
+    settings_window.adaptive_preferred_entry.set_text("human verbatim")
+    if failure_kind == "settings-error":
+
+        def fail(_utterance_id, _spoken_verbatim):
+            raise SettingsError("The recent recognition result expired.")
+
+        controller.submit_last_review = fail
+    else:
+        controller.review_submit_reply = ReviewSubmitReply(False, "stale-review")
+
+    settings_window._on_submit_adaptive_feedback(
+        settings_window.submit_adaptive_feedback_button
+    )
+
+    assert settings_window._loaded_review_id is None
+    assert settings_window.adaptive_provider_entry.get_text() == ""
+    assert settings_window.adaptive_preferred_entry.get_text() == ""
+    assert settings_window.adaptive_delivered_entry.get_text() == ""
 
 
 def test_review_last_command_line_is_forwardable_without_registering_a_hotkey():
@@ -892,6 +980,24 @@ def test_review_last_command_line_is_forwardable_without_registering_a_hotkey():
     assert invalid.errors == ["unsupported settings argument\n"]
 
 
+@pytest.mark.parametrize("help_argument", ("--help", "-h"))
+def test_help_exits_without_registering_gtk_application(
+    monkeypatch, capsys, help_argument
+):
+    def fail_if_constructed():
+        raise AssertionError("help must not register a GtkApplication")
+
+    monkeypatch.setattr(
+        "murmur_voice.settings_app.SettingsApplication",
+        fail_if_constructed,
+    )
+
+    assert main(["open-voice-input-settings", help_argument]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == SETTINGS_HELP
+    assert captured.err == ""
+
+
 def test_service_controls_are_explicit_and_offer_no_restart(window):
     settings_window, controller = window
 
@@ -937,6 +1043,10 @@ def test_local_collection_is_off_by_default_and_discloses_exact_scope(window):
     assert "WAV" in notice
     assert "未经复核的伪标签" in notice
     assert "provider_final" in notice
+    assert "delivery" in notice
+    assert "实际插入" in notice
+    assert "可从原文重放" in notice
+    assert "机器生成" in notice
     assert "openvoiceinput-dataset-v1" in notice
     assert "已经挂载的远程文件系统" in notice
     assert "不会连接或挂载远程主机" in notice
@@ -958,7 +1068,7 @@ def test_local_collection_is_off_by_default_and_discloses_exact_scope(window):
         "选择文件夹…"
     )
     assert settings_window.data_collection_check.get_label() == (
-        "在所选目录保留 WAV 与未经复核的 provider_final"
+        "在所选目录保留 WAV、原始识别与实际交付结果"
     )
     assert settings_window.save_data_collection_button.get_label() == (
         "保存数据留存设置"

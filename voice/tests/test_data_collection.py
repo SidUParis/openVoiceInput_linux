@@ -6,6 +6,7 @@ import shutil
 import stat
 import threading
 import wave
+from dataclasses import replace
 
 import pytest
 
@@ -26,6 +27,7 @@ from murmur_voice.microphone_metadata import (
     MicrophoneSelectionMetadata,
     privacy_preserving_microphone_identity,
 )
+from murmur_voice.output_style import deliver_output
 
 
 def test_missing_config_is_disabled_and_begin_writes_nothing(tmp_path):
@@ -120,7 +122,7 @@ def test_runtime_reloads_enable_and_location_for_each_utterance(tmp_path):
     assert not (first / "openvoiceinput-dataset-v1").exists()
 
 
-def test_completed_record_is_atomic_wav_plus_unreviewed_teacher_label(tmp_path):
+def test_completed_record_is_atomic_wav_plus_raw_and_faithful_delivery(tmp_path):
     selected = tmp_path / "selected"
     selected.mkdir()
     config_path = tmp_path / "private" / "data-collection.json"
@@ -160,19 +162,101 @@ def test_completed_record_is_atomic_wav_plus_unreviewed_teacher_label(tmp_path):
         "spoken_verbatim": {"text": None, "review_status": "unreviewed"},
         "preferred_output": {"text": None, "review_status": "unreviewed"},
     }
+    assert document["schema_version"] == 3
+    assert document["delivery"] == {
+        "mode": "faithful",
+        "text": "teacher final",
+        "review_status": "machine-derived-unreviewed",
+        "processor": {"name": "identity", "version": 1},
+        "outcome": "faithful",
+        "edits": [],
+    }
     assert document["recorded_at_utc"] == "2026-08-30T12:00:00Z"
     usage_path = selected / "openvoiceinput-dataset-v1" / "usage" / "utterance-1.json"
     usage = json.loads(usage_path.read_text(encoding="utf-8"))
     assert usage == {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "openvoiceinput-private-usage-summary",
         "utterance_id": "utterance-1",
         "recorded_at_utc": "2026-08-30T12:00:00Z",
         "audio_duration_ms": 75,
+        "character_count_basis": "delivered-text",
         "non_whitespace_character_count": 12,
     }
     assert "teacher final" not in usage_path.read_text(encoding="utf-8")
     assert stat.S_IMODE(usage_path.stat().st_mode) == 0o600
+    assert runtime.close()
+
+
+def test_clean_delivery_keeps_raw_label_and_usage_counts_delivered_text(tmp_path):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-clean")
+    assert recorder is not None
+    raw = "我我觉得，呃，可以。"
+    delivery = deliver_output(raw, "clean")
+    recorder.add_audio(b"\x00\x00" * 100)
+
+    recorder.commit(raw, delivery)
+    assert runtime.wait_until_idle()
+
+    root = selected / "openvoiceinput-dataset-v1"
+    document = json.loads(
+        (root / "utterances" / "utterance-clean" / "record.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    usage = json.loads(
+        (root / "usage" / "utterance-clean.json").read_text(encoding="utf-8")
+    )
+    assert document["labels"]["provider_final"]["text"] == raw
+    assert document["labels"]["spoken_verbatim"]["text"] is None
+    assert document["labels"]["preferred_output"]["text"] is None
+    assert document["delivery"]["text"] == delivery.text
+    assert document["delivery"]["outcome"] == "cleaned"
+    assert document["delivery"]["review_status"] == ("machine-derived-unreviewed")
+    assert usage["non_whitespace_character_count"] == sum(
+        not character.isspace() for character in delivery.text
+    )
+    assert usage["non_whitespace_character_count"] < sum(
+        not character.isspace() for character in raw
+    )
+    assert runtime.close()
+
+
+def test_new_schema_v3_publication_never_rewrites_existing_v1_or_v2_records(
+    tmp_path,
+):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    records_root = selected / "openvoiceinput-dataset-v1" / "utterances"
+    sentinels = {}
+    for version in (1, 2):
+        record_root = records_root / f"legacy-v{version}"
+        record_root.mkdir(mode=0o700)
+        payload = f'{{"schema_version":{version},"legacy":"unchanged"}}\n'.encode()
+        record_path = record_root / "record.json"
+        record_path.write_bytes(payload)
+        record_path.chmod(0o600)
+        sentinels[record_path] = payload
+
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-v3")
+    assert recorder is not None
+    recorder.add_audio(b"\x00\x00" * 100)
+    recorder.commit("provider final", deliver_output("provider final", "clean"))
+    assert runtime.wait_until_idle()
+
+    assert all(path.read_bytes() == payload for path, payload in sentinels.items())
+    current = json.loads(
+        (records_root / "utterance-v3" / "record.json").read_text(encoding="utf-8")
+    )
+    assert current["schema_version"] == 3
     assert runtime.close()
 
 
@@ -301,7 +385,7 @@ def test_record_binds_the_actual_provider_without_changing_label_semantics(tmp_p
     assert runtime.close()
 
 
-def test_schema_v2_records_selected_and_actual_microphone_without_private_name(
+def test_schema_v3_records_selected_and_actual_microphone_without_private_name(
     tmp_path,
 ):
     selected = tmp_path / "selected"
@@ -348,7 +432,7 @@ def test_schema_v2_records_selected_and_actual_microphone_without_private_name(
     record_path = dataset_root / "utterances" / "utterance-microphone" / "record.json"
     document = json.loads(record_path.read_text(encoding="utf-8"))
     assert marker["schema_version"] == 1
-    assert document["schema_version"] == 2
+    assert document["schema_version"] == 3
     assert document["microphone"]["selection"] == {
         "backend": "pulse",
         "category": "dji",
@@ -469,6 +553,33 @@ def test_provider_final_limit_is_measured_in_utf8_bytes(tmp_path, monkeypatch):
         ]
         == "éé"
     )
+    assert runtime.close()
+
+
+def test_invalid_delivery_metadata_discards_record_before_queueing(tmp_path):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-invalid-delivery")
+    assert recorder is not None
+    recorder.add_audio(b"\x00\x00" * 100)
+    valid = deliver_output("provider final", "faithful")
+
+    with pytest.raises(DataCollectionError, match="output delivery"):
+        recorder.commit(
+            "provider final",
+            replace(valid, processor_version=True),
+        )
+
+    assert runtime.wait_until_idle()
+    assert not (
+        selected
+        / "openvoiceinput-dataset-v1"
+        / "utterances"
+        / "utterance-invalid-delivery"
+    ).exists()
     assert runtime.close()
 
 

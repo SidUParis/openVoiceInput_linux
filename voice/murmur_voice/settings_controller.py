@@ -65,6 +65,12 @@ from .microphone_policy import (
     load_microphone_policy_config,
     save_microphone_policy_config,
 )
+from .output_style import (
+    OutputStyleConfig,
+    default_output_style_config_path,
+    load_output_style_config,
+    save_output_style_config,
+)
 
 VOICE_SERVICE = "murmur-ime-voice.service"
 SYSTEMCTL = "/usr/bin/systemctl"
@@ -106,6 +112,7 @@ _STATUS_CODES = frozenset(
         "final-timeout",
         "microphone-unavailable",
         "microphone-policy-invalid",
+        "output-style-invalid",
         "none",
         "preedit-final-rejected",
         "preedit-lost",
@@ -206,6 +213,7 @@ class SettingsController:
         data_collection_path: str | Path | None = None,
         microphone_policy_path: str | Path | None = None,
         interaction_path: str | Path | None = None,
+        output_style_path: str | Path | None = None,
         runner: Runner = subprocess.run,
         status_reader: StatusReader = request_command,
         review_reader: ReviewReader = request_last_review,
@@ -243,6 +251,11 @@ class SettingsController:
             Path(interaction_path)
             if interaction_path is not None
             else default_interaction_config_path()
+        )
+        self._output_style_path = (
+            Path(output_style_path)
+            if output_style_path is not None
+            else default_output_style_config_path()
         )
         self._runner = runner
         self._status_reader = status_reader
@@ -635,6 +648,27 @@ class SettingsController:
                 "The shortcut interaction setting could not be loaded safely."
             ) from error
 
+    def load_output_style(self) -> OutputStyleConfig:
+        """Return the terminal output preference without starting dictation."""
+
+        try:
+            return load_output_style_config(self._output_style_path)
+        except ConfigError as error:
+            raise SettingsError(
+                "The output style setting could not be loaded safely."
+            ) from error
+
+    def save_output_style(self, mode: str) -> OutputStyleConfig:
+        """Save locally; a running utterance keeps its frozen start-time mode."""
+
+        try:
+            save_output_style_config(mode, self._output_style_path)
+            return load_output_style_config(self._output_style_path)
+        except (ConfigError, OSError) as error:
+            raise SettingsError(
+                "The output style setting could not be saved safely."
+            ) from error
+
     def save_interaction(
         self,
         interaction_mode: str,
@@ -827,18 +861,32 @@ def _validate_usage_summary(
     document: Any,
     expected_utterance_id: str,
 ) -> tuple[datetime, int, int]:
-    if not isinstance(document, dict) or set(document) != {
+    common_fields = {
         "schema_version",
         "kind",
         "utterance_id",
         "recorded_at_utc",
         "audio_duration_ms",
         "non_whitespace_character_count",
-    }:
+    }
+    if not isinstance(document, dict):
         raise ValueError("usage summary is invalid")
+    version = document.get("schema_version")
+    if type(version) is not int:
+        raise ValueError("usage summary identity is invalid")
+    if version == 1:
+        if set(document) != common_fields:
+            raise ValueError("usage summary is invalid")
+    elif version == 2:
+        if (
+            set(document) != common_fields | {"character_count_basis"}
+            or document.get("character_count_basis") != "delivered-text"
+        ):
+            raise ValueError("usage summary is invalid")
+    else:
+        raise ValueError("usage summary identity is invalid")
     if (
-        document["schema_version"] != 1
-        or document["kind"] != _USAGE_SUMMARY_KIND
+        document["kind"] != _USAGE_SUMMARY_KIND
         or document["utterance_id"] != expected_utterance_id
     ):
         raise ValueError("usage summary identity is invalid")

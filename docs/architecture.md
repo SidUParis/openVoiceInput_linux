@@ -15,6 +15,7 @@ preedit and final commit with this transition flow:
 
 ```text
 current IBus engine -> murmur-voice -> Acquire/Partial/Final over D-Bus
+                    -> frozen faithful/clean terminal delivery
                     -> <=5 s same-focus correction observation
                     -> exact previous IBus engine
 ```
@@ -100,8 +101,9 @@ a live utterance between microphones.
 
 A bounded GTK4 settings application now manages the private key-only fallback,
 explicit vocabulary, optional explicit recognition corrections, microphone
-category priority, a disabled-by-default local dataset destination, and service
-controls. Priority and collection saves take effect at the next utterance
+category priority, faithful/clean output style, a disabled-by-default local
+dataset destination, and service controls. Priority, output-style and
+collection saves take effect at the next utterance
 without a daemon restart. Adaptive correction memory is maintained automatically
 in a separate private ledger and does not require a settings round trip. The masked
 interactive `configure`
@@ -137,9 +139,14 @@ increasing `revision`. The engine ignores any mismatched, stale, or late event.
 
 1. A streaming hypothesis replaces the entire voice preedit.
 2. A `definite` two-pass sentence replaces the corresponding hypothesis.
-3. The connection-level final event permits a single `commit_text` call.
+3. The connection-level final event freezes raw `provider_final`. Faithful mode
+   delivers it unchanged; clean mode runs only the bounded local deletion
+   processor. Failure falls back to raw. A single `commit_text` receives the
+   resulting `delivery.text`; partials are never cleaned.
 4. A newer IBus surrounding-text revision anchors the exact committed span.
    If unsupported or ambiguous, commit still succeeds but learning is disabled.
+   If clean delivery changed the final, this observation is consumed
+   immediately with a content-free skip reason and never reaches extraction.
 5. For at most five seconds the same focus may produce one observation
    snapshot. Only a single replacement inside the anchored span is eligible;
    insertion, deletion, multiple edits, polishing, a final active selection,
@@ -162,10 +169,13 @@ snapshot or transcript record.
 If local collection was enabled at utterance start, the same accepted final
 also freezes the exact captured PCM and offers it to a bounded background
 queue. The writer completes `audio.wav` and `record.json` below `.pending`, then
-atomically renames that unchanged v1 pair into the selected dataset's
+atomically renames that unchanged two-file pair into the selected dataset's
 `utterances/` tree. It subsequently publishes a transcript-free summary at
-`usage/<utterance_id>.json`. `provider_final` remains an unreviewed pseudo-label;
-`spoken_verbatim`/`preferred_output` are null. Cancellation, failure, or final
+`usage/<utterance_id>.json`. Schema-v3 `record.json` keeps raw `provider_final`
+as an unreviewed pseudo-label and stores delivery/auditable deletions
+separately; `spoken_verbatim`/`preferred_output` remain null. Usage schema v2
+counts delivered non-whitespace characters and readers still accept v1.
+Cancellation, failure, or final
 rejection discards the in-memory collector state.
 
 The settings dashboard aggregates only bounded `usage/<utterance_id>.json`
@@ -197,8 +207,8 @@ explicit per-user opt-in through settings.
 
 The package owns no file below `$XDG_CONFIG_HOME/murmur-ime` and no dataset
 directory. Removal stops both packaged units before their launchers disappear,
-but preserves every user key, vocabulary, correction ledger, microphone
-policy, collection choice, and external dataset. The older source-preview
+but preserves every user key, vocabulary, correction ledger, output style,
+microphone policy, collection choice, and external dataset. The older source-preview
 installer places higher-precedence units below `$XDG_CONFIG_HOME/systemd/user`
 and code below `$XDG_DATA_HOME/murmur-ime`; package pre-installation therefore
 refuses a detected legacy installation and directs that desktop user to the
@@ -232,9 +242,9 @@ while already published records remain.
 The current collector does not authenticate to or mount Orange, upload to
 Google Drive, review labels, train a model, or add application-level
 encryption. A compatible user-mounted remote filesystem is nevertheless an
-ordinary selected filesystem path. Its schema keeps
-the null `spoken_verbatim` and `preferred_output` fields distinct from the
-unreviewed `provider_final` pseudo-label. Filesystem policy determines actual
+ordinary selected filesystem path. Its schema keeps raw unreviewed
+`provider_final`, machine-derived delivery, and the null
+`spoken_verbatim`/`preferred_output` fields distinct. Filesystem policy determines actual
 visibility. Review, collection quality, and evaluation must precede any model
 fine-tune or distillation. See
 [remote-dataset-storage.md](remote-dataset-storage.md) and

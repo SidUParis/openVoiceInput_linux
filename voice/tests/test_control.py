@@ -175,6 +175,7 @@ def test_review_socket_returns_only_bounded_last_result_on_sibling_path(runtime_
     assert review is not None
     assert review.utterance_id == "utterance-1"
     assert review.provider_text == private_text
+    assert review.delivered_text == private_text
     assert private_text not in repr(review)
     assert request_command("status").keys() == {"ok", "code", "state"}
 
@@ -184,6 +185,94 @@ def test_review_socket_returns_only_bounded_last_result_on_sibling_path(runtime_
 
     session.review = None
     assert request_last_review() is None
+    request_command("shutdown")
+    thread.join(2)
+
+
+def test_review_client_accepts_legacy_response_without_delivered_text(
+    runtime_dir, monkeypatch
+):
+    response = (
+        json.dumps(
+            {
+                "available": True,
+                "utterance_id": "legacy-utterance",
+                "provider_text": "legacy provider final",
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+    class LegacyReviewSocket:
+        def __init__(self):
+            self._response = response
+
+        def settimeout(self, _timeout):
+            return None
+
+        def connect(self, _path):
+            return None
+
+        def sendall(self, request):
+            assert request == b"review-last\n"
+
+        def recv(self, maximum):
+            chunk = self._response[:maximum]
+            self._response = self._response[maximum:]
+            return chunk
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        socket, "socket", lambda *_args, **_kwargs: LegacyReviewSocket()
+    )
+
+    review = request_last_review()
+
+    assert review == LastReview(
+        "legacy-utterance",
+        "legacy provider final",
+        "legacy provider final",
+    )
+
+
+def test_review_socket_round_trips_maximum_raw_and_delivered_text(runtime_dir):
+    session, _server, thread = _start_server(runtime_dir)
+    maximum_text = "𐀀" * 4096
+    session.review = LastReview("utterance-max", maximum_text, maximum_text)
+
+    review = request_last_review()
+
+    assert review is not None
+    assert review.provider_text == maximum_text
+    assert review.delivered_text == maximum_text
+    assert maximum_text not in repr(review)
+    request_command("shutdown")
+    thread.join(2)
+
+
+@pytest.mark.parametrize(
+    "maximum_text",
+    (
+        "\x01" * 4096,
+        ('"\\' * 2048),
+    ),
+)
+def test_review_socket_round_trips_maximum_json_escaping(runtime_dir, maximum_text):
+    session, _server, thread = _start_server(runtime_dir)
+    maximum_id = "u" * 128
+    session.review = LastReview(maximum_id, maximum_text, maximum_text)
+
+    review = request_last_review()
+
+    assert review is not None
+    assert review.utterance_id == maximum_id
+    assert review.provider_text == maximum_text
+    assert review.delivered_text == maximum_text
+    assert maximum_text not in repr(review)
     request_command("shutdown")
     thread.join(2)
 

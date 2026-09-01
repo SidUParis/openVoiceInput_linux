@@ -38,5 +38,7 @@ __pycache__/
 /adaptive-corrections.json
 /data-collection.json
 /microphone-priority.json
+/interaction.json
+/output-style.json
 openvoiceinput-dataset-v1/
 /error.log

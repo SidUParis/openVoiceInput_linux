@@ -28,7 +28,7 @@ preedit/commit 流程；它不是实际录屏，也没有调用麦克风、API K
 
 ## 一分钟安装
 
-从 [v0.1.0-alpha.6 Release](https://github.com/SidUParis/openVoiceInput_linux/releases/tag/v0.1.0-alpha.6)
+从 [v0.1.0-alpha.7 Release](https://github.com/SidUParis/openVoiceInput_linux/releases/tag/v0.1.0-alpha.7)
 下载 `.deb`，然后在下载目录运行：
 
 ```bash
@@ -73,6 +73,7 @@ murmur-voice-daemon toggle
 | --- | --- |
 | 光标内实时出字 | 使用 IBus preedit 在当前输入框显示 partial，authoritative final 原位提交且只提交一次 |
 | 不依赖粘贴 | 正常路径不读取剪贴板，不发送 `Ctrl+V`，不模拟逐字键盘输入 |
+| 忠实/清爽终稿 | partial 始终原样；终稿可原样提交，或仅用本机有界删除规则清理高置信口头停顿与重复 |
 | 记住个人术语 | 在同一输入框内最多观察 5 秒；明确单项可启用，多处修改拆成待确认候选，并提供显式整句 fallback |
 | 动态麦克风 | 每次听写按用户保存的顺序重新选择当前可用输入；首选设备不可用时，下一次自动回退 |
 | 数据归用户 | 可选保存 WAV 与版本化 JSON 到用户选择的本地或已挂载目录，采集默认关闭 |
@@ -94,6 +95,13 @@ final，不伪装成实时流。你不需要先去转写窗口复制，再切回
 识别结果十分钟，设置页以只读方式载入原文，用户明确把副本改成实际说出的逐字
 内容后才学习。例如把 `bench mark` 修成 `benchmark` 时，只形成这个短语的规则，
 不会把整句一起记住。
+
+“云端识别”页可选择 **忠实转写**（默认）或 **清爽表达**。模式在每条听写开始
+时冻结；实时 partial 不清理，只有 authoritative final 才运行本机确定性删除规则。
+清理不调用 LLM，也不增加网络请求，不替换术语、数字或大小写；失败、超限、
+不可重放或会删除全部内容时直接交付原始 final。若清理确实改变文本，本条会跳过
+自动学习观察，避免把机器删词当作 ASR 纠错；显式复核始终以原始 provider final
+为来源，实际插入文本只读展示。
 
 提交时设置页只把最近结果 ID 与逐字复核送回独立的主机私有 socket；守护进程
 再次核对该 ID 仍是当前未过期结果，再以同一个 ID 更新学习账本，并在数据留存
@@ -119,8 +127,11 @@ surrounding text 写进纠错账本。失焦、超时和整句润色不会被静
 - 数据集根目录下 append-only 的
   `feedback/<utterance_id>/<event_id>.json` 纠错决定（只有捕获成功时）；
 - 未经人工审核的供应商 final。
+- 实际插入的 `delivery`（机器生成、未经复核），以及可从原始 final 重放的删除
+  位置、原因和原片段；`provider_final` 仍单独保留。
 
-后续修改不会改写不可变的 `record.json`；可捕获的短纠错作为独立 feedback
+新记录使用 schema v3；旧 v1/v2 不会改写。usage 索引使用 schema v2，并明确按
+实际交付文本统计字数，同时继续读取旧 v1 摘要。后续修改不会改写不可变的 `record.json`；可捕获的短纠错作为独立 feedback
 事件保存。`spoken_verbatim` 与 `preferred_output` 仍待未来听音审核流程填写，
 因此这些是有价值的候选数据，不是已经确认的 gold label。
 

@@ -131,13 +131,15 @@ locations:
   `$XDG_CONFIG_HOME/murmur-ime/data-collection.json`;
 - optional microphone-priority policy:
   `$XDG_CONFIG_HOME/murmur-ime/microphone-priority.json`;
+- terminal output style:
+  `$XDG_CONFIG_HOME/murmur-ime/output-style.json`;
 - optional collected records: `openvoiceinput-dataset-v1/` below the existing
   local or mounted directory explicitly selected by the user.
 
 If `XDG_DATA_HOME` or `XDG_CONFIG_HOME` is unset, the standard
 `~/.local/share` and `~/.config` defaults apply. The generated service records
 the resolved config, vocabulary, manual-correction, adaptive-correction,
-local-collection, and microphone-priority paths, so a custom XDG config root is
+local-collection, microphone-priority, interaction, and output-style paths, so a custom XDG config root is
 used consistently even if it is absent from the systemd manager's environment.
 
 The engine service starts after installation and is enabled for subsequent
@@ -194,8 +196,10 @@ The optional explicit vocabulary can be edited separately:
   --vocabulary ~/.config/murmur-ime/vocabulary.json
 ```
 
-The key, vocabulary, manual corrections, adaptive ledger, and local-collection
-choice are reloaded before every new dictation. Saving a change never mutates
+The key, vocabulary, manual corrections, adaptive ledger, output style, and
+local-collection choice are reloaded before every new dictation. Missing
+`output-style.json` means faithful delivery; its strict v1 file is private
+`0600` below a `0700` directory. Saving a change never mutates
 an active recording; the next start/idle toggle uses it without a daemon
 restart. A newly invalid key/vocabulary/correction file fails that start before
 microphone/provider use rather than falling back to stale in-memory values.
@@ -203,11 +207,23 @@ Collection remains an optional side path: its invalid setting or unavailable
 destination reports a fixed collection status and leaves normal dictation
 available.
 
+### Faithful and clean final output
+
+The cloud-recognition page offers faithful (default) and clean output. The
+daemon freezes this choice at utterance start. Partials stay raw; only the
+authoritative terminal final is eligible for the local bounded deletion-only
+cleaner. It makes no LLM or extra network request and never substitutes terms,
+numbers, or letter case. Unsafe, oversized, excessive, emptying, or failed
+cleanup returns the raw final without blocking input. If cleanup deletes
+anything, automatic observation is consumed with
+`postprocessed-output-not-safe-for-asr-learning`; explicit review continues to
+use raw provider text.
+
 ### Optional filesystem training-data collection
 
 Collection is off by default. In the settings window, select an existing
-absolute local or mounted folder, enable the WAV + unreviewed `provider_final`
-checkbox, and choose **保存数据留存设置**. Saving initializes or
+absolute local or mounted folder, enable WAV + raw recognition + actual
+delivery retention, and choose **保存数据留存设置**. Saving initializes or
 reopens `openvoiceinput-dataset-v1` below the selected folder. It does not
 contact Volcengine, start capture, or restart the service; the next dictation
 reads the choice.
@@ -220,10 +236,15 @@ the focused IBus context, the collector publishes one
 `preferred_output` are both null/unreviewed: the current pair is a future
 review candidate, not a gold label or distillation-ready sample.
 
+Schema v3 separately stores actual `delivery.text` as
+`machine-derived-unreviewed`, the frozen mode, processor/version, outcome and
+replayable deletion edits. It never overwrites raw provider text.
+
 The v1 utterance directory stays an immutable two-file pair. After it is
 published, the writer atomically adds a separate private
-`usage/<utterance_id>.json` summary containing only timestamp, duration and a
-non-whitespace character count. The settings dashboard scans this bounded
+schema-v2 `usage/<utterance_id>.json` summary containing only timestamp,
+duration and a delivered-text non-whitespace character count. Schema-v1
+summaries remain readable. The settings dashboard scans this bounded
 index in a background worker and never opens `record.json` or audio.
 
 Capture copies bounded PCM into memory; WAV encoding, hashing, syncing, and
@@ -280,14 +301,15 @@ For an explicit cross-application review, run:
 open-voice-input-settings --review-last
 ```
 
-The daemon keeps only the latest accepted `provider_final` and utterance ID in
-memory for ten minutes. A new accepted result replaces it and daemon shutdown
+The daemon keeps only the latest accepted raw `provider_final`, delivered text,
+and utterance ID in memory for ten minutes. A new accepted result replaces it and daemon shutdown
 clears it. The host settings process reads it through
 `$XDG_RUNTIME_DIR/murmur-ime-private/review.sock`; that parent is `0700`, the
 socket is `0600`, and it is deliberately outside the separately delivered
 Flatpak controller's `murmur-ime` runtime mount. No transcript is placed in an
-argument, log, or persistent file. The provider original is read-only in the
-window. Only an explicit user-edited verbatim statement is submitted to the
+argument, log, or persistent file. Provider original and delivery are read-only
+in the window; the editable spoken field starts from raw provider text. Only an
+explicit user-edited verbatim statement is submitted to the
 existing bounded correction extractor. Filler removal, rewriting, and
 polishing are not verbatim ASR labels.
 
@@ -467,7 +489,7 @@ files while any managed daemon remains. Only if the current engine is exactly
 stop, never a warning followed by deletion. The managed runtime and units move
 to same-filesystem quarantine before final deletion so an interrupted
 uninstall can roll back. The private API-key, vocabulary, manual-correction,
-adaptive-correction, `microphone-priority.json`, and `data-collection.json`
-files are retained. Every
+adaptive-correction, `interaction.json`, `output-style.json`,
+`microphone-priority.json`, and `data-collection.json` files are retained. Every
 `openvoiceinput-dataset-v1` below a user-selected folder is outside installer
 ownership and is never removed. No Rime program or user database is touched.
