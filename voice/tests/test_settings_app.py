@@ -1078,9 +1078,9 @@ def test_microphone_policy_invalid_status_has_repair_action(window):
 @pytest.mark.parametrize(
     ("status_code", "expected"),
     (
-        ("clipboard-armed", "下一条终稿会复制"),
+        ("clipboard-armed", "下一次开始时会先检查"),
         ("clipboard-ready", "上一条终稿已复制；剪贴板可能已被其他应用覆盖"),
-        ("clipboard-unavailable", "xclip（X11）或 wl-clipboard（Wayland）"),
+        ("clipboard-unavailable", "本地图形会话或剪贴板工具不可用"),
         ("clipboard-copy-failed", "没有自动粘贴"),
         ("output-target-invalid", "远程桌面页重新保存"),
     ),
