@@ -65,7 +65,7 @@ class InstallerHarness:
             self.wheelhouse / filename
             for filename in (
                 "cffi-2.1.1-py3-none-any.whl",
-                "murmur_ime_voice-0.1.0a6-py3-none-any.whl",
+                "murmur_ime_voice-0.1.0a7-py3-none-any.whl",
                 "pycparser-3.0-py3-none-any.whl",
                 "sounddevice-0.5.6-py3-none-any.whl",
                 "websockets-17.0.1-py3-none-any.whl",
@@ -345,7 +345,7 @@ class InstallerHarness:
               chmod 0755 "$launcher"
               site=$(dirname -- "$0")/../lib/python3.12/site-packages/murmur_voice
               mkdir -p "$site"
-              printf '%s\n' '__version__ = "0.1.0a6"' >"$site/__init__.py"
+              printf '%s\n' '__version__ = "0.1.0a7"' >"$site/__init__.py"
               touch "$(dirname -- "$0")/../.mock-local-wheels-installed"
               exit 0
             fi
@@ -959,6 +959,11 @@ class UserInstallTests(unittest.TestCase):
         self.assertIn("--interaction", unit)
         self.assertIn(
             str(self.harness.config / "murmur-ime/interaction.json"),
+            unit,
+        )
+        self.assertIn("--output-style", unit)
+        self.assertIn(
+            str(self.harness.config / "murmur-ime/output-style.json"),
             unit,
         )
         engine_unit = (
@@ -2120,6 +2125,17 @@ class UserInstallTests(unittest.TestCase):
             encoding="utf-8",
         )
         microphone_priority.chmod(0o600)
+        interaction = config.parent / "interaction.json"
+        interaction_payload = (
+            '{"version":1,"interaction_mode":"toggle",'
+            '"minimum_hold_milliseconds":180,"release_timeout_seconds":120}\n'
+        )
+        interaction.write_text(interaction_payload, encoding="utf-8")
+        interaction.chmod(0o600)
+        output_style = config.parent / "output-style.json"
+        output_style_payload = '{"version":1,"mode":"clean"}\n'
+        output_style.write_text(output_style_payload, encoding="utf-8")
+        output_style.chmod(0o600)
         install_result = self.harness.run(
             INSTALLER, "--wheelhouse", str(self.harness.wheelhouse)
         )
@@ -2162,8 +2178,13 @@ class UserInstallTests(unittest.TestCase):
             microphone_priority_payload,
         )
         self.assertEqual(microphone_priority.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(interaction.read_text(encoding="utf-8"), interaction_payload)
+        self.assertEqual(interaction.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(output_style.read_text(encoding="utf-8"), output_style_payload)
+        self.assertEqual(output_style.stat().st_mode & 0o777, 0o600)
         self.assertEqual(audio.read_bytes(), b"unchanged-dataset-sentinel")
         self.assertIn("dataset", result.stdout)
+        self.assertIn("output-style", result.stdout)
         self.assertFalse((self.harness.data / "murmur-ime/voice-venv").exists())
         self.assertFalse(self.harness.desktop_entry().exists())
         self.assertFalse(self.harness.settings_icon().exists())

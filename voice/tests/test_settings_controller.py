@@ -19,6 +19,7 @@ from murmur_voice.config import (
 from murmur_voice.data_collection import DataCollectionConfig
 from murmur_voice.control import ControlError, LastReview, ReviewSubmitReply
 from murmur_voice.interaction import InteractionConfig, load_interaction_config
+from murmur_voice.output_style import OutputStyleConfig, load_output_style_config
 from murmur_voice.microphone_policy import (
     DEFAULT_MICROPHONE_PRIORITY,
     MicrophonePolicyConfig,
@@ -82,6 +83,7 @@ def _controller(
         "data_collection_path": tmp_path / "private" / "data-collection.json",
         "microphone_policy_path": tmp_path / "private" / "microphone-priority.json",
         "interaction_path": tmp_path / "private" / "interaction.json",
+        "output_style_path": tmp_path / "private" / "output-style.json",
         "runner": runner or RecordingRunner(),
     }
     if status_reader is not None:
@@ -100,17 +102,23 @@ def _write_usage_summary(
     recorded_at,
     duration_ms,
     character_count,
+    schema_version=1,
 ):
     summary = selected / "openvoiceinput-dataset-v1" / "usage" / f"{utterance_id}.json"
     summary.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": schema_version,
                 "kind": "openvoiceinput-private-usage-summary",
                 "utterance_id": utterance_id,
                 "recorded_at_utc": recorded_at,
                 "audio_duration_ms": duration_ms,
                 "non_whitespace_character_count": character_count,
+                **(
+                    {"character_count_basis": "delivered-text"}
+                    if schema_version == 2
+                    else {}
+                ),
             }
         ),
         encoding="utf-8",
@@ -699,6 +707,33 @@ def test_interaction_rejects_invalid_mode_without_running_service(tmp_path):
     assert runner.calls == []
 
 
+def test_output_style_defaults_and_save_are_private_local_and_hot_loaded(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+
+    assert controller.load_output_style() == OutputStyleConfig("faithful")
+
+    saved = controller.save_output_style("clean")
+    path = tmp_path / "private" / "output-style.json"
+
+    assert saved == OutputStyleConfig("clean")
+    assert load_output_style_config(path) == saved
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert runner.calls == []
+
+
+def test_output_style_rejects_invalid_mode_without_running_service(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+
+    with pytest.raises(SettingsError, match="could not be saved safely"):
+        controller.save_output_style("polish")
+
+    assert not (tmp_path / "private" / "output-style.json").exists()
+    assert runner.calls == []
+
+
 def test_dataset_statistics_are_disabled_without_touching_storage(tmp_path):
     controller = _controller(tmp_path)
 
@@ -716,6 +751,7 @@ def test_dataset_statistics_use_only_content_free_usage_summaries(tmp_path):
         recorded_at="2026-08-31T00:05:00Z",
         duration_ms=12_500,
         character_count=88,
+        schema_version=2,
     )
     _write_usage_summary(
         selected,
@@ -797,6 +833,27 @@ def test_dataset_statistics_skip_invalid_summary_without_private_output(tmp_path
     assert statistics.state == "limited"
     assert statistics.invalid_summaries == 1
     assert private_text not in repr(statistics)
+
+
+def test_usage_summary_boolean_schema_version_is_not_accepted_as_v1(tmp_path):
+    controller = _controller(tmp_path)
+    selected = tmp_path / "personal-asr-records"
+    selected.mkdir()
+    controller.save_data_collection(True, selected)
+    _write_usage_summary(
+        selected,
+        "invalid-boolean-version",
+        recorded_at="2026-09-01T12:00:00Z",
+        duration_ms=100,
+        character_count=5,
+        schema_version=True,
+    )
+
+    statistics = controller.load_dataset_statistics()
+
+    assert statistics.state == "limited"
+    assert statistics.total_utterances == 0
+    assert statistics.invalid_summaries == 1
 
 
 def test_data_collection_enable_requires_absolute_existing_folder(tmp_path):

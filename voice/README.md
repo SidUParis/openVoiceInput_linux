@@ -77,6 +77,23 @@ for this daemon's bounded command surface. It does not contain or own this
 repository's microphone capture, provider client, DJI selection, or dataset
 writer; those remain in the installed host daemon.
 
+## Faithful and clean terminal output
+
+The private `$XDG_CONFIG_HOME/murmur-ime/output-style.json` is strict schema v1
+with mode `faithful` or `clean`, stored as a user-owned `0600` file below a
+`0700` directory. Missing means faithful. The daemon freezes the setting once
+at utterance start, so saving during capture affects only the next dictation.
+
+Streaming partials are always raw. Faithful mode commits the authoritative
+provider final unchanged. Clean mode applies the bounded local deterministic
+deletion-only cleaner only at the provider terminal event. It makes no LLM or
+extra network request, never inserts text or substitutes a term, number, or
+letter case, and falls back to raw on any error, oversize,
+excessive/non-replayable edits, or all-content removal. If it changes output,
+the automatic observation is consumed without adaptive extraction; explicit
+review still learns only from raw provider text versus user-entered spoken
+verbatim.
+
 ## Optional explicit personal vocabulary
 
 The API-key file remains key-only. Personal terms live separately in
@@ -181,15 +198,21 @@ final was accepted by the focused IBus client. Cancel, failure, final rejection,
 no final, and incomplete audio publish nothing.
 
 Each atomically published `utterances/<utterance_id>/` contains `audio.wav` and
-versioned `record.json` with identifiers, UTC time, explicit-opt-in consent,
+schema-v3 `record.json` with identifiers, UTC time, explicit-opt-in consent,
 audio format/frame counts and hashes, provider/model identity, microphone
-selection/actual-route provenance, and three label roles. `provider_final` is
+selection/actual-route provenance, three label roles, and a separate delivery
+audit. `provider_final` is
 `teacher-unreviewed`: it is a pseudo-label, not
 ground truth. `spoken_verbatim` and `preferred_output` are both null/unreviewed
 until a separate human-review workflow exists.
 
-New records use schema v2. Existing v1 records are not rewritten; both versions
-can coexist below the unchanged `openvoiceinput-dataset-v1` marker. The v2
+`delivery.text` is the exact inserted result with
+`machine-derived-unreviewed` status. It stores mode, processor/version,
+content-free outcome, and replayable deletion edits without replacing raw
+provider text or filling either human label.
+
+New records use schema v3. Existing v1/v2 records are not rewritten; all three
+versions can coexist below the unchanged `openvoiceinput-dataset-v1` marker. The v2
 `microphone` object stores category, a non-unique privacy-safe fingerprint,
 selection provenance, DJI link state at selection, and bounded actual Pulse
 source-output route transitions. It stores no raw Pulse source name, USB serial,
@@ -202,6 +225,10 @@ acceptance by the background writer: overall/first-second clipping and zero
 fractions, RMS/peak dBFS, normalized DC offset, and sample count. This is only
 future filtering evidence. It runs outside the callback/start path, rejects no
 record, and changes no PCM sample.
+
+The separate usage index advances to schema v2 and declares
+`character_count_basis=delivered-text`; dashboard readers continue accepting
+schema-v1 summaries with their prior raw-provider count semantics.
 
 After post-commit learning finishes, an enabled collection may add an atomic,
 append-only `feedback/<utterance_id>/<event_id>.json` event with bounded

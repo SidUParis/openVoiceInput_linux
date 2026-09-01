@@ -5,6 +5,52 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.7] - 2026-09-01
+
+### Added
+
+- Volcengine streaming results are now assembled from timestamped
+  `utterances[]` segments. Authoritative second-pass segments marked
+  `definite=true` replace overlapping first-pass text and remain available
+  across later frames, while bounded `result.text` remains the compatibility
+  fallback until a definite segment arrives. A mixed malformed structured
+  frame is rejected as a whole rather than partially truncating retained text.
+- A private, hot-loaded `output-style.json` selects faithful delivery or a
+  conservative clean-expression mode. Faithful delivery remains the default
+  whenever the configuration is missing.
+  Clean mode leaves streaming partials raw and applies only a bounded,
+  deterministic, local deletion-only processor to the authoritative final; it
+  makes no LLM or extra network request and falls back to raw on every unsafe
+  or failed result.
+- The cloud-recognition settings page exposes both modes and explains that a
+  save affects the next utterance. Review-last shows raw provider text and the
+  delivered result as separate read-only values while spoken-verbatim editing
+  always starts from raw provider text.
+
+### Changed
+
+- Opted-in `record.json` advances to schema v3. Raw `provider_final` and the
+  two null human-review labels retain their meanings; a separate
+  `machine-derived-unreviewed` delivery object records mode,
+  processor/version, outcome, and replayable original-coordinate deletions.
+  Existing v1/v2 records are never rewritten.
+- Content-free usage summaries advance to schema v2 and explicitly count the
+  text actually delivered. Dashboard readers continue accepting schema-v1
+  summaries with their original meaning.
+- If clean delivery changes the committed text by removing content, the daemon
+  immediately consumes the IBus observation and records
+  `postprocessed-output-not-safe-for-asr-learning` without calling adaptive
+  extraction. Unchanged or raw-fallback output keeps the existing observation
+  behavior.
+
+### Privacy and compatibility
+
+- `output-style.json` uses the existing user-owned `0700` directory, `0600`
+  file, bounded strict schema, and atomic-write rules. Source installers and
+  Debian/systemd launch paths pass the intended config location; uninstall
+  retains it. Preview, Debian and CI gates reject both `output-style.json` and
+  the previously omitted `interaction.json` from public artifacts.
+
 ## [0.1.0-alpha.6] - 2026-09-01
 
 ### Added

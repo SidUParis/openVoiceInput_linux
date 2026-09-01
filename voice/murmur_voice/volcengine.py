@@ -16,6 +16,7 @@ import uuid
 import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import Any
 
 from .config import (
@@ -63,6 +64,12 @@ _AUTH_WORDS = (
 # WebSocket frames are already capped at 4 MiB. Gzip can expand a tiny frame
 # into an arbitrarily large allocation, so bound the decoded JSON separately.
 _MAX_DECOMPRESSED_PAYLOAD_BYTES = 8 * 1024 * 1024
+# The focused Preedit1 boundary accepts the same transcript limits.  Keeping
+# the provider-side assembly bounded prevents incremental ``single`` frames
+# from accumulating more state than one safe preedit can deliver.
+_MAX_TRANSCRIPT_CODEPOINTS = 4096
+_MAX_TRANSCRIPT_UTF8_BYTES = 16 * 1024
+_SUPPORTED_RESULT_TYPES = frozenset(("full", "single"))
 
 
 class VolcengineProtocolError(RuntimeError):
@@ -91,6 +98,216 @@ class ParsedFrame:
     is_last: bool
     payload: Any = None
     error_code: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _TimedUtterance:
+    """One provider utterance with the documented millisecond interval."""
+
+    start_time: int
+    end_time: int
+    text: str
+    definite: bool
+
+
+class _UtteranceFrameState(Enum):
+    ABSENT = auto()
+    VALID = auto()
+    MALFORMED = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class _UtteranceFrame:
+    state: _UtteranceFrameState
+    utterances: tuple[_TimedUtterance, ...] = ()
+
+
+def _timed_utterances(payload: Any) -> _UtteranceFrame:
+    """Parse the complete utterance list without silently dropping members."""
+
+    if not isinstance(payload, dict):
+        return _UtteranceFrame(_UtteranceFrameState.ABSENT)
+    result = payload.get("result")
+    if isinstance(result, dict):
+        if "utterances" not in result:
+            return _UtteranceFrame(_UtteranceFrameState.ABSENT)
+        raw_utterances = result["utterances"]
+    elif isinstance(result, list):
+        raw_utterances = []
+        present = False
+        for item in result:
+            if not isinstance(item, dict) or "utterances" not in item:
+                continue
+            present = True
+            nested = item["utterances"]
+            if not isinstance(nested, list):
+                return _UtteranceFrame(_UtteranceFrameState.MALFORMED)
+            raw_utterances.extend(nested)
+        if not present:
+            return _UtteranceFrame(_UtteranceFrameState.ABSENT)
+    else:
+        if "utterances" not in payload:
+            return _UtteranceFrame(_UtteranceFrameState.ABSENT)
+        raw_utterances = payload["utterances"]
+    if not isinstance(raw_utterances, list):
+        return _UtteranceFrame(_UtteranceFrameState.MALFORMED)
+
+    utterances: list[_TimedUtterance] = []
+    for item in raw_utterances:
+        if not isinstance(item, dict):
+            return _UtteranceFrame(_UtteranceFrameState.MALFORMED)
+        text = item.get("text")
+        start_time = item.get("start_time")
+        end_time = item.get("end_time")
+        definite = item.get("definite")
+        if (
+            not isinstance(text, str)
+            or not text
+            or type(start_time) is not int
+            or type(end_time) is not int
+            or type(definite) is not bool
+            or start_time < 0
+            or end_time < start_time
+        ):
+            return _UtteranceFrame(_UtteranceFrameState.MALFORMED)
+        utterances.append(
+            _TimedUtterance(
+                start_time=start_time,
+                end_time=end_time,
+                text=text,
+                definite=definite,
+            )
+        )
+    return _UtteranceFrame(_UtteranceFrameState.VALID, tuple(utterances))
+
+
+def _extract_full_result_text(payload: Any) -> str:
+    """Extract only the provider's cumulative result text, never utterance joins."""
+
+    if not isinstance(payload, dict):
+        return ""
+    result = payload.get("result")
+    if isinstance(result, dict):
+        text = result.get("text")
+        return text if isinstance(text, str) and text else ""
+    if isinstance(result, list):
+        direct = [
+            item.get("text", "")
+            for item in result
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        ]
+        return "".join(direct) if any(direct) else ""
+    return ""
+
+
+def _utterances_overlap(left: _TimedUtterance, right: _TimedUtterance) -> bool:
+    if left.start_time == right.start_time:
+        return True
+    return left.start_time < right.end_time and right.start_time < left.end_time
+
+
+def _validate_transcript_size(text: str) -> str:
+    try:
+        encoded_size = len(text.encode("utf-8"))
+    except UnicodeEncodeError as error:
+        raise ValueError("Volcengine ASR transcript is not valid UTF-8") from error
+    if (
+        len(text) > _MAX_TRANSCRIPT_CODEPOINTS
+        or encoded_size > _MAX_TRANSCRIPT_UTF8_BYTES
+    ):
+        raise ValueError("Volcengine ASR transcript exceeds its safe limit")
+    return text
+
+
+class _VolcengineResultAssembler:
+    """Keep authoritative two-pass sentences across provider response frames.
+
+    Volcengine documents ``result.text`` as the whole-audio text and
+    ``utterances[].definite`` as the marker produced by the second pass.  The
+    latter must win when both disagree.  Time offsets provide the only safe
+    cross-frame identity: this class deliberately does not guess text overlap.
+    """
+
+    def __init__(self, result_type: str) -> None:
+        if result_type not in _SUPPORTED_RESULT_TYPES:
+            raise ValueError("unsupported Volcengine result_type")
+        self._result_type = result_type
+        self._definite_by_start: dict[int, _TimedUtterance] = {}
+        self._last_text = ""
+
+    def reset(self) -> None:
+        self._definite_by_start.clear()
+        self._last_text = ""
+
+    def update(self, payload: Any) -> str:
+        utterance_frame = _timed_utterances(payload)
+        if utterance_frame.state is _UtteranceFrameState.MALFORMED:
+            if self._result_type == "single":
+                # ``single`` carries only the current sentence. Without a
+                # valid time interval it cannot be combined with prior
+                # definite sentences without risking loss or duplication.
+                raise VolcengineProtocolError(-1)
+            full_result_text = _extract_full_result_text(payload)
+            if full_result_text:
+                self._last_text = _validate_transcript_size(full_result_text)
+            return self._last_text
+
+        fallback_text = _extract_text(payload)
+        utterances = utterance_frame.utterances
+        if not utterances:
+            if fallback_text and not self._definite_by_start:
+                self._last_text = _validate_transcript_size(fallback_text)
+            return self._last_text
+
+        new_definite = tuple(item for item in utterances if item.definite)
+        if new_definite:
+            overlapping_starts = (
+                start_time
+                for start_time, settled in self._definite_by_start.items()
+                if any(
+                    _utterances_overlap(incoming, settled) for incoming in new_definite
+                )
+            )
+            for start_time in tuple(overlapping_starts):
+                del self._definite_by_start[start_time]
+            # Treat one frame as one provider revision.  New sibling segments
+            # can overlap slightly when the provider changes a sentence
+            # boundary; they must not evict each other while replacing the
+            # previous revision.
+            self._definite_by_start.update(
+                {item.start_time: item for item in new_definite}
+            )
+
+        if not self._definite_by_start:
+            # Before the first two-pass sentence, retain the provider's
+            # cumulative text contract exactly as older clients did.
+            current = fallback_text or "".join(item.text for item in utterances)
+            if current:
+                self._last_text = _validate_transcript_size(current)
+            return self._last_text
+
+        definite = tuple(
+            sorted(
+                self._definite_by_start.values(),
+                key=lambda item: (item.start_time, item.end_time),
+            )
+        )
+        partial_by_start = {
+            item.start_time: item
+            for item in utterances
+            if not item.definite
+            and not any(_utterances_overlap(item, settled) for settled in definite)
+        }
+        assembled = "".join(
+            item.text
+            for item in sorted(
+                (*definite, *partial_by_start.values()),
+                key=lambda item: (item.start_time, item.end_time),
+            )
+        )
+        if assembled:
+            self._last_text = _validate_transcript_size(assembled)
+        return self._last_text
 
 
 def _build_header(
@@ -387,6 +604,15 @@ class VolcengineASRClient:
         )
         self._hotwords = normalize_vocabulary_terms(settings.get("hotwords", ()))
         self._corrections = normalize_correction_pairs(settings.get("corrections", ()))
+        raw_result_type = (
+            settings["result_type"] if "result_type" in settings else "full"
+        )
+        if (
+            type(raw_result_type) is not str
+            or raw_result_type not in _SUPPORTED_RESULT_TYPES
+        ):
+            raise ValueError("unsupported Volcengine result_type")
+        self._result_type = raw_result_type
         self._request_options = {
             "model_name": "bigmodel",
             "enable_itn": bool(settings.get("enable_itn", True)),
@@ -394,7 +620,7 @@ class VolcengineASRClient:
             "enable_ddc": bool(settings.get("enable_ddc", True)),
             "enable_nonstream": bool(settings.get("enable_nonstream", True)),
             "show_utterances": bool(settings.get("show_utterances", True)),
-            "result_type": str(settings.get("result_type") or "full"),
+            "result_type": self._result_type,
             "end_window_size": max(
                 300, min(5000, int(settings.get("end_window_size") or 800))
             ),
@@ -413,6 +639,7 @@ class VolcengineASRClient:
         self._buffer_failed = False
         self._generation = 0
         self._last_text = ""
+        self._result_assembler = _VolcengineResultAssembler(self._result_type)
 
         self.on_open: Callable[[], None] | None = None
         self.on_result: Callable[[str], None] | None = None
@@ -484,6 +711,7 @@ class VolcengineASRClient:
             self._finish_requested = False
             self._buffer_failed = False
             self._last_text = ""
+            self._result_assembler.reset()
             loop = asyncio.new_event_loop()
             self._loop = loop
             thread = threading.Thread(
@@ -717,14 +945,23 @@ class VolcengineASRClient:
             self._notify_error(error, generation)
             return True
 
-        text = _extract_text(parsed.payload)
-        if text:
+        try:
             with self._lock:
-                changed = generation == self._generation and text != self._last_text
+                if generation != self._generation or not self._active:
+                    return True
+                text = self._result_assembler.update(parsed.payload)
+                changed = bool(text) and text != self._last_text
                 if changed:
                     self._last_text = text
-            if changed:
-                self._invoke(self.on_result, generation, text)
+        except Exception as error:
+            logger.error(
+                "Volcengine ASR response rejected (%s)",
+                error.__class__.__name__,
+            )
+            self._notify_error(error, generation)
+            return True
+        if changed:
+            self._invoke(self.on_result, generation, text)
         if parsed.is_last:
             self._invoke(self.on_finish, generation)
             return True

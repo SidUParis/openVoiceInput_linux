@@ -52,6 +52,12 @@ acceptance in this release. MiniMax is planned and not selectable.
 - The local-collection choice is stored separately in private
   `data-collection.json`. A missing file means disabled; saving the setting is
   applied at the next dictation without restarting the service.
+- Terminal delivery style is stored separately in private `output-style.json`
+  as strict schema v1. A missing file means faithful/raw delivery. It uses the
+  same user-owned `0700` directory, `0600` file, bounded read, no-symlink,
+  no-extra-field, and atomic-write checks. The daemon reads it once at each
+  utterance start, so an in-flight recording cannot change mode underneath the
+  user.
 - The complete microphone category ordering and optional exact-source
   preferences are stored separately in private `microphone-priority.json`.
   They are reloaded before each dictation, are never sent to the recognition
@@ -62,6 +68,13 @@ acceptance in this release. MiniMax is planned and not selectable.
   transcript/audio record described below. Status and errors use fixed codes.
 - Live text travels over the user's session D-Bus to the focused IBus engine.
   It does not use clipboard paste in the primary path.
+
+Clean expression mode does not change the provider upload boundary: the same
+explicit dictation audio has already gone to the selected ASR provider. It
+adds no LLM call and no extra network request. Live partial text stays raw. At
+the terminal event, a bounded local deletion-only processor either produces a
+replayable result or falls back to raw without blocking input; it cannot insert
+content or replace terms, numbers, or letter case.
 
 ## Five-second correction observation
 
@@ -108,6 +121,12 @@ next dictation without a daemon restart.
 The review window labels the provider text as read-only and accepts only what
 the user actually said verbatim. Removing fillers or polishing expression is a
 different preferred-output task and must not silently become ASR gold.
+When clean delivery differs from raw `provider_final`, the delivered version is
+shown only as read-only context. The daemon immediately consumes the automatic
+observation with the content-free reason
+`postprocessed-output-not-safe-for-asr-learning` and never passes that span to
+adaptive extraction. Explicit review still compares raw provider text with the
+user's spoken-verbatim submission.
 
 ## Input-context safety
 
@@ -162,18 +181,22 @@ Each atomically published `utterances/<utterance_id>/` contains:
   accepted utterance;
 - `record.json`: versioned identifiers, time, audio format/frame counts and
   hashes, provider/model identity, privacy-preserving microphone provenance,
-  post-hoc numeric PCM quality summaries, and three deliberately separate
-  labels;
+  post-hoc numeric PCM quality summaries, three deliberately separate labels,
+  and one separate machine-delivery audit;
 - `provider_final.text`: the authoritative result from the selected provider,
   labelled
   `teacher-unreviewed`, which is a pseudo-label rather than ground truth;
 - `spoken_verbatim.text` and `preferred_output.text`: both `null` and
   `unreviewed` until a separate human-review workflow exists.
+- `delivery`: exact inserted text with `machine-derived-unreviewed` status,
+  frozen mode, processor/version, outcome, and replayable deletion edits. The
+  raw provider label is retained even when clean delivery differs.
 
 The immutable utterance record remains exactly `audio.wav` + `record.json`.
-After it is published, the dataset-level `usage/<utterance_id>.json` index adds
-only time, audio duration and non-whitespace character count for private
-dashboard totals.
+After it is published, the dataset-level schema-v2
+`usage/<utterance_id>.json` index adds only time, audio duration and the
+non-whitespace character count of delivered text for private dashboard totals.
+Schema-v1 usage summaries remain readable with their original meaning.
 
 PCM quality analysis runs only in the background writer after final acceptance.
 It records bounded overall/first-second sample counts, clipped and zero
@@ -183,8 +206,8 @@ speech content.
 
 Dashboard aggregation runs outside the GTK thread and reads only the dataset
 marker plus `usage/<utterance_id>.json`. It never reads or displays
-`provider_final`, the two
-review labels, or audio. Disabling collection also disables the scan; an
+`provider_final`, `delivery`, the two review labels, or audio. Disabling
+collection also disables the scan; an
 unavailable local or mounted destination produces an unknown/unavailable state,
 not a misleading zero, and does not stop ordinary dictation.
 
@@ -200,8 +223,9 @@ Disabling collection and changing its destination take effect for the next
 utterance without a service restart. A disable that has returned also prevents
 older queued or staged, unpublished records from being published. Already
 published records remain until the user deliberately removes them. The
-uninstaller preserves `microphone-priority.json`, `data-collection.json`, and
-every dataset in a user-selected directory. First-party resumable Orange
+uninstaller preserves `output-style.json`, `microphone-priority.json`,
+`data-collection.json`, and every dataset in a user-selected directory.
+First-party resumable Orange
 transport, label review, deletion tooling, and model training remain future
 work. User-managed SSHFS and asynchronous Google Drive backup are documented in
 [remote-dataset-storage.md](remote-dataset-storage.md); see also

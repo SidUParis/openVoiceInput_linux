@@ -5,7 +5,8 @@ Review basis: the implementation and documentation published as
 candidate prepared the same day. This document covers the current temporary
 IBus-engine switch, standalone voice daemon, per-dictation microphone
 selection, adaptive correction, and disabled-by-default local WAV/JSON
-collector. It does not claim that the future combined librime engine, Orange
+collector, including faithful/clean terminal delivery. It does not claim that
+the future combined librime engine, Orange
 transport, human label-review workflow, or local model training has been
 implemented or reviewed.
 
@@ -37,12 +38,16 @@ Open Voice Input Linux is designed to preserve these properties:
    dictation.
 10. DJI transmitter status affects only the daemon's new capture stream and
     never changes a playback sink or requests a system-wide default source.
+11. Clean delivery is local, final-only, deletion-only, replayable and bounded.
+    A processor failure or invalid result falls back to raw provider text; a
+    machine-cleaned span is never used as automatic ASR correction evidence.
 
 ## Assets and trust boundaries
 
 Sensitive assets are the provider API key, microphone audio, live/final text,
 explicit vocabulary, manual/adaptive correction pairs, microphone priority and
-exact-source preferences, local-collection consent/destination and published
+exact-source preferences, private output style, local-collection
+consent/destination and published
 records, the focused input context and its
 bounded surrounding-text snapshot, the previous IBus engine, the selected
 audio source/profile, DJI status frames, and the user's existing Rime data.
@@ -55,6 +60,8 @@ The current boundaries are:
   AT-SPI, or global keyboard monitoring.
 - The voice daemon owns audio capture and the provider connection. It sends
   partial/final events to the engine over the user's session D-Bus. If the user
+  selected clean output, the daemon postprocesses only the terminal final with
+  a local bounded deletion rule; it adds no LLM or extra network request. If the user
   explicitly enabled collection, it also retains bounded PCM in memory and
   offers an accepted final to an isolated background filesystem writer.
 - The selected local or mounted filesystem is a user-chosen trust boundary.
@@ -149,7 +156,7 @@ Evidence: `engine/murmur_ime_engine/ibus_engine.py`,
 
 The CLI uses a masked prompt and never accepts a key in argv. The GTK window
 does not preload the stored key and clears the entry after a save attempt.
-Key, vocabulary, manual-correction, adaptive-correction, and
+Key, vocabulary, manual-correction, adaptive-correction, output-style, and
 microphone-priority files use a private `0700` directory and `0600` regular
 files, reject links/foreign
 ownership/public modes/oversize or unknown fields, and are replaced
@@ -176,6 +183,11 @@ bounded to 10 seconds; overflow cancels instead of blocking the audio callback
 or growing memory indefinitely. Provider frames and decoded payloads are
 bounded. Old generations and late worker callbacks cannot enter a new
 utterance.
+
+The terminal cleaner receives at most 4,096 codepoints and permits at most 64
+strict original-coordinate deletions. It cannot insert or substitute content.
+Oversize, excessive, malformed, non-replayable, exception, and all-content
+removal cases return the raw provider final rather than blocking delivery.
 
 Opted-in collection retains at most one 600-second PCM utterance in its active
 recorder and uses a bounded two-record background queue. The audio callback
@@ -204,11 +216,14 @@ The background writer first creates a complete private staging directory under
 `openvoiceinput-dataset-v1/.pending`, including WAV and JSON hashes, then uses
 one atomic rename into `utterances/<utterance_id>`. The JSON identifies
 `provider_final` as `teacher-unreviewed`; it leaves both `spoken_verbatim` and
-`preferred_output` null and unreviewed. This prevents an ASR result from being
+`preferred_output` null and unreviewed. Schema v3 separately records actual
+machine-derived delivery and replayable deletion metadata while retaining raw
+provider text. This prevents an ASR result or cleaned output from being
 silently presented as a human-verified acoustic label or preferred text.
 
 After the unchanged two-file utterance pair is durable, the writer publishes a
-separate `usage/<utterance_id>.json` summary with no transcript. The GTK
+separate schema-v2 `usage/<utterance_id>.json` summary with no transcript. Its
+count is explicitly based on delivered text, while readers retain v1 support. The GTK
 dashboard reads only these bounded private summaries on a worker thread. It
 does not enumerate utterance directories, read record labels/audio, or create a
 missing index while merely viewing statistics. Hidden interrupted summary
@@ -327,8 +342,9 @@ fingerprint before and after install/upgrade/uninstall/reinstall.
   retention, region, and account policy are outside this project.
 - Enabling local collection deliberately creates sensitive audio/text records.
   The selected filesystem or mount controls who can read, back up, or replicate
-  them; the application supplies no static encryption. `provider_final` is an
-  unreviewed pseudo-label and must not be treated as gold or distillation-ready
+  them; the application supplies no static encryption. `provider_final` and
+  machine-derived `delivery` are unreviewed and must not be treated as gold or
+  distillation-ready
   merely because the pair was published atomically.
 - The fallback key store is a private plaintext file rather than Secret
   Service. It protects against other local users under normal Unix permission

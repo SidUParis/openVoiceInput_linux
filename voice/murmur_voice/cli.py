@@ -51,6 +51,10 @@ from .microphone_policy import (
     default_microphone_policy_config_path,
     load_microphone_policy_config,
 )
+from .output_style import (
+    default_output_style_config_path,
+    load_output_style_config,
+)
 
 DATA_COLLECTION_CLOSE_TIMEOUT_SECONDS = 10.0
 
@@ -129,6 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--interaction",
         type=Path,
         default=default_interaction_config_path(),
+    )
+    run_parser.add_argument(
+        "--output-style",
+        type=Path,
+        default=default_output_style_config_path(),
     )
     run_parser.add_argument("--socket", type=Path)
     run_parser.add_argument("--review-socket", type=Path)
@@ -241,6 +250,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             data_collection_path=options.data_collection,
             microphone_policy_path=options.microphone_priority,
             interaction_path=options.interaction,
+            output_style_path=options.output_style,
             review_socket_path=options.review_socket,
         )
     try:
@@ -387,6 +397,7 @@ def _run(
     data_collection_path: Path | None = None,
     microphone_policy_path: Path | None = None,
     interaction_path: Path | None = None,
+    output_style_path: Path | None = None,
     review_socket_path: Path | None = None,
 ) -> int:
     logging.basicConfig(
@@ -458,6 +469,9 @@ def _run(
                 getattr(data_collection_runtime, "record_feedback", None)
                 if data_collection_runtime is not None
                 else None
+            ),
+            output_style_reader=lambda: load_output_style_config(
+                output_style_path or default_output_style_config_path()
             ),
         )
         resolved_interaction_path = (

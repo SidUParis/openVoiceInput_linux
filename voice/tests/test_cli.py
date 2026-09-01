@@ -19,6 +19,7 @@ from murmur_voice.config import (
     load_vocabulary,
 )
 from murmur_voice.microphone_policy import save_microphone_policy_config
+from murmur_voice.output_style import OutputStyleConfig, save_output_style_config
 
 
 class _InteractiveInput:
@@ -294,6 +295,8 @@ def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_pat
     data_collection_path = tmp_path / "data-collection.json"
     microphone_priority_path = tmp_path / "microphone-priority.json"
     interaction_path = tmp_path / "interaction.json"
+    output_style_path = tmp_path / "output-style.json"
+    save_output_style_config("clean", output_style_path)
     parser = cli.build_parser()
 
     options = parser.parse_args(
@@ -309,6 +312,8 @@ def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_pat
             str(microphone_priority_path),
             "--interaction",
             str(interaction_path),
+            "--output-style",
+            str(output_style_path),
         ]
     )
 
@@ -317,6 +322,7 @@ def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_pat
     assert options.data_collection == data_collection_path
     assert options.microphone_priority == microphone_priority_path
     assert options.interaction == interaction_path
+    assert options.output_style == output_style_path
     with pytest.raises(SystemExit):
         parser.parse_args(["run", "--wrong", "private wrong form"])
     with pytest.raises(SystemExit):
@@ -373,6 +379,8 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
     adaptive_path = tmp_path / "adaptive-corrections.json"
     data_collection_path = tmp_path / "data-collection.json"
     microphone_priority_path = tmp_path / "microphone-priority.json"
+    output_style_path = tmp_path / "output-style.json"
+    save_output_style_config("clean", output_style_path)
     captured = []
     runtime_arguments = []
     data_runtime_arguments = []
@@ -462,6 +470,7 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
             adaptive_corrections_path=adaptive_path,
             data_collection_path=data_collection_path,
             microphone_policy_path=microphone_priority_path,
+            output_style_path=output_style_path,
             review_socket_path=review_socket_path,
         )
         == 0
@@ -487,6 +496,9 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
     assert options["observation_handler"] is FakeRuntime.observe
     assert options["explicit_feedback_handler"] is FakeRuntime.submit_explicit_feedback
     assert options["data_collection_factory"] is FakeDataCollectionRuntime.begin
+    assert options["output_style_reader"]() == OutputStyleConfig("clean")
+    save_output_style_config("faithful", output_style_path)
+    assert options["output_style_reader"]() == OutputStyleConfig("faithful")
     assert (
         options["data_collection_status_reader"]
         is FakeDataCollectionRuntime.status_code

@@ -424,7 +424,9 @@ jobs:
               "adaptive-corrections.json",
               "corrections.json",
               "data-collection.json",
+              "interaction.json",
               "microphone-priority.json",
+              "output-style.json",
               "vocabulary.json",
               "voice.json",
           }

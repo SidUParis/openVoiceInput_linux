@@ -21,6 +21,10 @@ from .interaction import (  # noqa: E402
     DEFAULT_MINIMUM_HOLD_MILLISECONDS,
     DEFAULT_RELEASE_TIMEOUT_SECONDS,
 )
+from .output_style import (  # noqa: E402
+    DEFAULT_OUTPUT_STYLE_MODE,
+    OutputStyleConfig,
+)
 from .providers import PROVIDER_DESCRIPTORS  # noqa: E402
 from .settings_controller import (  # noqa: E402
     CORRECTION_PAIR_LIMIT,
@@ -86,6 +90,7 @@ _STATUS_LABELS = {
     "final-timeout": "最终识别超时",
     "microphone-unavailable": "没有可用麦克风，请重新连接或调整输入顺序",
     "microphone-policy-invalid": "麦克风顺序无效或不安全，请在设置中保存一个完整顺序",
+    "output-style-invalid": "输出方式设置无效或不安全，请在云端识别页重新保存",
     "adaptive-correction-failed": "自动纠错未能保存",
     "adaptive-correction-candidate": "已捕获修改，等待你确认后启用",
     "adaptive-correction-conflicted": "已捕获冲突修改，未自动启用",
@@ -125,6 +130,9 @@ _ADAPTIVE_REASON_LABELS = {
     "no-change": "观察期内没有检测到修改",
     "observation-handler-unavailable": "自动学习组件当前不可用",
     "observation-timeout": "修改未在观察期内完成",
+    "postprocessed-output-not-safe-for-asr-learning": (
+        "本次交付文本经过本机清理；为避免把润色误当成 ASR 纠错，已跳过自动学习"
+    ),
     "selection-active": "结束时仍有文字被选中，未自动推断",
     "surrounding-text-unavailable": "当前应用没有提供可信的修改文本",
     "too-many-edits": "修改范围过多，未自动生成规则",
@@ -740,6 +748,44 @@ class SettingsWindow(Gtk.ApplicationWindow):
         key_actions.append(self.clear_key_button)
         provider_card.append(key_actions)
 
+        output_card = self._append_card(cloud_page)
+        self._append_card_heading(
+            output_card,
+            "最终文本",
+            "实时预览始终忠实显示识别原文；这里只决定云端终稿返回后的本机交付方式。",
+        )
+        self.faithful_output_button = Gtk.CheckButton(
+            label="忠实转写：原样插入识别服务终稿"
+        )
+        self.clean_output_button = Gtk.CheckButton(
+            label="清爽表达：删除高置信口头停顿与紧邻自我重复"
+        )
+        self.clean_output_button.set_group(self.faithful_output_button)
+        output_card.append(self.faithful_output_button)
+        output_card.append(self.clean_output_button)
+        self.output_style_notice_label = Gtk.Label(
+            label=(
+                "清爽表达只在终稿阶段运行本机、确定性、删除式规则，不调用 LLM，也不会"
+                "为清理发起额外网络请求，"
+                "也不会改写术语、数字、大小写或句式；只可能随目标口头词删除紧邻分隔符。"
+                "规则无法安全处理时会回退为"
+                "识别原文，不会阻断输入。若本次确实删除了内容，为避免把机器清理误学成"
+                "ASR 纠错，本条会跳过自动学习观察；你仍可从原始识别结果明确复核。"
+            ),
+            xalign=0,
+            wrap=True,
+        )
+        self.output_style_notice_label.add_css_class("dim-label")
+        output_card.append(self.output_style_notice_label)
+        self.output_style_status_label = Gtk.Label(xalign=0, wrap=True)
+        self.output_style_status_label.add_css_class("status-value")
+        output_card.append(self.output_style_status_label)
+        self.save_output_style_button = Gtk.Button(label="保存最终文本方式")
+        self.save_output_style_button.add_css_class("suggested-action")
+        self.save_output_style_button.set_halign(Gtk.Align.START)
+        self.save_output_style_button.connect("clicked", self._on_save_output_style)
+        output_card.append(self.save_output_style_button)
+
         vocabulary_card = self._append_card(vocabulary_page)
         self._append_card_heading(
             vocabulary_card,
@@ -900,6 +946,20 @@ class SettingsWindow(Gtk.ApplicationWindow):
             "clicked", self._on_submit_adaptive_feedback
         )
         fallback_grid.attach(self.submit_adaptive_feedback_button, 2, 1, 1, 1)
+        fallback_grid.attach(
+            Gtk.Label(label="实际插入（只读参考，不作为纠错来源）", xalign=0),
+            0,
+            2,
+            2,
+            1,
+        )
+        self.adaptive_delivered_entry = Gtk.Entry(
+            placeholder_text="忠实模式下与识别原文相同"
+        )
+        self.adaptive_delivered_entry.set_max_length(ADAPTIVE_FEEDBACK_TEXT_LIMIT)
+        self.adaptive_delivered_entry.set_hexpand(True)
+        self.adaptive_delivered_entry.set_editable(False)
+        fallback_grid.attach(self.adaptive_delivered_entry, 0, 3, 2, 1)
         adaptive_card.append(fallback_grid)
         self.adaptive_review_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self.adaptive_review_list.add_css_class("boxed-list")
@@ -949,14 +1009,16 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self._append_card_heading(
             collection_card,
             "个人 ASR 数据留存（可选）",
-            "默认关闭。开启后才会把音频与未经人工复核的识别结果写入你选择的目录。",
+            "默认关闭。开启后才会把音频、识别原文与实际交付结果写入你选择的目录。",
         )
 
         self.data_collection_notice_label = Gtk.Label(
             label=(
                 "默认关闭。只有在留存已开启、当前识别服务的最终结果已成功确认时，软件才会在所选"
-                "绝对 POSIX 路径的 openvoiceinput-dataset-v1 下保存 WAV 与 "
-                "provider_final（未经复核的伪标签）。目录可以是本地磁盘，也可以是"
+                "绝对 POSIX 路径的 openvoiceinput-dataset-v1 下保存 WAV、原始 "
+                "provider_final（未经复核的伪标签），以及实际插入的 delivery（机器生成、"
+                "未经人工复核）。清爽表达发生删除时，delivery 还包含可从原文重放的删除"
+                "位置、原因、原片段与空替换。目录可以是本地磁盘，也可以是"
                 "操作系统已经挂载的远程文件系统（例如 SSHFS）。本程序不会连接或"
                 "挂载远程主机，也不接受 SSH 或 Google Drive URL；请异步把本地或"
                 "已挂载目录中的完整记录备份到 Google Drive。spoken_verbatim 与 "
@@ -972,7 +1034,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         collection_card.append(self.data_collection_notice_label)
 
         self.data_collection_check = Gtk.CheckButton(
-            label="在所选目录保留 WAV 与未经复核的 provider_final"
+            label="在所选目录保留 WAV、原始识别与实际交付结果"
         )
         collection_card.append(self.data_collection_check)
 
@@ -1186,6 +1248,19 @@ class SettingsWindow(Gtk.ApplicationWindow):
         if selection is None:
             selection = ProviderSelection("volcengine", None)
         self._set_provider_selection(selection)
+        load_output_style = getattr(self._controller, "load_output_style", None)
+        if not callable(load_output_style):
+            self._set_output_style_controls(DEFAULT_OUTPUT_STYLE_MODE)
+        else:
+            try:
+                output_style = load_output_style()
+            except SettingsError as error:
+                self._set_output_style_controls(DEFAULT_OUTPUT_STYLE_MODE)
+                self.output_style_status_label.set_text("配置不可用；请重新保存")
+                self._set_label_tone(self.output_style_status_label, "error-text")
+                self._show_error(str(error))
+            else:
+                self._set_output_style_controls(output_style.mode)
         try:
             terms = self._controller.load_vocabulary()
         except SettingsError as error:
@@ -1385,6 +1460,44 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.minimum_hold_spin.set_value(float(minimum_hold_milliseconds))
         self.release_timeout_spin.set_value(float(release_timeout_seconds))
         self._update_interaction_control_sensitivity()
+
+    def _set_output_style_controls(self, mode: str) -> None:
+        clean = mode == "clean"
+        self.clean_output_button.set_active(clean)
+        self.faithful_output_button.set_active(not clean)
+        self.output_style_status_label.set_text(
+            "当前：清爽表达（下一条听写起）" if clean else "当前：忠实转写（默认）"
+        )
+        self._set_label_tone(
+            self.output_style_status_label,
+            "success-text" if clean else None,
+        )
+
+    def _on_save_output_style(self, button: Gtk.Button) -> None:
+        del button
+        self.save_output_style()
+
+    def save_output_style(self) -> None:
+        mode = "clean" if self.clean_output_button.get_active() else "faithful"
+        saver = getattr(self._controller, "save_output_style", None)
+        if not callable(saver):
+            self._show_error("当前设置控制器不支持保存最终文本方式。")
+            return
+        try:
+            saved = saver(mode)
+            if not isinstance(saved, OutputStyleConfig):
+                raise SettingsError(
+                    "The output style setting could not be saved safely."
+                )
+        except SettingsError as error:
+            self._show_error(str(error))
+        except Exception:
+            self._show_error("无法安全保存最终文本方式。")
+        else:
+            self._set_output_style_controls(saved.mode)
+            self._show_message(
+                "已保存。正在进行的听写保持开始时的方式；下一条听写会读取新设置。"
+            )
 
     def _on_interaction_mode_changed(self, button: Gtk.CheckButton) -> None:
         del button
@@ -1659,25 +1772,31 @@ class SettingsWindow(Gtk.ApplicationWindow):
         try:
             review = loader()
         except SettingsError as error:
-            self._loaded_review_id = None
+            self._clear_loaded_review()
             self._show_error(str(error))
             return
         except Exception:
-            self._loaded_review_id = None
+            self._clear_loaded_review()
             self._show_error("无法安全载入最近识别结果。")
             return
         if review is None:
-            self._loaded_review_id = None
-            self.adaptive_provider_entry.set_text("")
-            self.adaptive_preferred_entry.set_text("")
+            self._clear_loaded_review()
             self._show_message("暂无可复核的最近结果；结果仅在本机内存保留十分钟。")
             return
         provider_text = review.provider_text
+        delivered_text = review.delivered_text or provider_text
         self._loaded_review_id = review.utterance_id
         self.adaptive_provider_entry.set_text(provider_text)
         self.adaptive_preferred_entry.set_text(provider_text)
+        self.adaptive_delivered_entry.set_text(delivered_text)
         self.adaptive_preferred_entry.grab_focus()
         self._show_message("已载入；请只改成你实际说出的逐字内容，再明确确认。")
+
+    def _clear_loaded_review(self) -> None:
+        self._loaded_review_id = None
+        self.adaptive_provider_entry.set_text("")
+        self.adaptive_preferred_entry.set_text("")
+        self.adaptive_delivered_entry.set_text("")
 
     def open_last_review(self) -> None:
         """Show the correction page and load the volatile last result."""
@@ -1731,24 +1850,26 @@ class SettingsWindow(Gtk.ApplicationWindow):
             return
         submitter = getattr(self._controller, "submit_last_review", None)
         if not callable(submitter):
+            self._clear_loaded_review()
             self._show_error("当前设置控制器不支持显式纠错反馈。")
             return
         try:
             outcome = submitter(review_id, preferred_text)
         except SettingsError as error:
+            self._clear_loaded_review()
             self._show_error(str(error))
             return
         except Exception:
+            self._clear_loaded_review()
             self._show_error("无法安全保存这次纠错反馈。")
             return
         reason = outcome.reason_code
         feedback_code = outcome.feedback_code
         if not outcome.ok or not reason or not feedback_code:
+            self._clear_loaded_review()
             self._show_error("守护进程没有确认这次纠错反馈。")
             return
-        self._loaded_review_id = None
-        self.adaptive_provider_entry.set_text("")
-        self.adaptive_preferred_entry.set_text("")
+        self._clear_loaded_review()
         self.refresh_adaptive_learning(silent=True)
         label = _adaptive_reason_label(reason)
         effective = reason in {
@@ -1976,7 +2097,8 @@ class SettingsWindow(Gtk.ApplicationWindow):
         )
         if collection.enabled:
             self._show_message(
-                "已为所选目录开启 WAV 与未经复核的 provider_final 留存。每次新听写"
+                "已为所选目录开启 WAV、原始 provider_final 与机器生成 delivery 留存。"
+                "每次新听写"
                 "都会读取此设置；如果使用远程挂载，请保持连接。"
             )
         else:

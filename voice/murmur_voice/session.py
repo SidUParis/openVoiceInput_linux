@@ -17,6 +17,13 @@ from .control import (
     ReviewSubmitReply,
 )
 from .data_collection import DataCollectionError
+from .output_style import (
+    DEFAULT_OUTPUT_STYLE_MODE,
+    OutputDelivery,
+    OutputStyleConfig,
+    deliver_output,
+    validate_output_delivery,
+)
 from .preedit import AcquireResult, PreeditClient
 from .state import CommandReply, VoiceState
 from .volcengine import AudioBackpressureError
@@ -76,6 +83,8 @@ class VoiceSession:
         data_collection_status_reader: Any | None = None,
         data_collection_feedback_writer: Any | None = None,
         microphone_policy_validator: Any | None = None,
+        output_style_reader: Any | None = None,
+        output_delivery_factory: Any | None = None,
     ) -> None:
         if asr_client_factory is not None:
             self._asr_factory = asr_client_factory
@@ -106,12 +115,15 @@ class VoiceSession:
         self._data_collection_status_reader = data_collection_status_reader
         self._data_collection_feedback_writer = data_collection_feedback_writer
         self._microphone_policy_validator = microphone_policy_validator
+        self._output_style_reader = output_style_reader or OutputStyleConfig
+        self._output_delivery_factory = output_delivery_factory or deliver_output
 
         self._lock = threading.RLock()
         self._state = VoiceState.IDLE
         self._utterance_id: str | None = None
         self._revision = 0
         self._latest_text = ""
+        self._output_style_mode = DEFAULT_OUTPUT_STYLE_MODE
         self._recording_timer: Any | None = None
         self._warning_timer: Any | None = None
         self._duration_warning = False
@@ -208,6 +220,17 @@ class VoiceSession:
             if self._state is not VoiceState.IDLE:
                 return CommandReply(False, "session-active", self._state)
 
+            try:
+                output_style = self._output_style_reader()
+                if not isinstance(output_style, OutputStyleConfig):
+                    raise ConfigError("output style configuration is invalid")
+            except (ConfigError, OSError, ValueError, TypeError):
+                # A malformed explicit policy must not be silently replaced by
+                # another output contract. Fail before focus, provider, or mic.
+                logger.error("Output style could not be loaded safely")
+                self._last_error_code = "output-style-invalid"
+                return CommandReply(False, "output-style-invalid", self._state)
+
             if self._microphone_policy_validator is not None:
                 try:
                     self._microphone_policy_validator()
@@ -243,6 +266,9 @@ class VoiceSession:
             self._utterance_id = utterance_id
             self._revision = 0
             self._latest_text = ""
+            # Settings are hot-loaded once per utterance. A save during capture
+            # applies only to the next start and cannot change terminal text.
+            self._output_style_mode = output_style.mode
             try:
                 self._require_start_time(start_deadline)
                 asr = self._asr_factory()
@@ -447,13 +473,15 @@ class VoiceSession:
             self._cancel_final_timer_locked()
             utterance_id = self._utterance_id
             provider_final = self._latest_text
+            delivery = self._terminal_delivery_locked(provider_final)
+            delivered_text = delivery.text
             # Stop capture before final delivery. Optional retention is only
             # offered after the same authoritative final was accepted by the
             # focused IBus client.
             self._disconnect_provider_locked()
             accepted = False
             observation_deadline = None
-            if provider_final:
+            if delivered_text:
                 # Start the window before the synchronous Final D-Bus call.
                 # The engine starts its own bound while handling that call, so
                 # this side will finish first even after round-trip latency.
@@ -461,12 +489,12 @@ class VoiceSession:
                 accepted = self._preedit.final(
                     utterance_id,
                     self._revision + 1,
-                    provider_final,
+                    delivered_text,
                 )
             else:
                 self._preedit.cancel(utterance_id)
 
-            if provider_final and not accepted:
+            if delivered_text and not accepted:
                 # final() may reject before making its D-Bus call. cancel() is
                 # harmless if final() already cleared the client session.
                 self._preedit.cancel(utterance_id)
@@ -474,35 +502,46 @@ class VoiceSession:
                 self._discard_data_record_locked()
                 self._clear_sensitive_state_locked()
                 return
-            if not provider_final:
+            if not delivered_text:
                 self._discard_data_record_locked()
                 self._last_error_code = "none"
                 self._clear_sensitive_state_locked()
                 return
 
-            collection_failed = not self._commit_data_record_locked(provider_final)
-            self._remember_last_review_locked(utterance_id, provider_final)
+            collection_failed = not self._commit_data_record_locked(
+                provider_final,
+                delivery,
+            )
+            self._remember_last_review_locked(
+                utterance_id,
+                provider_final,
+                delivered_text,
+            )
             self._last_error_code = (
                 "data-collection-failed" if collection_failed else "none"
             )
+            if delivery.changed:
+                # The IBus observation now reflects machine-cleaned delivery,
+                # not the raw ASR span. Consume it immediately and record only
+                # a content-free skip reason; never infer ASR corrections from
+                # edits to postprocessed text.
+                try:
+                    self._preedit.finish_observation(utterance_id)
+                except Exception:
+                    logger.error("Postprocessed observation could not be consumed")
+                self._record_observation_skip_locked(
+                    utterance_id,
+                    "postprocessed-output-not-safe-for-asr-learning",
+                    collection_failed=collection_failed,
+                )
+                self._clear_sensitive_state_locked()
+                return
             if getattr(self._preedit, "observation_supported", None) is False:
-                observation_result = None
-                if self._observation_result_handler is not None:
-                    try:
-                        observation_result = self._observation_result_handler(
-                            "surrounding-text-unavailable"
-                        )
-                    except Exception:
-                        logger.error("Adaptive correction outcome could not be saved")
-                        if not collection_failed:
-                            self._last_error_code = "adaptive-correction-failed"
-                if observation_result is not None:
-                    self._write_data_feedback_locked(
-                        utterance_id,
-                        observation_result,
-                    )
-                    if not collection_failed:
-                        self._last_error_code = "adaptive-correction-skipped"
+                self._record_observation_skip_locked(
+                    utterance_id,
+                    "surrounding-text-unavailable",
+                    collection_failed=collection_failed,
+                )
                 self._clear_sensitive_state_locked()
                 return
             self._revision = 0
@@ -689,6 +728,65 @@ class VoiceSession:
             return "feedback-failed"
         return "feedback-queued" if queued is True else "feedback-disabled"
 
+    def _record_observation_skip_locked(
+        self,
+        utterance_id: str,
+        reason_code: str,
+        *,
+        collection_failed: bool,
+    ) -> None:
+        """Persist one content-free skipped-observation outcome, if available."""
+
+        observation_result = None
+        if self._observation_result_handler is not None:
+            try:
+                observation_result = self._observation_result_handler(reason_code)
+            except Exception:
+                logger.error("Adaptive correction outcome could not be saved")
+                if not collection_failed:
+                    self._last_error_code = "adaptive-correction-failed"
+                return
+        if observation_result is not None:
+            self._write_data_feedback_locked(utterance_id, observation_result)
+            if (
+                not collection_failed
+                and self._last_error_code != "data-collection-failed"
+            ):
+                self._last_error_code = "adaptive-correction-skipped"
+
+    def _terminal_delivery_locked(self, provider_final: str) -> OutputDelivery:
+        """Apply the frozen terminal policy with a raw, non-blocking fallback."""
+
+        try:
+            delivery = self._output_delivery_factory(
+                provider_final,
+                self._output_style_mode,
+            )
+            if not isinstance(delivery, OutputDelivery):
+                raise TypeError("output delivery is invalid")
+            validate_output_delivery(provider_final, delivery)
+            return delivery
+        except Exception:
+            # The default implementation already catches cleaner errors. Keep
+            # this boundary defensive so a future local processor cannot block
+            # a valid provider final or expose its content through a traceback.
+            logger.error("Terminal output postprocessing failed")
+            if self._output_style_mode == "clean":
+                return OutputDelivery(
+                    mode="clean",
+                    text=provider_final,
+                    processor="openvoice-clean-expression",
+                    processor_version=1,
+                    outcome="processor-error",
+                )
+            return OutputDelivery(
+                mode="faithful",
+                text=provider_final,
+                processor="identity",
+                processor_version=1,
+                outcome="faithful",
+            )
+
     def _abort_locked(self, code: str) -> None:
         self._cancel_warning_timer_locked()
         self._cancel_recording_timer_locked()
@@ -733,6 +831,7 @@ class VoiceSession:
         self._utterance_id = None
         self._revision = 0
         self._latest_text = ""
+        self._output_style_mode = DEFAULT_OUTPUT_STYLE_MODE
         self._duration_warning = False
         self._observation_deadline = None
 
@@ -760,11 +859,12 @@ class VoiceSession:
         self,
         utterance_id: str,
         provider_final: str,
+        delivered_text: str,
     ) -> None:
         self._clear_last_review_locked()
         deadline = self._monotonic() + self._last_review_ttl_seconds
         generation = self._last_review_generation
-        self._last_review = LastReview(utterance_id, provider_final)
+        self._last_review = LastReview(utterance_id, provider_final, delivered_text)
         self._last_review_deadline = deadline
         timer = self._last_review_timer_factory(
             self._last_review_ttl_seconds,
@@ -831,7 +931,11 @@ class VoiceSession:
             logger.error("Optional local audio record is incomplete")
             self._last_error_code = "data-collection-failed"
 
-    def _commit_data_record_locked(self, provider_final: str) -> bool:
+    def _commit_data_record_locked(
+        self,
+        provider_final: str,
+        delivery: OutputDelivery,
+    ) -> bool:
         record = self._data_record
         self._data_record = None
         if record is None:
@@ -840,7 +944,7 @@ class VoiceSession:
             record.discard()
             return True
         try:
-            record.commit(provider_final)
+            record.commit(provider_final, delivery)
         except Exception:
             logger.error("Optional local data record could not be completed")
             return False

@@ -23,9 +23,17 @@ if TYPE_CHECKING:
 MAX_COMMAND_BYTES = 256
 MAX_RESPONSE_BYTES = 4096
 MAX_REVIEW_REQUEST_BYTES = 20 * 1024
-MAX_REVIEW_RESPONSE_BYTES = 20 * 1024
 MAX_REVIEW_TEXT_CODEPOINTS = 4096
 MAX_REVIEW_TEXT_UTF8_BYTES = 16 * 1024
+# With ensure_ascii=False, one allowed codepoint needs at most six JSON bytes:
+# U+0000..U+001F use ``\u00xx`` while a raw Unicode scalar uses at most four
+# UTF-8 bytes.  The response carries two independently maximum-sized texts;
+# 1 KiB safely bounds fixed keys, punctuation, booleans, and the 128-byte ID.
+_MAX_REVIEW_JSON_TEXT_BYTES = max(
+    MAX_REVIEW_TEXT_UTF8_BYTES,
+    MAX_REVIEW_TEXT_CODEPOINTS * 6,
+)
+MAX_REVIEW_RESPONSE_BYTES = (2 * _MAX_REVIEW_JSON_TEXT_BYTES) + 1024
 _UTTERANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 # Production Preedit acquisition is bounded to 29 s, failed microphone recovery
 # (including conservative rollback) to 10 s, and Preedit cleanup to 8 s. Keep the
@@ -54,10 +62,11 @@ class ControlError(RuntimeError):
 
 @dataclass(frozen=True, slots=True, repr=False)
 class LastReview:
-    """One bounded in-memory provider final returned only to the host UI."""
+    """One bounded raw final plus read-only delivery returned to the host UI."""
 
     utterance_id: str
     provider_text: str
+    delivered_text: str | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -435,11 +444,17 @@ def request_last_review(
         if set(document) not in ({"available"}, {"available", "code"}):
             raise ControlError("review service returned an invalid response")
         return None
-    if set(document) != {"available", "utterance_id", "provider_text"}:
+    if set(document) != {
+        "available",
+        "utterance_id",
+        "provider_text",
+        "delivered_text",
+    }:
         raise ControlError("review service returned an invalid response")
     return _validated_review(
         document.get("utterance_id"),
         document.get("provider_text"),
+        document.get("delivered_text"),
     )
 
 
@@ -511,11 +526,13 @@ def _review_document(value: object) -> dict[str, Any]:
     review = _validated_review(
         getattr(value, "utterance_id", None),
         getattr(value, "provider_text", None),
+        getattr(value, "delivered_text", None),
     )
     return {
         "available": True,
         "utterance_id": review.utterance_id,
         "provider_text": review.provider_text,
+        "delivered_text": review.delivered_text,
     }
 
 
@@ -579,7 +596,11 @@ def _valid_status_code(value: object) -> bool:
     )
 
 
-def _validated_review(utterance_id: object, provider_text: object) -> LastReview:
+def _validated_review(
+    utterance_id: object,
+    provider_text: object,
+    delivered_text: object | None = None,
+) -> LastReview:
     if not isinstance(utterance_id, str) or not _UTTERANCE_ID_RE.fullmatch(
         utterance_id
     ):
@@ -592,7 +613,17 @@ def _validated_review(utterance_id: object, provider_text: object) -> LastReview
         or "\x00" in provider_text
     ):
         raise ControlError("review service returned an invalid response")
-    return LastReview(utterance_id, provider_text)
+    if delivered_text is None:
+        delivered_text = provider_text
+    if (
+        not isinstance(delivered_text, str)
+        or not delivered_text
+        or len(delivered_text) > MAX_REVIEW_TEXT_CODEPOINTS
+        or len(delivered_text.encode("utf-8")) > MAX_REVIEW_TEXT_UTF8_BYTES
+        or "\x00" in delivered_text
+    ):
+        raise ControlError("review service returned an invalid response")
+    return LastReview(utterance_id, provider_text, delivered_text)
 
 
 def _receive_command(connection: socket.socket) -> tuple[str, float | None]:

@@ -64,6 +64,13 @@ integrity; it does not prove who published the file.
    microphone ordering must also state the deterministic initial order,
    saved-order fallback behavior, and the remaining physical-device validation
    gap.
+   A release with clean output must additionally state that faithful remains
+   the missing-config default; cleanup is final-only, local, deletion-only and
+   adds no LLM/network call; failures fall back to raw; changed cleanup skips
+   automatic ASR learning; schema-v3 records preserve raw provider text and
+   machine-derived delivery separately; usage v2 counts delivered text; old
+   v1/v2 records remain immutable; and `output-style.json` is private,
+   uninstall-preserved, and excluded from artifacts.
 
 ## Controlled public transition
 

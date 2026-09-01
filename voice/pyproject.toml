@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "murmur-ime-voice"
-version = "0.1.0a6"
+version = "0.1.0a7"
 description = "Volcengine voice daemon for Open Voice Input Linux"
 readme = "README.md"
 requires-python = ">=3.11"

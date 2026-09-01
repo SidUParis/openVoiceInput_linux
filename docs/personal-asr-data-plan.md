@@ -40,7 +40,16 @@ silently alter `spoken_verbatim`. This separation permits ASR acoustic/language
 adaptation to use the faithful label while a later correction or formatting
 layer can learn the preferred output.
 
-## Implemented opt-in record (schema v2)
+Schema v3 also stores a separate `delivery` object. It is not a human label:
+its `text` is exactly what was inserted, with
+`machine-derived-unreviewed` status. Faithful mode records an identity
+processor. Clean mode records the bounded local processor name/version,
+content-free outcome, and every deletion's original-codepoint offsets, kind,
+reason, source and empty replacement. Replaying those edits against raw
+`provider_final` must reproduce `delivery.text`. This audit must never be used
+as `spoken_verbatim` merely because it looks cleaner.
+
+## Implemented opt-in record (schema v3)
 
 The GTK settings window keeps collection off by default. Enabling requires an
 existing absolute local or mounted folder and initializes or reopens a marked
@@ -60,6 +69,8 @@ and no-final sessions publish nothing. One random utterance directory contains:
   won, DJI link state at selection, plus asynchronously observed actual Pulse
   source-output route categories (including a mid-recording route change);
 - the three text roles and review states described above.
+- the actual faithful/clean delivery and its replayable local transformation
+  audit, still explicitly machine-derived and unreviewed.
 
 After final acceptance, the background writer also computes bounded numeric PCM
 diagnostics under `audio.quality`: overall and first-second clipped-sample
@@ -71,8 +82,11 @@ thresholds for eventual training remain a later review decision.
 
 The immutable utterance directory remains the established two-file
 `audio.wav` + `record.json` contract. After that pair is published, a separate
-dataset-level `usage/<utterance_id>.json` index stores only the utterance ID,
-timestamp, audio duration and non-whitespace character count. Existing training
+dataset-level schema-v2 `usage/<utterance_id>.json` index stores only the
+utterance ID, timestamp, audio duration, and non-whitespace character count of
+the text actually delivered. It declares `character_count_basis` as
+`delivered-text`; existing schema-v1 summaries retain their older raw-provider
+count meaning. Existing training
 tools therefore do not see a third file inside an utterance record.
 
 The active recorder stores at most the 600-second product limit in bounded
@@ -96,18 +110,18 @@ identical models may intentionally share one fingerprint. The five-second
 adaptive ledger is not itself an audio dataset and must not be reinterpreted as
 one.
 
-### Schema-v1 migration policy
+### Schema-v1/v2 migration policy
 
 Existing schema-v1 `record.json` files remain immutable and valid. The dataset
 marker and directory name remain version 1, so a dataset may contain both old
-v1 and new v2 utterances without moving or rewriting audio. Schema v2 only adds
-the optional top-level `microphone` object and numeric `audio.quality` summary;
-the prior audio fields, provider, and label paths keep their meanings. A strict
-v1 reader should skip records whose
-`schema_version` is greater than 1. To migrate a reader, accept versions 1 and
-2, treat missing `microphone`/`audio.quality` objects as “not observed,” and
-otherwise leave all v1 parsing unchanged. Do not synthesize microphone
-provenance or quality for old records from filenames or current desktop state.
+v1, v2 and new v3 utterances without moving or rewriting audio. Schema v2 added
+the optional top-level `microphone` object and numeric `audio.quality` summary.
+Schema v3 adds required `delivery` while keeping raw `labels.provider_final`
+and both null human-review labels unchanged. A strict older reader should skip
+records whose `schema_version` it does not support. A migrated reader may
+accept 1/2/3, treating missing v2 metadata as “not observed” and missing
+delivery as “not recorded”; it must never synthesize old delivery, microphone
+provenance, or quality from filenames or current desktop state.
 
 `microphone.actual.status` is `unknown` until the read-only observer has matched
 the daemon's live Pulse source-output; the selected source is never substituted
@@ -159,7 +173,8 @@ pending item rather than drop valuable data silently.
 
 1. **Implemented:** versioned, disabled-by-default WAV/JSON collection with a
    transcript-free usage summary and private aggregate dashboard, plus the
-   three separate text roles, exact audio hashes, atomic publication, hot
+   three separate human label roles, raw-versus-delivered audit, exact audio
+   hashes, atomic publication, hot
    enable/disable/path reload, and no change to the provider stream.
 2. Add an explicit review/delete/keep interface and publish a standalone
    schema validator before declaring long-term corpus compatibility.
@@ -195,3 +210,11 @@ autoregressive model. It can improve daily use while the separate opted-in
 collector accumulates review candidates. Adaptive entries are not labels, and
 neither feature makes the current corpus training-ready; label review and
 eventual training remain independent and auditable.
+
+Clean terminal delivery is a third, separate layer. If it changes a provider
+final, automatic surrounding-text learning is consumed without extraction so
+the machine deletion cannot masquerade as an ASR correction. The explicit
+review tool always uses raw `provider_final` against human-entered
+`spoken_verbatim`; its read-only delivered text is context only. A later review
+workflow may decide whether that delivery belongs in `preferred_output`, but
+the current writer leaves both human labels null.
