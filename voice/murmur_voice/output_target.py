@@ -130,6 +130,22 @@ Runner = Callable[..., Any]
 MetadataReader = Callable[[str], Any]
 SocketProbe = Callable[[str, float], None]
 UidReader = Callable[[], int]
+UidMapReader = Callable[[], str]
+OverflowUidReader = Callable[[], int]
+
+
+def _read_uid_map() -> str:
+    value = Path("/proc/self/uid_map").read_text(encoding="ascii")
+    if len(value) > 4096:
+        raise ValueError("uid map is too large")
+    return value
+
+
+def _read_overflow_uid() -> int:
+    value = Path("/proc/sys/kernel/overflowuid").read_text(encoding="ascii")
+    if len(value) > 32:
+        raise ValueError("overflow uid is invalid")
+    return int(value.strip())
 
 
 def _probe_unix_socket(path: str, timeout_seconds: float) -> None:
@@ -162,6 +178,8 @@ class ClipboardWriter:
         socket_metadata_reader: MetadataReader = os.lstat,
         socket_probe: SocketProbe = _probe_unix_socket,
         uid_reader: UidReader = os.getuid,
+        uid_map_reader: UidMapReader = _read_uid_map,
+        overflow_uid_reader: OverflowUidReader = _read_overflow_uid,
         environment: Mapping[str, str] | None = None,
         timeout_seconds: float = DEFAULT_CLIPBOARD_TIMEOUT_SECONDS,
     ) -> None:
@@ -176,6 +194,8 @@ class ClipboardWriter:
         self._socket_metadata_reader = socket_metadata_reader
         self._socket_probe = socket_probe
         self._uid_reader = uid_reader
+        self._uid_map_reader = uid_map_reader
+        self._overflow_uid_reader = overflow_uid_reader
         self._environment = dict(os.environ if environment is None else environment)
         self._timeout_seconds = min(timeout, MAX_CLIPBOARD_TIMEOUT_SECONDS)
         self._command: tuple[str, ...] | None = None
@@ -200,6 +220,7 @@ class ClipboardWriter:
                 raise ValueError
         except Exception:
             raise ClipboardError("clipboard helper is unavailable") from None
+        trusted_system_uids = self._trusted_system_uids()
 
         candidates: list[tuple[str, str, Sequence[str], str, frozenset[int]]] = []
         wayland_socket = self._wayland_socket_path(uid)
@@ -213,7 +234,7 @@ class ClipboardWriter:
                     frozenset({uid}),
                 )
             )
-        x11_socket = self._x11_socket_path()
+        x11_socket = self._x11_socket_path(trusted_system_uids)
         if x11_socket is not None:
             candidates.append(
                 (
@@ -221,21 +242,56 @@ class ClipboardWriter:
                     _XCLIP,
                     (_XCLIP, "-selection", "clipboard", "-in"),
                     x11_socket,
-                    frozenset({0, uid}),
+                    frozenset({uid}) | trusted_system_uids,
                 )
             )
         for backend, path, command, display_socket, socket_owners in candidates:
-            if self._helper_is_trusted(path) and self._display_socket_is_live(
-                display_socket,
-                socket_owners,
-            ):
+            if self._helper_is_trusted(
+                path,
+                trusted_system_uids,
+            ) and self._display_socket_is_live(display_socket, socket_owners):
                 self._command = tuple(command)
                 self._command_environment = self._helper_environment(backend)
                 self._backend = backend
                 return
         raise ClipboardError("clipboard helper is unavailable")
 
-    def _helper_is_trusted(self, path: str) -> bool:
+    def _trusted_system_uids(self) -> frozenset[int]:
+        """Map host root into this process's user-namespace UID view."""
+
+        trusted = {0}
+        try:
+            mappings = []
+            for line in self._uid_map_reader().splitlines():
+                fields = line.split()
+                if len(fields) != 3 or any(not field.isdecimal() for field in fields):
+                    raise ValueError
+                inside, outside, count = (int(field) for field in fields)
+                if count < 1:
+                    raise ValueError
+                mappings.append((inside, outside, count))
+            if not mappings or len(mappings) > 64:
+                raise ValueError
+            for inside, outside, count in mappings:
+                if outside == 0 or outside < 0 < outside + count:
+                    trusted.add(inside - outside)
+                    break
+            else:
+                overflow_uid = self._overflow_uid_reader()
+                if type(overflow_uid) is not int or not 1 <= overflow_uid < 2**32:
+                    raise ValueError
+                trusted.add(overflow_uid)
+        except Exception:
+            # Fail closed to the ordinary host-root view when proc metadata is
+            # unavailable or malformed. The start then reports unavailable.
+            return frozenset({0})
+        return frozenset(trusted)
+
+    def _helper_is_trusted(
+        self,
+        path: str,
+        trusted_system_uids: frozenset[int],
+    ) -> bool:
         try:
             metadata = self._metadata_reader(path)
             mode = metadata.st_mode
@@ -243,7 +299,7 @@ class ClipboardWriter:
                 path in {_WL_COPY, _XCLIP}
                 and Path(path).is_absolute()
                 and stat.S_ISREG(mode)
-                and metadata.st_uid == 0
+                and metadata.st_uid in trusted_system_uids
                 and not mode & (stat.S_IWGRP | stat.S_IWOTH)
                 # The daemon is never root. Requiring other-execute proves the
                 # selected root-owned helper can actually be invoked by this
@@ -302,7 +358,10 @@ class ClipboardWriter:
             return None
         return os.fspath(runtime_path / display)
 
-    def _x11_socket_path(self) -> str | None:
+    def _x11_socket_path(
+        self,
+        trusted_system_uids: frozenset[int],
+    ) -> str | None:
         display = self._environment.get("DISPLAY")
         if type(display) is not str:
             return None
@@ -314,7 +373,7 @@ class ClipboardWriter:
             mode = metadata.st_mode
             if (
                 not stat.S_ISDIR(mode)
-                or metadata.st_uid != 0
+                or metadata.st_uid not in trusted_system_uids
                 or not mode & stat.S_ISVTX
             ):
                 return None

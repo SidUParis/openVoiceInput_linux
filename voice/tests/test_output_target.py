@@ -262,6 +262,51 @@ def test_clipboard_preflight_falls_back_from_stale_wayland_to_live_local_x11():
     assert all(0 < timeout <= 1 for _path, timeout in probes)
 
 
+def test_clipboard_preflight_accepts_host_root_mapped_to_overflow_uid():
+    def namespace_binary(_path):
+        return SimpleNamespace(st_mode=stat.S_IFREG | 0o755, st_uid=65534)
+
+    def namespace_socket(path):
+        value = os.fspath(path)
+        if value == "/tmp/.X11-unix":
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o1777, st_uid=65534)
+        if value == "/tmp/.X11-unix/X0":
+            return SimpleNamespace(st_mode=stat.S_IFSOCK | 0o777, st_uid=1000)
+        raise FileNotFoundError
+
+    writer = ClipboardWriter(
+        metadata_reader=namespace_binary,
+        socket_metadata_reader=namespace_socket,
+        socket_probe=_successful_socket_probe,
+        uid_reader=lambda: 1000,
+        uid_map_reader=lambda: "1000 1000 1\n",
+        overflow_uid_reader=lambda: 65534,
+        environment={"DISPLAY": ":0"},
+    )
+
+    writer.preflight()
+
+    assert writer.backend == "xclip"
+
+
+def test_clipboard_preflight_rejects_overflow_owner_without_user_namespace():
+    writer = ClipboardWriter(
+        metadata_reader=lambda _path: SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o755,
+            st_uid=65534,
+        ),
+        socket_metadata_reader=_trusted_display_socket,
+        socket_probe=_successful_socket_probe,
+        uid_reader=lambda: 1000,
+        uid_map_reader=lambda: "0 0 4294967295\n",
+        overflow_uid_reader=lambda: 65534,
+        environment={"DISPLAY": ":0"},
+    )
+
+    with pytest.raises(ClipboardError, match="unavailable"):
+        writer.preflight()
+
+
 def test_clipboard_write_uses_only_bounded_stdin_and_never_transcript_argv():
     calls = []
     private_text = "远程 private transcript"
