@@ -5,7 +5,7 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
-## [0.1.0-alpha.8] - 2026-09-01
+## [0.1.0-alpha.8] - 2026-09-02
 
 ### Added
 

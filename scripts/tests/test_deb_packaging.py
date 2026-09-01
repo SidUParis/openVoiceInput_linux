@@ -168,7 +168,7 @@ class DebianMetadataTests(unittest.TestCase):
         self.assertIn("原生 GTK4 客户端保持轻量", metadata)
         self.assertIn("docs/assets/settings-window.png", metadata)
         self.assertIn("中文优先的原生 GTK4 设置界面", metadata)
-        self.assertIn('<release version="0.1.0-alpha.8" date="2026-09-01">', metadata)
+        self.assertIn('<release version="0.1.0-alpha.8" date="2026-09-02">', metadata)
 
     def test_builder_enforces_lightweight_package_budgets(self) -> None:
         builder = (REPOSITORY / "scripts/build-deb.sh").read_text(encoding="utf-8")
