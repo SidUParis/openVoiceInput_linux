@@ -170,6 +170,11 @@ class FakeClipboardWriter:
         self.writes.append(text)
 
 
+class MaliciousProviderText(str):
+    def __len__(self):
+        raise AssertionError("untrusted str subclass method must not run")
+
+
 class FakeTimer:
     def __init__(self, seconds, callback):
         self.seconds = seconds
@@ -1110,7 +1115,7 @@ def test_clipboard_cancel_and_empty_final_never_touch_ibus_or_clipboard():
     assert preedit.calls == []
     assert writer.writes == []
     assert session.review_last() is None
-    assert session.status().code == "status"
+    assert session.status().code == "clipboard-armed"
 
 
 def test_clipboard_data_collection_failure_takes_priority_over_ready_status():
@@ -1131,6 +1136,126 @@ def test_clipboard_data_collection_failure_takes_priority_over_ready_status():
     assert writer.writes == ["provider final"]
     assert preedit.calls == []
     assert session.status().code == "data-collection-failed"
+
+
+@pytest.mark.parametrize(
+    "exact_text",
+    (
+        "x" * 4096,
+        "😀" * 4096,
+    ),
+)
+def test_clipboard_result_accepts_exact_codepoint_and_utf8_boundaries(exact_text):
+    order = []
+    writer = FakeClipboardWriter(order)
+    session, asr, _audio, preedit, _timers, _ = _session(
+        output_target_reader=lambda: OutputTargetConfig("clipboard"),
+        clipboard_writer=writer,
+        observation_result_handler=lambda reason: AdaptiveObservationResult(reason),
+    )
+    session.start()
+
+    asr.on_result(exact_text)
+    asr.on_finish()
+
+    assert writer.writes == [exact_text]
+    assert preedit.calls == []
+    assert session.status().code == "clipboard-ready"
+
+
+@pytest.mark.parametrize(
+    "invalid_text",
+    (
+        "x" * 4097,
+        "😀" * 4097,
+        "private\x00provider-result",
+        "\ud800",
+        MaliciousProviderText("private-subclass-result"),
+        b"private-provider-result",
+    ),
+)
+def test_invalid_or_oversized_clipboard_result_aborts_without_any_delivery_or_record(
+    invalid_text,
+    caplog,
+):
+    order = []
+    writer = FakeClipboardWriter(order)
+    record = FakeDataRecord()
+    session, asr, _audio, preedit, _timers, _ = _session(
+        output_target_reader=lambda: OutputTargetConfig("clipboard"),
+        clipboard_writer=writer,
+        data_collection_factory=lambda _utterance_id: record,
+    )
+    session.start()
+
+    asr.on_result(invalid_text)
+    asr.on_finish()
+
+    assert session.state is VoiceState.IDLE
+    assert session.status().code == "provider-error"
+    assert asr.disconnected == 1
+    assert writer.writes == []
+    assert record.commits == []
+    assert record.discards == 1
+    assert session.review_last() is None
+    assert preedit.calls == []
+    if isinstance(invalid_text, str):
+        assert invalid_text not in caplog.text
+
+
+def test_idle_clipboard_target_reports_armed_without_preflight_or_clipboard_access():
+    order = []
+    writer = FakeClipboardWriter(order)
+    current = [OutputTargetConfig("clipboard")]
+    session, _asr, _audio, preedit, _timers, _ = _session(
+        output_target_reader=lambda: current[0],
+        clipboard_writer=writer,
+    )
+
+    assert session.status().code == "clipboard-armed"
+    assert writer.preflight_calls == 0
+    assert writer.writes == []
+    assert preedit.calls == []
+
+    current[0] = OutputTargetConfig("caret")
+    assert session.status().code == "status"
+
+
+def test_clipboard_armed_never_overrides_a_higher_priority_last_outcome():
+    order = []
+    session, _asr, _audio, _preedit, _timers, _ = _session(
+        output_target_reader=lambda: OutputTargetConfig("clipboard"),
+        clipboard_writer=FakeClipboardWriter(order),
+    )
+    with session._lock:
+        session._last_error_code = "clipboard-ready"
+
+    assert session.status().code == "clipboard-ready"
+
+    with session._lock:
+        session._last_error_code = "provider-error"
+    assert session.status().code == "provider-error"
+
+
+def test_clipboard_ready_is_a_historical_success_outcome_not_live_contents():
+    current = [OutputTargetConfig("clipboard")]
+    order = []
+    writer = FakeClipboardWriter(order)
+    session, asr, _audio, _preedit, _timers, _ = _session(
+        output_target_reader=lambda: current[0],
+        clipboard_writer=writer,
+        observation_result_handler=lambda reason: AdaptiveObservationResult(reason),
+    )
+    session.start()
+    asr.on_result("copied once")
+    asr.on_finish()
+    assert writer.writes == ["copied once"]
+
+    current[0] = OutputTargetConfig("caret")
+
+    # The code reports the last successful delivery. It does not re-read or
+    # claim ownership of whatever another application may now have copied.
+    assert session.status().code == "clipboard-ready"
 
 
 def test_clean_processor_failure_delivers_raw_and_preserves_observation():

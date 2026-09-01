@@ -52,6 +52,8 @@ VOICE_START_CLEANUP_TIMEOUT_SECONDS = 8.0
 ADAPTIVE_OBSERVATION_SECONDS = 5.0
 ADAPTIVE_OBSERVATION_FINISH_MARGIN_SECONDS = 0.5
 LAST_REVIEW_TTL_SECONDS = 10 * 60.0
+MAX_CLIPBOARD_RESULT_CODEPOINTS = 4096
+MAX_CLIPBOARD_RESULT_UTF8_BYTES = 16 * 1024
 
 
 class _VoiceStartTimeout(RuntimeError):
@@ -173,9 +175,21 @@ class VoiceSession:
                 code = collection_code
             elif self._last_error_code != "none":
                 code = self._last_error_code
+            elif self._state is VoiceState.IDLE and self._clipboard_is_armed_locked():
+                # This reflects only the current private preference. It neither
+                # probes a helper nor claims that a previous clipboard value is
+                # still present.
+                code = "clipboard-armed"
             else:
                 code = "status"
             return CommandReply(True, code, self._state)
+
+    def _clipboard_is_armed_locked(self) -> bool:
+        try:
+            target = self._output_target_reader()
+        except Exception:
+            return False
+        return isinstance(target, OutputTargetConfig) and target.target == "clipboard"
 
     def review_last(self) -> LastReview | None:
         """Return one recent accepted final without persisting or logging it."""
@@ -257,8 +271,10 @@ class VoiceSession:
 
             if output_target.target == "clipboard":
                 try:
-                    # The real writer only validates a fixed root-owned helper;
-                    # it neither executes a process nor mutates the clipboard.
+                    # The real writer validates a fixed root-owned helper and
+                    # performs one bounded connect/close against the matching
+                    # local display socket. It neither executes the helper nor
+                    # mutates the clipboard.
                     self._clipboard_writer.preflight()
                 except Exception:
                     logger.error("Clipboard output is unavailable")
@@ -495,6 +511,20 @@ class VoiceSession:
                 # Remote-desktop canvases cannot consume an IBus preedit. Keep
                 # live hypotheses only in bounded session memory and write
                 # nothing until the provider signals its authoritative finish.
+                try:
+                    valid = (
+                        type(text) is str
+                        and "\x00" not in text
+                        and len(text) <= MAX_CLIPBOARD_RESULT_CODEPOINTS
+                        and len(text.encode("utf-8")) <= MAX_CLIPBOARD_RESULT_UTF8_BYTES
+                    )
+                except UnicodeError:
+                    valid = False
+                if not valid:
+                    logger.error("Voice provider returned an invalid result")
+                    self._clear_last_review_locked()
+                    self._abort_locked("provider-error")
+                    return
                 self._latest_text = text
                 if self._state is VoiceState.STARTING:
                     self._state = VoiceState.RECORDING
@@ -558,7 +588,8 @@ class VoiceSession:
                 )
                 # No surrounding-text observation exists outside the native
                 # caret target. Persist a content-free outcome without hiding
-                # the actionable "copied, paste manually" success status.
+                # the historical successful-copy status. Callers must not treat
+                # that status as proof the clipboard has not since changed.
                 self._record_observation_skip_locked(
                     utterance_id,
                     "clipboard-output-no-surrounding-text",

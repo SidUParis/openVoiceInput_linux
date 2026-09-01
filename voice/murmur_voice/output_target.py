@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+import socket
 import stat
 import subprocess
 from dataclasses import dataclass
@@ -39,9 +41,15 @@ MAX_CLIPBOARD_TEXT_CODEPOINTS = 65_536
 MAX_CLIPBOARD_TEXT_UTF8_BYTES = 256 * 1024
 DEFAULT_CLIPBOARD_TIMEOUT_SECONDS = 2.0
 MAX_CLIPBOARD_TIMEOUT_SECONDS = 5.0
+DISPLAY_SOCKET_PROBE_TIMEOUT_SECONDS = 0.25
 
 _WL_COPY = "/usr/bin/wl-copy"
 _XCLIP = "/usr/bin/xclip"
+_X11_SOCKET_DIRECTORY = "/tmp/.X11-unix"
+_WAYLAND_DISPLAY_RE = re.compile(r"^wayland-(?:0|[1-9][0-9]{0,4})$")
+_X11_DISPLAY_RE = re.compile(
+    r"^:(?P<display>0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,2}))?$"
+)
 
 
 class ClipboardError(RuntimeError):
@@ -120,16 +128,30 @@ def save_output_target_config(
 
 Runner = Callable[..., Any]
 MetadataReader = Callable[[str], Any]
+SocketProbe = Callable[[str, float], None]
+UidReader = Callable[[], int]
+
+
+def _probe_unix_socket(path: str, timeout_seconds: float) -> None:
+    """Open and immediately close one bounded local Unix connection."""
+
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        client.settimeout(timeout_seconds)
+        client.connect(path)
+    finally:
+        client.close()
 
 
 class ClipboardWriter:
     """Write one bounded UTF-8 terminal result through a reviewed helper.
 
-    ``preflight`` performs no process or clipboard mutation.  It resolves only
-    one root-owned, non-writable regular executable under ``/usr/bin`` and
-    freezes its fixed argument vector for the subsequent ``write``.  The
-    injectable runner/metadata/environment seams exist for offline tests; the
-    candidate paths themselves are intentionally not injectable.
+    ``preflight`` performs no helper process or clipboard mutation. It resolves
+    one root-owned, non-writable regular executable under ``/usr/bin``, proves
+    the matching local display Unix socket is live with a bounded connect/close,
+    and freezes the fixed argument vector for the subsequent ``write``. The
+    injectable process/filesystem/socket seams exist for offline tests; helper
+    and display socket locations themselves are intentionally not injectable.
     """
 
     def __init__(
@@ -137,6 +159,9 @@ class ClipboardWriter:
         *,
         runner: Runner = subprocess.run,
         metadata_reader: MetadataReader = os.stat,
+        socket_metadata_reader: MetadataReader = os.lstat,
+        socket_probe: SocketProbe = _probe_unix_socket,
+        uid_reader: UidReader = os.getuid,
         environment: Mapping[str, str] | None = None,
         timeout_seconds: float = DEFAULT_CLIPBOARD_TIMEOUT_SECONDS,
     ) -> None:
@@ -148,6 +173,9 @@ class ClipboardWriter:
             raise ValueError("clipboard timeout is invalid")
         self._runner = runner
         self._metadata_reader = metadata_reader
+        self._socket_metadata_reader = socket_metadata_reader
+        self._socket_probe = socket_probe
+        self._uid_reader = uid_reader
         self._environment = dict(os.environ if environment is None else environment)
         self._timeout_seconds = min(timeout, MAX_CLIPBOARD_TIMEOUT_SECONDS)
         self._command: tuple[str, ...] | None = None
@@ -164,42 +192,127 @@ class ClipboardWriter:
 
         self._command = None
         self._backend = None
-        candidates: list[tuple[str, str, Sequence[str]]] = []
-        if self._environment.get("WAYLAND_DISPLAY"):
+        try:
+            uid = self._uid_reader()
+            if type(uid) is not int or uid < 0:
+                raise ValueError
+        except Exception:
+            raise ClipboardError("clipboard helper is unavailable") from None
+
+        candidates: list[tuple[str, str, Sequence[str], str, frozenset[int]]] = []
+        wayland_socket = self._wayland_socket_path(uid)
+        if wayland_socket is not None:
             candidates.append(
                 (
                     "wl-copy",
                     _WL_COPY,
                     (_WL_COPY, "--type", "text/plain;charset=utf-8"),
+                    wayland_socket,
+                    frozenset({uid}),
                 )
             )
-        if self._environment.get("DISPLAY"):
+        x11_socket = self._x11_socket_path()
+        if x11_socket is not None:
             candidates.append(
                 (
                     "xclip",
                     _XCLIP,
                     (_XCLIP, "-selection", "clipboard", "-in"),
+                    x11_socket,
+                    frozenset({0, uid}),
                 )
             )
-        for backend, path, command in candidates:
-            try:
-                metadata = self._metadata_reader(path)
-                mode = metadata.st_mode
-                trusted = (
-                    path in {_WL_COPY, _XCLIP}
-                    and Path(path).is_absolute()
-                    and stat.S_ISREG(mode)
-                    and metadata.st_uid == 0
-                    and not mode & (stat.S_IWGRP | stat.S_IWOTH)
-                    and bool(mode & stat.S_IXUSR)
-                )
-            except Exception:
-                trusted = False
-            if trusted:
+        for backend, path, command, display_socket, socket_owners in candidates:
+            if self._helper_is_trusted(path) and self._display_socket_is_live(
+                display_socket,
+                socket_owners,
+            ):
                 self._command = tuple(command)
                 self._backend = backend
                 return
         raise ClipboardError("clipboard helper is unavailable")
+
+    def _helper_is_trusted(self, path: str) -> bool:
+        try:
+            metadata = self._metadata_reader(path)
+            mode = metadata.st_mode
+            return (
+                path in {_WL_COPY, _XCLIP}
+                and Path(path).is_absolute()
+                and stat.S_ISREG(mode)
+                and metadata.st_uid == 0
+                and not mode & (stat.S_IWGRP | stat.S_IWOTH)
+                and bool(mode & stat.S_IXUSR)
+            )
+        except Exception:
+            return False
+
+    def _wayland_socket_path(self, uid: int) -> str | None:
+        display = self._environment.get("WAYLAND_DISPLAY")
+        runtime = self._environment.get("XDG_RUNTIME_DIR")
+        if (
+            type(display) is not str
+            or _WAYLAND_DISPLAY_RE.fullmatch(display) is None
+            or type(runtime) is not str
+            or not runtime
+            or len(runtime) > 4096
+            or any(character in runtime for character in "\x00\r\n")
+        ):
+            return None
+        normalized = os.path.normpath(runtime)
+        runtime_path = Path(runtime)
+        if not runtime_path.is_absolute() or normalized != runtime:
+            return None
+        try:
+            metadata = self._socket_metadata_reader(runtime)
+            mode = metadata.st_mode
+            if (
+                not stat.S_ISDIR(mode)
+                or metadata.st_uid != uid
+                or stat.S_IMODE(mode) & 0o077
+            ):
+                return None
+        except Exception:
+            return None
+        return os.fspath(runtime_path / display)
+
+    def _x11_socket_path(self) -> str | None:
+        display = self._environment.get("DISPLAY")
+        if type(display) is not str:
+            return None
+        match = _X11_DISPLAY_RE.fullmatch(display)
+        if match is None:
+            return None
+        try:
+            metadata = self._socket_metadata_reader(_X11_SOCKET_DIRECTORY)
+            mode = metadata.st_mode
+            if (
+                not stat.S_ISDIR(mode)
+                or metadata.st_uid != 0
+                or not mode & stat.S_ISVTX
+            ):
+                return None
+        except Exception:
+            return None
+        display_number = int(match.group("display"))
+        return f"{_X11_SOCKET_DIRECTORY}/X{display_number}"
+
+    def _display_socket_is_live(
+        self,
+        path: str,
+        allowed_owners: frozenset[int],
+    ) -> bool:
+        try:
+            metadata = self._socket_metadata_reader(path)
+            if (
+                not stat.S_ISSOCK(metadata.st_mode)
+                or metadata.st_uid not in allowed_owners
+            ):
+                return False
+            self._socket_probe(path, DISPLAY_SOCKET_PROBE_TIMEOUT_SECONDS)
+            return True
+        except Exception:
+            return False
 
     def write(self, text: str) -> None:
         """Replace the local clipboard once, with transcript bytes on stdin only."""
