@@ -39,10 +39,11 @@ from .config import (
 )
 from .microphone_metadata import MicrophoneCaptureMetadata
 from .output_style import OutputDelivery, deliver_output, validate_output_delivery
+from .output_target import DEFAULT_OUTPUT_TARGET, OutputTargetConfig
 
 DATA_COLLECTION_CONFIG_VERSION = 1
 DATASET_MARKER_VERSION = 1
-DATA_RECORD_VERSION = 3
+DATA_RECORD_VERSION = 4
 DATA_USAGE_SUMMARY_VERSION = 2
 DATA_FEEDBACK_VERSION = 1
 MAX_DATA_COLLECTION_CONFIG_BYTES = 16 * 1024
@@ -97,6 +98,7 @@ class _FrozenRecord:
     pcm_sha256: str
     provider_final: str = field(repr=False)
     delivery: OutputDelivery = field(repr=False)
+    delivery_target: str
     provider_name: str
     provider_model: str
     provider_resource_id: str | None
@@ -615,6 +617,7 @@ class DatasetRecorder:
         self,
         provider_final: str,
         delivery: OutputDelivery | None = None,
+        target: str = DEFAULT_OUTPUT_TARGET,
     ) -> None:
         """Freeze and non-blockingly offer an authoritative teacher record."""
 
@@ -631,6 +634,11 @@ class DatasetRecorder:
         except (TypeError, ValueError) as error:
             self.discard()
             raise DataCollectionError("output delivery is invalid") from error
+        try:
+            validated_target = OutputTargetConfig(target).target
+        except (ConfigError, TypeError, ValueError) as error:
+            self.discard()
+            raise DataCollectionError("output target is invalid") from error
         with self._lock:
             self._stopped = True
             if self._failed or self._committed or self._bytes < SAMPLE_WIDTH_BYTES:
@@ -647,6 +655,7 @@ class DatasetRecorder:
                 pcm_sha256=self._digest.hexdigest(),
                 provider_final=provider_final,
                 delivery=delivery,
+                delivery_target=validated_target,
                 provider_name=self._provider_name,
                 provider_model=self._provider_model,
                 provider_resource_id=self._provider_resource_id,
@@ -743,7 +752,10 @@ def _publish_record(
                     "review_status": "unreviewed",
                 },
             },
-            "delivery": record.delivery.as_record_document(),
+            "delivery": {
+                "target": record.delivery_target,
+                **record.delivery.as_record_document(),
+            },
         }
         _write_json(stage / "record.json", metadata)
         _fsync_directory(stage)
