@@ -179,6 +179,7 @@ class ClipboardWriter:
         self._environment = dict(os.environ if environment is None else environment)
         self._timeout_seconds = min(timeout, MAX_CLIPBOARD_TIMEOUT_SECONDS)
         self._command: tuple[str, ...] | None = None
+        self._command_environment: dict[str, str] | None = None
         self._backend: str | None = None
 
     @property
@@ -191,6 +192,7 @@ class ClipboardWriter:
         """Freeze a trusted local helper without executing or writing to it."""
 
         self._command = None
+        self._command_environment = None
         self._backend = None
         try:
             uid = self._uid_reader()
@@ -228,6 +230,7 @@ class ClipboardWriter:
                 socket_owners,
             ):
                 self._command = tuple(command)
+                self._command_environment = self._helper_environment(backend)
                 self._backend = backend
                 return
         raise ClipboardError("clipboard helper is unavailable")
@@ -242,10 +245,33 @@ class ClipboardWriter:
                 and stat.S_ISREG(mode)
                 and metadata.st_uid == 0
                 and not mode & (stat.S_IWGRP | stat.S_IWOTH)
-                and bool(mode & stat.S_IXUSR)
+                # The daemon is never root. Requiring other-execute proves the
+                # selected root-owned helper can actually be invoked by this
+                # ordinary desktop user before capture or provider startup.
+                and bool(mode & stat.S_IXOTH)
             )
         except Exception:
             return False
+
+    def _helper_environment(self, backend: str) -> dict[str, str]:
+        """Freeze only the display credentials required by the chosen helper."""
+
+        keys = (
+            ("WAYLAND_DISPLAY", "XDG_RUNTIME_DIR")
+            if backend == "wl-copy"
+            else ("DISPLAY", "XAUTHORITY", "HOME")
+        )
+        environment: dict[str, str] = {}
+        for key in keys:
+            value = self._environment.get(key)
+            if (
+                isinstance(value, str)
+                and value
+                and len(value) <= 4096
+                and not any(character in value for character in "\x00\r\n")
+            ):
+                environment[key] = value
+        return environment
 
     def _wayland_socket_path(self, uid: int) -> str | None:
         display = self._environment.get("WAYLAND_DISPLAY")
@@ -323,11 +349,15 @@ class ClipboardWriter:
             raise ClipboardError("clipboard text is empty or invalid")
         if len(text) > MAX_CLIPBOARD_TEXT_CODEPOINTS:
             raise ClipboardError("clipboard text is too large")
-        payload = text.encode("utf-8")
+        try:
+            payload = text.encode("utf-8")
+        except UnicodeError:
+            raise ClipboardError("clipboard text is invalid") from None
         if len(payload) > MAX_CLIPBOARD_TEXT_UTF8_BYTES:
             raise ClipboardError("clipboard text is too large")
         command = self._command
-        if command is None:
+        command_environment = self._command_environment
+        if command is None or command_environment is None:
             raise ClipboardError("clipboard preflight is required")
         try:
             result = self._runner(
@@ -338,6 +368,7 @@ class ClipboardWriter:
                 timeout=self._timeout_seconds,
                 check=False,
                 close_fds=True,
+                env=dict(command_environment),
             )
             if type(getattr(result, "returncode", None)) is not int:
                 raise ClipboardError("clipboard write failed")

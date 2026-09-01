@@ -134,6 +134,7 @@ def test_clipboard_preflight_selects_a_trusted_absolute_backend_without_running_
         SimpleNamespace(st_mode=stat.S_IFREG | 0o775, st_uid=0),
         SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0),
         SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_uid=0),
+        SimpleNamespace(st_mode=stat.S_IFREG | 0o700, st_uid=0),
     ),
 )
 def test_clipboard_preflight_rejects_untrusted_or_non_executable_backends(metadata):
@@ -272,7 +273,12 @@ def test_clipboard_write_uses_only_bounded_stdin_and_never_transcript_argv():
     writer = _writer(
         runner=runner,
         metadata_reader=_trusted_binary,
-        environment={"DISPLAY": ":0"},
+        environment={
+            "DISPLAY": ":0",
+            "HOME": "/home/example",
+            "XAUTHORITY": "/home/example/.Xauthority",
+            "UNRELATED_SECRET": "must-not-reach-helper",
+        },
     )
     writer.preflight()
 
@@ -288,6 +294,11 @@ def test_clipboard_write_uses_only_bounded_stdin_and_never_transcript_argv():
     assert kwargs["timeout"] > 0
     assert kwargs["check"] is False
     assert kwargs["close_fds"] is True
+    assert kwargs["env"] == {
+        "DISPLAY": ":0",
+        "HOME": "/home/example",
+        "XAUTHORITY": "/home/example/.Xauthority",
+    }
 
 
 def test_clipboard_write_is_bounded_and_reports_only_content_free_errors():
@@ -308,6 +319,9 @@ def test_clipboard_write_is_bounded_and_reports_only_content_free_errors():
     with pytest.raises(ClipboardError, match="failed") as timed_out:
         writer.write("private transcript")
     assert "private transcript" not in str(timed_out.value)
+
+    with pytest.raises(ClipboardError, match="invalid"):
+        writer.write("\ud800")
 
 
 def test_clipboard_write_requires_preflight_and_a_nonempty_string():
