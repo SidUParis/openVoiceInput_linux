@@ -355,6 +355,8 @@ class DebianUnitTests(unittest.TestCase):
             "--output-target %E/murmur-ime/output-target.json",
             voice,
         )
+        self.assertIn("PrivateTmp=yes", voice)
+        self.assertIn("BindReadOnlyPaths=-/tmp/.X11-unix", voice)
         self.assertIn("ExecStopPost=/usr/bin/murmur-voice-daemon restore-engine", voice)
         self.assertNotIn("%h", voice)
 

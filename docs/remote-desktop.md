@@ -42,8 +42,9 @@ sudo apt install wl-clipboard
 preflight 才会检查工具。不可用时会在开麦和联系识别服务之前失败关闭，并显示
 `clipboard-unavailable`。
 
-启用后，空闲状态会持续显示 `clipboard-armed`，提醒下一条终稿走剪贴板；它不
-表示剪贴板当前含有任何听写内容。一次成功写入显示历史事实
+启用后，空闲状态会持续显示 `clipboard-armed`，表示已选择该目标；下一次开始
+仍会先检查本地显示 socket 与剪贴板工具，它不保证录音一定启动，也不表示剪贴板
+当前含有任何听写内容。一次成功写入显示历史事实
 `clipboard-ready`，一次失败显示 `clipboard-copy-failed`。
 
 ### 重要隐私边界

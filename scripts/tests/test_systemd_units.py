@@ -99,6 +99,8 @@ class SystemdUnitTests(unittest.TestCase):
         self.assertIn("RuntimeDirectoryMode=0700", voice_unit)
         self.assertIn("RuntimeDirectoryPreserve=yes", voice_unit)
         self.assertNotIn("RuntimeDirectoryPreserve=restart", voice_unit)
+        self.assertIn("PrivateTmp=yes", voice_unit)
+        self.assertIn("BindReadOnlyPaths=-/tmp/.X11-unix", voice_unit)
         self.assertIn("TimeoutStopSec=30", voice_unit)
         self.assertIn("Environment=PYTHONNOUSERSITE=1", voice_unit)
         self.assertIn("RestartPreventExitStatus=2", voice_unit)

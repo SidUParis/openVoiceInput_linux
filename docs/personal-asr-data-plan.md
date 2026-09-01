@@ -112,18 +112,20 @@ identical models may intentionally share one fingerprint. The five-second
 adaptive ledger is not itself an audio dataset and must not be reinterpreted as
 one.
 
-### Schema-v1/v2 migration policy
+### Schema-v1/v2/v3/v4 migration policy
 
 Existing schema-v1 `record.json` files remain immutable and valid. The dataset
-marker and directory name remain version 1, so a dataset may contain both old
-v1, v2 and new v3 utterances without moving or rewriting audio. Schema v2 added
-the optional top-level `microphone` object and numeric `audio.quality` summary.
-Schema v3 adds required `delivery` while keeping raw `labels.provider_final`
-and both null human-review labels unchanged. A strict older reader should skip
-records whose `schema_version` it does not support. A migrated reader may
-accept 1/2/3, treating missing v2 metadata as “not observed” and missing
-delivery as “not recorded”; it must never synthesize old delivery, microphone
-provenance, or quality from filenames or current desktop state.
+marker and directory name remain version 1, so one dataset may contain old v1,
+v2, v3 and new v4 utterances without moving or rewriting audio. Schema v2
+added the optional top-level `microphone` object and numeric `audio.quality`
+summary. Schema v3 added required `delivery` while keeping raw
+`labels.provider_final` and both null human-review labels unchanged. Schema v4
+adds the frozen `caret` or `clipboard` delivery target. A strict older reader
+should skip records whose `schema_version` it does not support. A migrated
+reader may accept 1/2/3/4, treating missing v2 metadata as “not observed” and
+missing delivery/target as “not recorded”; it must never synthesize old
+delivery, target, microphone provenance, or quality from filenames or current
+desktop state.
 
 `microphone.actual.status` is `unknown` until the read-only observer has matched
 the daemon's live Pulse source-output; the selected source is never substituted

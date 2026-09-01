@@ -94,11 +94,14 @@ _SESSION_LABELS = {
 _STATUS_LABELS = {
     "audio-backpressure": "音频缓冲区已满",
     "capture-start-failed": "麦克风启动失败",
-    "clipboard-armed": "剪贴板交付已启用；下一条终稿会复制，请在远端手动粘贴",
+    "clipboard-armed": (
+        "已选择剪贴板交付；下一次开始时会先检查本地显示与剪贴板工具，成功后终稿才会复制"
+    ),
     "clipboard-copy-failed": "终稿未能安全复制；没有自动粘贴或改写远端输入框",
     "clipboard-ready": "上一条终稿已复制；剪贴板可能已被其他应用覆盖",
     "clipboard-unavailable": (
-        "剪贴板工具不可用；请为当前桌面会话安装 xclip（X11）或 wl-clipboard（Wayland）"
+        "本地图形会话或剪贴板工具不可用；请确认 DISPLAY／WAYLAND_DISPLAY 环境，"
+        "并安装 xclip（X11）或 wl-clipboard（Wayland）"
     ),
     "data-collection-failed": "可选数据未确认可靠写入，但本次听写已经完成",
     "data-collection-unavailable": "可选数据留存当前不可用，听写仍会继续",

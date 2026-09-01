@@ -137,8 +137,10 @@ no remote IBus focus/private/surrounding-text proof, clipboard delivery skips
 automatic observation with `clipboard-output-no-surrounding-text`. A helper
 failure reports `clipboard-unavailable` or `clipboard-copy-failed`; success is
 reported as the historical fact `clipboard-ready` and still requires manual
-paste. Persistent `clipboard-armed` warns that the next final will be copied;
-neither status claims that the clipboard currently still contains that text.
+paste. Persistent `clipboard-armed` says clipboard delivery was selected and
+that the next start will first validate the local display/helper; it does not
+promise that recording will start or that a final will be copied. Neither
+status claims that the clipboard currently still contains earlier text.
 
 Evidence: `voice/murmur_voice/output_target.py`,
 `voice/murmur_voice/session.py`, `voice/murmur_voice/settings_app.py`, and
@@ -247,17 +249,18 @@ Evidence: `voice/murmur_voice/session.py`,
 Collection is absent/disabled by default and reloaded at the start of every
 utterance. A recorder is created only for an explicit enabled choice. It copies
 the same successfully submitted 16 kHz mono signed 16-bit chunks into bounded
-memory, then discards them on cancel, error, missing/empty final, or rejection
-of the provider final by the focused IBus context. A record is not queued until
-that final is accepted.
+memory, then discards them on cancel, error, missing/empty final, focused-IBus
+rejection, or clipboard write failure. A record is not queued until that final
+is accepted by its frozen caret or clipboard target.
 
 The background writer first creates a complete private staging directory under
 `openvoiceinput-dataset-v1/.pending`, including WAV and JSON hashes, then uses
 one atomic rename into `utterances/<utterance_id>`. The JSON identifies
 `provider_final` as `teacher-unreviewed`; it leaves both `spoken_verbatim` and
-`preferred_output` null and unreviewed. Schema v3 separately records actual
-machine-derived delivery and replayable deletion metadata while retaining raw
-provider text. This prevents an ASR result or cleaned output from being
+`preferred_output` null and unreviewed. Schema v4 separately records the frozen
+delivery target, actual machine-derived delivery, and replayable deletion
+metadata while retaining raw provider text. This prevents an ASR result or
+cleaned output from being
 silently presented as a human-verified acoustic label or preferred text.
 
 After the unchanged two-file utterance pair is durable, the writer publishes a

@@ -21,6 +21,10 @@ RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 NoNewPrivileges=yes
 PrivateTmp=yes
+# Keep the private temporary directory while exposing only the public X11
+# socket directory needed by the explicitly armed clipboard target. The
+# optional prefix keeps Wayland-only hosts without X11 usable.
+BindReadOnlyPaths=-/tmp/.X11-unix
 LockPersonality=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

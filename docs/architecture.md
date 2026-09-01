@@ -191,9 +191,10 @@ also freezes the exact captured PCM and offers it to a bounded background
 queue. The writer completes `audio.wav` and `record.json` below `.pending`, then
 atomically renames that unchanged two-file pair into the selected dataset's
 `utterances/` tree. It subsequently publishes a transcript-free summary at
-`usage/<utterance_id>.json`. Schema-v3 `record.json` keeps raw `provider_final`
-as an unreviewed pseudo-label and stores delivery/auditable deletions
-separately; `spoken_verbatim`/`preferred_output` remain null. Usage schema v2
+`usage/<utterance_id>.json`. Schema-v4 `record.json` keeps raw `provider_final`
+as an unreviewed pseudo-label and stores delivery/auditable deletions plus the
+frozen `caret` or `clipboard` target separately;
+`spoken_verbatim`/`preferred_output` remain null. Usage schema v2
 counts delivered non-whitespace characters and readers still accept v1.
 Cancellation, failure, or final
 rejection discards the in-memory collector state.

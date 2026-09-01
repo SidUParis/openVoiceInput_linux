@@ -239,17 +239,18 @@ reopens `openvoiceinput-dataset-v1` below the selected folder. It does not
 contact Volcengine, start capture, or restart the service; the next dictation
 reads the choice.
 
-For each enabled utterance whose authoritative provider final is accepted by
-the focused IBus context, the collector publishes one
+For each enabled utterance whose authoritative provider final is either
+accepted by the focused IBus context or successfully written to the explicitly
+armed clipboard target, the collector publishes one
 `utterances/<utterance_id>/` directory containing the exact 16 kHz mono signed
 16-bit `audio.wav` and versioned `record.json`. The provider result is stored as
 `provider_final` with `teacher-unreviewed` status. `spoken_verbatim` and
 `preferred_output` are both null/unreviewed: the current pair is a future
 review candidate, not a gold label or distillation-ready sample.
 
-Schema v3 separately stores actual `delivery.text` as
-`machine-derived-unreviewed`, the frozen mode, processor/version, outcome and
-replayable deletion edits. It never overwrites raw provider text.
+Schema v4 separately stores actual `delivery.text` as
+`machine-derived-unreviewed`, the frozen style and target, processor/version,
+outcome and replayable deletion edits. It never overwrites raw provider text.
 
 The v1 utterance directory stays an immutable two-file pair. After it is
 published, the writer atomically adds a separate private
