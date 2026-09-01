@@ -487,7 +487,10 @@ def _non_overlapping_edits(
     for candidate in ordered:
         if candidate.start >= candidate.end:
             continue
-        if accepted and candidate.start <= accepted[-1].end:
+        # ``end`` is exclusive.  A candidate beginning exactly at the prior
+        # end is adjacent, not overlapping, and must remain an independent
+        # deletion even when its audit kind/reason differs.
+        if accepted and candidate.start < accepted[-1].end:
             previous = accepted[-1]
             if candidate.kind == previous.kind and candidate.reason == previous.reason:
                 accepted[-1] = _EditBounds(

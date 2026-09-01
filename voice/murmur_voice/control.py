@@ -444,12 +444,10 @@ def request_last_review(
         if set(document) not in ({"available"}, {"available", "code"}):
             raise ControlError("review service returned an invalid response")
         return None
-    if set(document) != {
-        "available",
-        "utterance_id",
-        "provider_text",
-        "delivered_text",
-    }:
+    response_fields = set(document)
+    legacy_fields = {"available", "utterance_id", "provider_text"}
+    current_fields = legacy_fields | {"delivered_text"}
+    if response_fields not in (legacy_fields, current_fields):
         raise ControlError("review service returned an invalid response")
     return _validated_review(
         document.get("utterance_id"),

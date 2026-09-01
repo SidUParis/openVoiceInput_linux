@@ -7,6 +7,8 @@ from murmur_voice.clean_expression import (
     MAX_CLEAN_EXPRESSION_CODEPOINTS,
     MAX_CLEAN_EXPRESSION_EDITS,
     CleanExpressionEdit,
+    _EditBounds,
+    _non_overlapping_edits,
     clean_expression,
 )
 
@@ -134,6 +136,15 @@ def test_multiple_independent_deletions_keep_original_offsets_and_order():
     )
     assert _apply_edits(provider_final, result.edits) == result.text
     assert _is_subsequence(result.text, provider_final)
+
+
+def test_adjacent_different_edit_kinds_are_both_retained():
+    candidates = (
+        _EditBounds(0, 1, "self-repetition", "adjacent-exact-restart"),
+        _EditBounds(1, 2, "filler", "standalone-hesitation"),
+    )
+
+    assert _non_overlapping_edits(candidates) == candidates
 
 
 def test_punctuation_and_spacing_are_not_globally_normalized():

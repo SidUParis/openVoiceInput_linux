@@ -189,6 +189,56 @@ def test_review_socket_returns_only_bounded_last_result_on_sibling_path(runtime_
     thread.join(2)
 
 
+def test_review_client_accepts_legacy_response_without_delivered_text(
+    runtime_dir, monkeypatch
+):
+    response = (
+        json.dumps(
+            {
+                "available": True,
+                "utterance_id": "legacy-utterance",
+                "provider_text": "legacy provider final",
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+    class LegacyReviewSocket:
+        def __init__(self):
+            self._response = response
+
+        def settimeout(self, _timeout):
+            return None
+
+        def connect(self, _path):
+            return None
+
+        def sendall(self, request):
+            assert request == b"review-last\n"
+
+        def recv(self, maximum):
+            chunk = self._response[:maximum]
+            self._response = self._response[maximum:]
+            return chunk
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        socket, "socket", lambda *_args, **_kwargs: LegacyReviewSocket()
+    )
+
+    review = request_last_review()
+
+    assert review == LastReview(
+        "legacy-utterance",
+        "legacy provider final",
+        "legacy provider final",
+    )
+
+
 def test_review_socket_round_trips_maximum_raw_and_delivered_text(runtime_dir):
     session, _server, thread = _start_server(runtime_dir)
     maximum_text = "𐀀" * 4096
