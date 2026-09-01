@@ -1,7 +1,7 @@
 # Open Voice Input Linux：中文安装与使用指南
 
-**按下快捷键，说话，识别文字直接出现在当前光标；不弹转写黑框，也不靠
-剪贴板或模拟粘贴。**
+**按下快捷键，说话，识别文字默认直接出现在当前光标；远程桌面也可显式选择
+只复制终稿，再由用户手动粘贴。**
 
 [返回中文主页](../README.md) · [English](../README.en.md)
 
@@ -79,6 +79,14 @@ LLM、不为清理增加网络请求，也不替换术语、数字或大小写�
 都回退为原始 final。若清理改变文本，本条自动学习观察会跳过；复核仍以原始
 provider final 为唯一纠错来源，delivery 仅只读展示。
 
+Remmina 等 RDP 画布不能接收本机 IBus commit。**远程桌面**页因此提供一项
+默认关闭的“同步剪贴板”：只复制 authoritative final，不复制 partial、不自动
+粘贴、不模拟按键。成功状态只证明上一条写入当时成功，其他应用可能随后覆盖；
+用户确认远端光标后再手动 `Ctrl+V`。两端
+会话和剪贴板历史都可能读取内容，禁止用于密码、Key、验证码等秘密；远端没有
+可信 surrounding text，所以本条不会自动学习。详见
+[远程桌面说明](remote-desktop.md)。
+
 ### 2. 从修改中学习，但不把润色当规则
 
 最终文本提交后，输入法可以在同一输入框中保留最长 5 秒的有界观察窗口。
@@ -100,7 +108,8 @@ feedback sidecar。成功后结果单次消费；重复、过期或已被新结�
 ### 3. 可选保留属于用户的数据
 
 本地数据采集默认关闭。用户明确启用并选择已有的本地或操作系统已挂载目录
-后，一次被当前 IBus 上下文接受的听写可以保存为精确的 16 kHz 单声道 WAV
+后，一次 authoritative final 成功交付到该条冻结的目标（当前光标或显式
+剪贴板）后，可以保存为精确的 16 kHz 单声道 WAV
 和一个版本化 JSON。
 
 当前 alpha 保存的是**未经人工审核的供应商结果**。不可变 `record.json` 不会被
@@ -150,7 +159,7 @@ ITN 可以整理转写文本，但应用不会把一句简短指令扩写成邮�
 | 本地 ASR | 尚未实现 |
 | 快捷键与指示器 | 目前需要用户自己绑定快捷键；旧兼容控制器不属于本仓库守护进程包 |
 | 隐私输入框 | 密码、PIN、private、fake 或不支持 preedit 的上下文拒绝开始语音 |
-| 远程桌面 | IBus preedit 不能作为普通按键穿过 RDP 画布；详见[远程桌面说明](remote-desktop.md) |
+| 远程桌面 | IBus preedit 不能穿过 RDP 画布；可显式复制终稿并由用户手动粘贴，无 remote partial、自动粘贴或 surrounding-text 学习；详见[远程桌面说明](remote-desktop.md) |
 
 当前是社区测试用的公开 alpha，不是稳定发行版。请先查看
 [CHANGELOG](../CHANGELOG.md)、[ROADMAP](../ROADMAP.md)和
@@ -243,8 +252,9 @@ provider view 合计仍不超过 50 对。这是确定性的纠错记忆，不�
 采集会阻止尚未发布的排队记录继续发布，不会删除已经发布的数据。
 
 软件不做应用层静态加密；实际访问权限和静态保护由用户所选文件系统决定。
-新 `record.json` 使用 schema v3：原始 `provider_final`、机器生成且未经复核的
-`delivery`、以及仍为空的两个人工标签彼此独立；旧 v1/v2 不会改写。usage v2
+新 `record.json` 使用 schema v4：原始 `provider_final`、机器生成且未经复核的
+`delivery`、仍为空的两个人工标签彼此独立，并由 `delivery.target` 标明 `caret`
+或 `clipboard`；旧 v1/v2/v3 不会改写。usage v2
 明确按实际交付文本统计字符，同时仍兼容旧 v1 摘要。
 完整 SSHFS、断线恢复、权限验证和 rclone 操作见
 [远程数据集存储指南](remote-dataset-storage.md)，标签边界见
@@ -314,8 +324,8 @@ python3 -I scripts/run_isolated_preedit_smoke.py
 sudo apt remove open-voice-input-linux
 ```
 
-`remove`（以及 `purge`）不会删除用户私有 Key、词表、纠错、采集选择或外部
-dataset。源码或验证型 preview 安装可以从原解压目录执行：
+`remove`（以及 `purge`）不会删除用户私有 Key、词表、纠错、终稿交付位置、
+采集选择或外部 dataset。源码或验证型 preview 安装可以从原解压目录执行：
 
 ```bash
 ./scripts/uninstall-user.sh
@@ -323,7 +333,7 @@ dataset。源码或验证型 preview 安装可以从原解压目录执行：
 
 卸载器会验证安装归属、停止项目服务、恢复之前的 IBus 引擎，并只移除项目
 管理的文件。为避免误删凭据或珍贵语音数据，私有 Key、词表、纠错、麦克风
-优先级、采集配置和用户所选目录内的数据不会被自动删除。
+优先级、终稿交付位置、采集配置和用户所选目录内的数据不会被自动删除。
 
 ## 进一步阅读
 

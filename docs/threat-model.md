@@ -5,7 +5,8 @@ Review basis: the implementation and documentation published as
 candidate prepared the same day. This document covers the current temporary
 IBus-engine switch, standalone voice daemon, per-dictation microphone
 selection, adaptive correction, and disabled-by-default local WAV/JSON
-collector, including faithful/clean terminal delivery. It does not claim that
+collector, including faithful/clean terminal delivery and the explicit,
+default-off remote-desktop clipboard target. It does not claim that
 the future combined librime engine, Orange
 transport, human label-review workflow, or local model training has been
 implemented or reviewed.
@@ -14,12 +15,13 @@ implemented or reviewed.
 
 Open Voice Input Linux is designed to preserve these properties:
 
-1. A voice result is committed only to the focused, explicitly acquired IBus
-   context that started that utterance.
-2. Password, PIN, private, fake, unfocused, and non-preedit contexts cannot
-   acquire voice input.
+1. In caret mode, a voice result is committed only to the focused, explicitly
+   acquired IBus context that started that utterance.
+2. In caret mode, password, PIN, private, fake, unfocused, and non-preedit
+   contexts cannot acquire voice input. Explicit clipboard mode has no remote
+   field-purpose proof and is therefore documented as unsuitable for secrets.
 3. Cancelling, changing focus, losing the daemon, or receiving a stale result
-   never redirects text through a clipboard fallback.
+   never redirects text through an implicit clipboard fallback.
 4. The provider key, vocabulary, manual/adaptive corrections, audio, and
    recognised text are not bundled or written to logs.
 5. Network delay or failure cannot block ordinary keyboard input, grow an
@@ -33,20 +35,23 @@ Open Voice Input Linux is designed to preserve these properties:
    source payload and the exact locked wheelhouse described by its manifest
    and SBOM.
 9. Local recording retention is disabled by default. When explicitly enabled,
-   only an authoritative final accepted by the focused context can publish a
-   bounded, versioned WAV/JSON record; collection failure cannot block
-   dictation.
+   only an authoritative final successfully delivered to the utterance's
+   frozen target can publish a bounded, versioned WAV/JSON record; collection
+   failure cannot block dictation.
 10. DJI transmitter status affects only the daemon's new capture stream and
     never changes a playback sink or requests a system-wide default source.
 11. Clean delivery is local, final-only, deletion-only, replayable and bounded.
     A processor failure or invalid result falls back to raw provider text; a
     machine-cleaned span is never used as automatic ASR correction evidence.
+12. Clipboard delivery is disabled unless the user explicitly selects it. It
+    writes only an authoritative final, never reads existing clipboard data,
+    never auto-pastes, and never treats remote edits as adaptive evidence.
 
 ## Assets and trust boundaries
 
 Sensitive assets are the provider API key, microphone audio, live/final text,
 explicit vocabulary, manual/adaptive correction pairs, microphone priority and
-exact-source preferences, private output style, local-collection
+exact-source preferences, private output style and output target, local-collection
 consent/destination and published
 records, the focused input context and its
 bounded surrounding-text snapshot, the previous IBus engine, the selected
@@ -63,7 +68,14 @@ The current boundaries are:
   selected clean output, the daemon postprocesses only the terminal final with
   a local bounded deletion rule; it adds no LLM or extra network request. If the user
   explicitly enabled collection, it also retains bounded PCM in memory and
-  offers an accepted final to an isolated background filesystem writer.
+  offers an accepted final to an isolated background filesystem writer. If the
+  user explicitly selected clipboard output, it preflights the session-matched
+  clipboard helper before audio/provider use, omits remote partials, and writes
+  only the authoritative delivered final.
+- In clipboard mode, the local clipboard helper, graphical clipboard service,
+  Remmina/FreeRDP, remote graphical session, and any same-user clipboard-history
+  process become text trust boundaries. The daemon cannot authenticate the
+  remote caret or revoke a value already synchronized to either session.
 - The selected local or mounted filesystem is a user-chosen trust boundary.
   The collector creates `openvoiceinput-dataset-v1`, validates its marker, and
   atomically publishes complete records. It provides no application-level
@@ -99,11 +111,40 @@ Every preedit session is bound to the D-Bus sender, focused engine instance,
 focus token, utterance ID, and a strictly increasing revision. Final is
 accepted once. Focus-out, reset, disable, caller disappearance, cancel, and
 daemon loss clear preedit and invalidate the session. The application never
-falls back to clipboard paste after a preedit acquisition succeeds.
+falls back to clipboard paste after a preedit acquisition succeeds. Clipboard
+delivery is a separately frozen start-time target and cannot be entered because
+caret acquisition or final commit later failed.
 
 Evidence: `engine/murmur_ime_engine/session.py`,
 `engine/murmur_ime_engine/registry.py`, `voice/murmur_voice/preedit.py`, and
 the engine session/registry plus voice preedit/session tests.
+
+### Remote clipboard disclosure or mispaste
+
+Missing `output-target.json` selects caret. Clipboard mode requires an explicit
+settings save and freezes per utterance. Runtime preflight requires a bounded,
+allowlisted `xclip` (X11) or `wl-copy` (Wayland) invocation before the
+microphone or provider starts. Existing clipboard contents are never read.
+Only the authoritative terminal delivery is written; partials, stale results,
+errors and cancellations are not. The daemon never sends `Ctrl+V`, guesses a
+remote field, or falls back to simulated typing, so the user remains
+responsible for confirming the paste destination.
+
+The UI and documentation warn that local and remote sessions, clipboard
+history, and remote policy can read the synchronized final, and explicitly
+exclude passwords, keys, codes and other secrets. Because the local process has
+no remote IBus focus/private/surrounding-text proof, clipboard delivery skips
+automatic observation with `clipboard-output-no-surrounding-text`. A helper
+failure reports `clipboard-unavailable` or `clipboard-copy-failed`; success is
+reported as the historical fact `clipboard-ready` and still requires manual
+paste. Persistent `clipboard-armed` says clipboard delivery was selected and
+that the next start will first validate the local display/helper; it does not
+promise that recording will start or that a final will be copied. Neither
+status claims that the clipboard currently still contains earlier text.
+
+Evidence: `voice/murmur_voice/output_target.py`,
+`voice/murmur_voice/session.py`, `voice/murmur_voice/settings_app.py`, and
+their tests.
 
 ### Sensitive input fields
 
@@ -156,8 +197,8 @@ Evidence: `engine/murmur_ime_engine/ibus_engine.py`,
 
 The CLI uses a masked prompt and never accepts a key in argv. The GTK window
 does not preload the stored key and clears the entry after a save attempt.
-Key, vocabulary, manual-correction, adaptive-correction, output-style, and
-microphone-priority files use a private `0700` directory and `0600` regular
+Key, vocabulary, manual-correction, adaptive-correction, output-style,
+output-target, and microphone-priority files use a private `0700` directory and `0600` regular
 files, reject links/foreign
 ownership/public modes/oversize or unknown fields, and are replaced
 atomically. Key removal requires the managed voice service to be explicitly
@@ -208,17 +249,18 @@ Evidence: `voice/murmur_voice/session.py`,
 Collection is absent/disabled by default and reloaded at the start of every
 utterance. A recorder is created only for an explicit enabled choice. It copies
 the same successfully submitted 16 kHz mono signed 16-bit chunks into bounded
-memory, then discards them on cancel, error, missing/empty final, or rejection
-of the provider final by the focused IBus context. A record is not queued until
-that final is accepted.
+memory, then discards them on cancel, error, missing/empty final, focused-IBus
+rejection, or clipboard write failure. A record is not queued until that final
+is accepted by its frozen caret or clipboard target.
 
 The background writer first creates a complete private staging directory under
 `openvoiceinput-dataset-v1/.pending`, including WAV and JSON hashes, then uses
 one atomic rename into `utterances/<utterance_id>`. The JSON identifies
 `provider_final` as `teacher-unreviewed`; it leaves both `spoken_verbatim` and
-`preferred_output` null and unreviewed. Schema v3 separately records actual
-machine-derived delivery and replayable deletion metadata while retaining raw
-provider text. This prevents an ASR result or cleaned output from being
+`preferred_output` null and unreviewed. Schema v4 separately records the frozen
+delivery target, actual machine-derived delivery, and replayable deletion
+metadata while retaining raw provider text. This prevents an ASR result or
+cleaned output from being
 silently presented as a human-verified acoustic label or preferred text.
 
 After the unchanged two-file utterance pair is durable, the writer publishes a
@@ -403,7 +445,8 @@ development provider key plus a verified signed tag remain pre-publication
 gates; immutable release status must be verified immediately after publication.
 
 Re-review is required before adding a provider, changing D-Bus/control-socket
-ownership, reading application context or clipboard data, changing collection
+ownership, reading application context or clipboard data, broadening clipboard
+write targets or adding automatic paste, changing collection
 consent/schema/publication or adding upload/deletion/review/model-training
 behavior, broadening adaptive observation beyond the anchored IBus span,
 changing conflict/overlap/cycle policy, changing secret storage, vendoring

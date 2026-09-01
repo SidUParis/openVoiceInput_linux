@@ -55,6 +55,11 @@ from .output_style import (
     default_output_style_config_path,
     load_output_style_config,
 )
+from .output_target import (
+    ClipboardWriter,
+    default_output_target_config_path,
+    load_output_target_config,
+)
 
 DATA_COLLECTION_CLOSE_TIMEOUT_SECONDS = 10.0
 
@@ -138,6 +143,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-style",
         type=Path,
         default=default_output_style_config_path(),
+    )
+    run_parser.add_argument(
+        "--output-target",
+        type=Path,
+        default=default_output_target_config_path(),
     )
     run_parser.add_argument("--socket", type=Path)
     run_parser.add_argument("--review-socket", type=Path)
@@ -251,6 +261,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             microphone_policy_path=options.microphone_priority,
             interaction_path=options.interaction,
             output_style_path=options.output_style,
+            output_target_path=options.output_target,
             review_socket_path=options.review_socket,
         )
     try:
@@ -398,6 +409,7 @@ def _run(
     microphone_policy_path: Path | None = None,
     interaction_path: Path | None = None,
     output_style_path: Path | None = None,
+    output_target_path: Path | None = None,
     review_socket_path: Path | None = None,
 ) -> int:
     logging.basicConfig(
@@ -473,6 +485,10 @@ def _run(
             output_style_reader=lambda: load_output_style_config(
                 output_style_path or default_output_style_config_path()
             ),
+            output_target_reader=lambda: load_output_target_config(
+                output_target_path or default_output_target_config_path()
+            ),
+            clipboard_writer=ClipboardWriter(),
         )
         resolved_interaction_path = (
             interaction_path or default_interaction_config_path()

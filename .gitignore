@@ -40,5 +40,6 @@ __pycache__/
 /microphone-priority.json
 /interaction.json
 /output-style.json
+/output-target.json
 openvoiceinput-dataset-v1/
 /error.log

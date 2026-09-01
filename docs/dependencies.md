@@ -23,6 +23,7 @@ notices; it does not vendor or pin Ubuntu packages.
 | PortAudio | Distribution library | Native audio backend for sounddevice | External system package; not vendored |
 | `pactl` (`pulseaudio-utils` on Ubuntu) | Optional PulseAudio-compatible system command | Per-recording source discovery and conservative profile recovery; PortAudio fallback when absent | External system package; not vendored |
 | `libusb-1.0` (`libusb-1.0-0` on Ubuntu) | Optional distribution library, loaded dynamically | Bounded DJI Mic Mini 2 transmitter-link probe before a new dictation; unknown never promotes DJI ahead of a known alternative | LGPL-2.1-or-later; system package, not vendored |
+| `xclip` and `wl-copy` (`xclip` / `wl-clipboard` on Ubuntu) | Optional for source installs; `.deb` installs both so X11 and pure Wayland are deterministic | Explicit, default-off remote-desktop target writes one authoritative final to the current X11/Wayland clipboard; never reads or auto-pastes | External system packages; not vendored |
 
 The DJI probe never changes an audio route itself. `libusb` is used only to
 read the receiver's bounded vendor status before opening a new daemon stream;
@@ -30,6 +31,15 @@ an absent, busy, inaccessible, or unrecognised device yields unknown. That
 status never promotes DJI ahead of a known alternative; an already-default
 unique DJI remains only a final continuity fallback when no non-DJI or
 recoverable input can be selected. There is no mid-utterance source handoff.
+
+The source installer does not require a clipboard helper because caret output
+is the default and remains fully usable without one. A user who explicitly
+selects the remote-desktop target must install the helper matching the active
+graphical session (`xclip` for X11 or `wl-clipboard` for Wayland). Runtime
+preflight fails before microphone/provider use if that explicit target cannot
+be supported. The package installs both small external system helpers rather
+than vendoring either one; session mismatch is still reported honestly at
+runtime.
 
 The voice wheel is GPL-3.0-only and contains its `LICENSE` plus the complete
 Doubao Murmur MIT notice in `NOTICE.md`. Adapted source boundaries are listed
@@ -95,7 +105,7 @@ their locked versions, Package URLs, and whole-wheel SHA-256 values. Matching
 
 This package SBOM is deliberately **package scoped, not operating-system
 scoped**. It does not claim that Ubuntu's Python, IBus, GTK, PyGObject,
-PortAudio, libusb, PulseAudio utilities, systemd, or their transitive packages
+PortAudio, libusb, PulseAudio utilities, clipboard helper, systemd, or their transitive packages
 are bundled, hashed, or pinned. Those packages remain declared external
 dependencies resolved by APT. It is also not a per-file hash manifest for the
 application source; the exact commit provenance plus the checksum of the

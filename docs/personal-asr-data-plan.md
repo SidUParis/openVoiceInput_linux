@@ -40,16 +40,17 @@ silently alter `spoken_verbatim`. This separation permits ASR acoustic/language
 adaptation to use the faithful label while a later correction or formatting
 layer can learn the preferred output.
 
-Schema v3 also stores a separate `delivery` object. It is not a human label:
-its `text` is exactly what was inserted, with
+Schema v4 stores a separate `delivery` object. It is not a human label:
+its `text` is exactly what was delivered to the frozen target, with
 `machine-derived-unreviewed` status. Faithful mode records an identity
 processor. Clean mode records the bounded local processor name/version,
 content-free outcome, and every deletion's original-codepoint offsets, kind,
 reason, source and empty replacement. Replaying those edits against raw
-`provider_final` must reproduce `delivery.text`. This audit must never be used
-as `spoken_verbatim` merely because it looks cleaner.
+`provider_final` must reproduce `delivery.text`. `delivery.target` records
+`caret` or `clipboard`. This audit must never be used as `spoken_verbatim`
+merely because it looks cleaner.
 
-## Implemented opt-in record (schema v3)
+## Implemented opt-in record (schema v4)
 
 The GTK settings window keeps collection off by default. Enabling requires an
 existing absolute local or mounted folder and initializes or reopens a marked
@@ -57,9 +58,10 @@ existing absolute local or mounted folder and initializes or reopens a marked
 dictation, so saving enable/disable/path changes takes effect without a service
 restart.
 
-A record is offered only after the focused IBus client accepts a nonempty
-authoritative provider final. Cancelled, failed, final-rejected, empty-audio,
-and no-final sessions publish nothing. One random utterance directory contains:
+A record is offered only after a nonempty authoritative provider final reaches
+the frozen target: focused IBus caret acceptance or successful explicit
+clipboard copy. Cancelled, failed, final/copy-rejected, empty-audio, and
+no-final sessions publish nothing. One random utterance directory contains:
 
 - `audio.wav`, preserving the exact captured 16 kHz, mono, signed 16-bit PCM;
 - `record.json`, with schema/dataset/utterance/session IDs, UTC time, explicit
@@ -110,18 +112,20 @@ identical models may intentionally share one fingerprint. The five-second
 adaptive ledger is not itself an audio dataset and must not be reinterpreted as
 one.
 
-### Schema-v1/v2 migration policy
+### Schema-v1/v2/v3/v4 migration policy
 
 Existing schema-v1 `record.json` files remain immutable and valid. The dataset
-marker and directory name remain version 1, so a dataset may contain both old
-v1, v2 and new v3 utterances without moving or rewriting audio. Schema v2 added
-the optional top-level `microphone` object and numeric `audio.quality` summary.
-Schema v3 adds required `delivery` while keeping raw `labels.provider_final`
-and both null human-review labels unchanged. A strict older reader should skip
-records whose `schema_version` it does not support. A migrated reader may
-accept 1/2/3, treating missing v2 metadata as “not observed” and missing
-delivery as “not recorded”; it must never synthesize old delivery, microphone
-provenance, or quality from filenames or current desktop state.
+marker and directory name remain version 1, so one dataset may contain old v1,
+v2, v3 and new v4 utterances without moving or rewriting audio. Schema v2
+added the optional top-level `microphone` object and numeric `audio.quality`
+summary. Schema v3 added required `delivery` while keeping raw
+`labels.provider_final` and both null human-review labels unchanged. Schema v4
+adds the frozen `caret` or `clipboard` delivery target. A strict older reader
+should skip records whose `schema_version` it does not support. A migrated
+reader may accept 1/2/3/4, treating missing v2 metadata as “not observed” and
+missing delivery/target as “not recorded”; it must never synthesize old
+delivery, target, microphone provenance, or quality from filenames or current
+desktop state.
 
 `microphone.actual.status` is `unknown` until the read-only observer has matched
 the daemon's live Pulse source-output; the selected source is never substituted

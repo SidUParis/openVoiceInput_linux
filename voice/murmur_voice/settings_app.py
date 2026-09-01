@@ -25,6 +25,7 @@ from .output_style import (  # noqa: E402
     DEFAULT_OUTPUT_STYLE_MODE,
     OutputStyleConfig,
 )
+from .output_target import OutputTargetConfig  # noqa: E402
 from .providers import PROVIDER_DESCRIPTORS  # noqa: E402
 from .settings_controller import (  # noqa: E402
     CORRECTION_PAIR_LIMIT,
@@ -93,12 +94,22 @@ _SESSION_LABELS = {
 _STATUS_LABELS = {
     "audio-backpressure": "音频缓冲区已满",
     "capture-start-failed": "麦克风启动失败",
+    "clipboard-armed": (
+        "已选择剪贴板交付；下一次开始时会先检查本地显示与剪贴板工具，成功后终稿才会复制"
+    ),
+    "clipboard-copy-failed": "终稿未能安全复制；没有自动粘贴或改写远端输入框",
+    "clipboard-ready": "上一条终稿已复制；剪贴板可能已被其他应用覆盖",
+    "clipboard-unavailable": (
+        "本地图形会话或剪贴板工具不可用；请确认 DISPLAY／WAYLAND_DISPLAY 环境，"
+        "并安装 xclip（X11）或 wl-clipboard（Wayland）"
+    ),
     "data-collection-failed": "可选数据未确认可靠写入，但本次听写已经完成",
     "data-collection-unavailable": "可选数据留存当前不可用，听写仍会继续",
     "final-timeout": "最终识别超时",
     "microphone-unavailable": "没有可用麦克风，请重新连接或调整输入顺序",
     "microphone-policy-invalid": "麦克风顺序无效或不安全，请在设置中保存一个完整顺序",
     "output-style-invalid": "输出方式设置无效或不安全，请在云端识别页重新保存",
+    "output-target-invalid": "交付位置设置无效或不安全，请在远程桌面页重新保存",
     "adaptive-correction-failed": "自动纠错未能保存",
     "adaptive-correction-candidate": "已捕获修改，等待你确认后启用",
     "adaptive-correction-conflicted": "已捕获冲突修改，未自动启用",
@@ -140,6 +151,9 @@ _ADAPTIVE_REASON_LABELS = {
     "observation-timeout": "修改未在观察期内完成",
     "postprocessed-output-not-safe-for-asr-learning": (
         "本次交付文本经过本机清理；为避免把润色误当成 ASR 纠错，已跳过自动学习"
+    ),
+    "clipboard-output-no-surrounding-text": (
+        "终稿只复制到剪贴板；远端没有可信 surrounding text，本次未启动自动纠错学习"
     ),
     "selection-active": "结束时仍有文字被选中，未自动推断",
     "surrounding-text-unavailable": "当前应用没有提供可信的修改文本",
@@ -393,6 +407,11 @@ class SettingsWindow(Gtk.ApplicationWindow):
             "快捷键与按住说话",
             "选择点按切换或按住说话；具体按键始终由你或桌面环境决定。",
         )
+        remote_desktop_page = self._new_page(
+            "remote-desktop",
+            "远程桌面",
+            "在 Remmina 等远程桌面中，明确选择复制终稿，再由你确认位置并粘贴。",
+        )
         vocabulary_page = self._new_page(
             "vocabulary",
             "个人词表",
@@ -573,6 +592,24 @@ class SettingsWindow(Gtk.ApplicationWindow):
             "本地或已挂载目录",
             "collection",
         )
+        self._append_navigation_action(
+            quick_grid,
+            0,
+            2,
+            "edit-copy-symbolic",
+            "远程桌面输入",
+            "复制终稿后手动粘贴",
+            "remote-desktop",
+        )
+        self._append_navigation_action(
+            quick_grid,
+            1,
+            2,
+            "input-keyboard-symbolic",
+            "设置说话方式",
+            "点按切换或按住说话",
+            "interaction",
+        )
         quick_card.append(quick_grid)
 
         status_card = self._append_card(overview_page)
@@ -702,6 +739,50 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.save_interaction_button.set_halign(Gtk.Align.START)
         self.save_interaction_button.connect("clicked", self._on_save_interaction)
         interaction_card.append(self.save_interaction_button)
+
+        remote_desktop_card = self._append_card(remote_desktop_page)
+        self._append_card_heading(
+            remote_desktop_card,
+            "终稿交付位置",
+            (
+                "当前光标是默认、安全边界最完整的路径。只有在 RDP 画布无法接收本机 "
+                "IBus 提交时，才选择同步剪贴板。"
+            ),
+        )
+        self.caret_output_target_button = Gtk.CheckButton(
+            label="当前光标（默认）：像普通输入法一样直接插入"
+        )
+        self.clipboard_output_target_button = Gtk.CheckButton(
+            label="同步剪贴板：复制终稿，我再在 Remmina 远端按 Ctrl+V"
+        )
+        self.clipboard_output_target_button.set_group(self.caret_output_target_button)
+        remote_desktop_card.append(self.caret_output_target_button)
+        remote_desktop_card.append(self.clipboard_output_target_button)
+        self.output_target_notice_label = Gtk.Label(
+            label=(
+                "剪贴板模式默认关闭，只复制已经确认的 authoritative final：不复制实时 "
+                "partial，不自动粘贴，也不向远端模拟按键。复制成功后，请先在 Remmina "
+                "远端确认目标输入框，再手动按 Ctrl+V。成功状态只记录写入当时的事实；"
+                "其他应用可能随后覆盖剪贴板。同步内容可被本机与远程会话中的"
+                "应用读取，请勿用于密码、API Key、验证码或其他秘密。远端没有可信的 "
+                "surrounding text，因此该条不会启动自动纠错学习。Remmina 必须开启剪贴板"
+                "同步；本机还需要与当前会话匹配的 xclip（X11）或 wl-copy（Wayland）。"
+            ),
+            xalign=0,
+            wrap=True,
+            selectable=True,
+        )
+        self.output_target_notice_label.add_css_class("dim-label")
+        remote_desktop_card.append(self.output_target_notice_label)
+        self.output_target_status_label = Gtk.Label(xalign=0, wrap=True)
+        self.output_target_status_label.add_css_class("status-value")
+        remote_desktop_card.append(self.output_target_status_label)
+        self.save_output_target_button = Gtk.Button(label="保存终稿交付位置")
+        self.save_output_target_button.add_css_class("suggested-action")
+        self.save_output_target_button.set_halign(Gtk.Align.START)
+        self.save_output_target_button.connect("clicked", self._on_save_output_target)
+        remote_desktop_card.append(self.save_output_target_button)
+
         provider_card = self._append_card(cloud_page)
         self._append_card_heading(
             provider_card,
@@ -955,7 +1036,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         )
         fallback_grid.attach(self.submit_adaptive_feedback_button, 2, 1, 1, 1)
         fallback_grid.attach(
-            Gtk.Label(label="实际插入（只读参考，不作为纠错来源）", xalign=0),
+            Gtk.Label(label="实际交付（只读参考，不作为纠错来源）", xalign=0),
             0,
             2,
             2,
@@ -1024,7 +1105,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
             label=(
                 "默认关闭。只有在留存已开启、当前识别服务的最终结果已成功确认时，软件才会在所选"
                 "绝对 POSIX 路径的 openvoiceinput-dataset-v1 下保存 WAV、原始 "
-                "provider_final（未经复核的伪标签），以及实际插入的 delivery（机器生成、"
+                "provider_final（未经复核的伪标签），以及实际交付到冻结目标的 delivery（机器生成、"
                 "未经人工复核）。清爽表达发生删除时，delivery 还包含可从原文重放的删除"
                 "位置、原因、原片段与空替换。目录可以是本地磁盘，也可以是"
                 "操作系统已经挂载的远程文件系统（例如 SSHFS）。本程序不会连接或"
@@ -1269,6 +1350,21 @@ class SettingsWindow(Gtk.ApplicationWindow):
                 self._show_error(str(error))
             else:
                 self._set_output_style_controls(output_style.mode)
+        load_output_target = getattr(self._controller, "load_output_target", None)
+        if not callable(load_output_target):
+            self._set_output_target_controls("caret")
+        else:
+            try:
+                output_target = load_output_target()
+            except SettingsError as error:
+                self._set_output_target_controls("caret")
+                self.output_target_status_label.set_text(
+                    "配置不可用；已安全显示默认光标模式，请重新保存"
+                )
+                self._set_label_tone(self.output_target_status_label, "error-text")
+                self._show_error(str(error))
+            else:
+                self._set_output_target_controls(output_target.target)
         try:
             terms = self._controller.load_vocabulary()
         except SettingsError as error:
@@ -1505,6 +1601,53 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self._set_output_style_controls(saved.mode)
             self._show_message(
                 "已保存。正在进行的听写保持开始时的方式；下一条听写会读取新设置。"
+            )
+
+    def _set_output_target_controls(self, target: str) -> None:
+        clipboard = target == "clipboard"
+        self.clipboard_output_target_button.set_active(clipboard)
+        self.caret_output_target_button.set_active(not clipboard)
+        self.output_target_status_label.set_text(
+            (
+                "当前：同步剪贴板（下一条听写起；终稿复制后由你手动粘贴）"
+                if clipboard
+                else "当前：当前光标（默认）"
+            )
+        )
+        self._set_label_tone(
+            self.output_target_status_label,
+            "warning-text" if clipboard else None,
+        )
+
+    def _on_save_output_target(self, button: Gtk.Button) -> None:
+        del button
+        self.save_output_target()
+
+    def save_output_target(self) -> None:
+        target = (
+            "clipboard" if self.clipboard_output_target_button.get_active() else "caret"
+        )
+        saver = getattr(self._controller, "save_output_target", None)
+        if not callable(saver):
+            self._show_error("当前设置控制器不支持保存终稿交付位置。")
+            return
+        try:
+            saved = saver(target)
+            if not isinstance(saved, OutputTargetConfig):
+                raise SettingsError(
+                    "The output target setting could not be saved safely."
+                )
+        except SettingsError as error:
+            self._show_error(str(error))
+        except Exception:
+            self._show_error("无法安全保存终稿交付位置。")
+        else:
+            self._set_output_target_controls(saved.target)
+            self._show_message(
+                "已保存。正在进行的听写不变；下一条终稿将只复制到剪贴板，"
+                "请在确认远端输入框后手动按 Ctrl+V。"
+                if saved.target == "clipboard"
+                else "已保存。下一条听写起，终稿将回到当前光标。"
             )
 
     def _on_interaction_mode_changed(self, button: Gtk.CheckButton) -> None:

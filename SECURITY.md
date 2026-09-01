@@ -31,7 +31,9 @@ latest `main` revision; no stable release branch is supported yet.
 - A Volcengine API key is a secret and must never be committed or bundled.
 - Audio recorded during an active dictation is sent to the configured remote
   provider. Cancelling locally cannot retract audio already uploaded.
-- Password, PIN, private, stale, and unfocused input contexts must reject voice
-  acquisition.
+- In caret mode, password, PIN, private, stale, and unfocused input contexts
+  must reject voice acquisition. Explicit clipboard mode cannot inspect a
+  remote field and must be documented as unsuitable for secrets.
 - The IBus engine must never perform network or microphone I/O.
-- Late partial or final results must not be redirected to clipboard paste.
+- Late partial or final results must not switch into clipboard delivery, and
+  no path may auto-paste.

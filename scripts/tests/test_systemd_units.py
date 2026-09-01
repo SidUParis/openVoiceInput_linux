@@ -58,6 +58,7 @@ class SystemdUnitTests(unittest.TestCase):
                 "VOICE_MICROPHONE_PRIORITY": "/tmp/microphone-priority.json",
                 "VOICE_INTERACTION": "/tmp/interaction.json",
                 "VOICE_OUTPUT_STYLE": "/tmp/output-style.json",
+                "VOICE_OUTPUT_TARGET": "/tmp/output-target.json",
             },
         )
 
@@ -89,6 +90,7 @@ class SystemdUnitTests(unittest.TestCase):
         )
         self.assertIn('--interaction "/tmp/interaction.json"', voice_unit)
         self.assertIn('--output-style "/tmp/output-style.json"', voice_unit)
+        self.assertIn('--output-target "/tmp/output-target.json"', voice_unit)
         self.assertIn("UMask=0077", voice_unit)
         self.assertIn(
             "RuntimeDirectory=murmur-ime murmur-ime-private",
@@ -97,6 +99,8 @@ class SystemdUnitTests(unittest.TestCase):
         self.assertIn("RuntimeDirectoryMode=0700", voice_unit)
         self.assertIn("RuntimeDirectoryPreserve=yes", voice_unit)
         self.assertNotIn("RuntimeDirectoryPreserve=restart", voice_unit)
+        self.assertIn("PrivateTmp=yes", voice_unit)
+        self.assertIn("BindReadOnlyPaths=-/tmp/.X11-unix", voice_unit)
         self.assertIn("TimeoutStopSec=30", voice_unit)
         self.assertIn("Environment=PYTHONNOUSERSITE=1", voice_unit)
         self.assertIn("RestartPreventExitStatus=2", voice_unit)

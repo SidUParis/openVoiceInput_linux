@@ -3,15 +3,15 @@
        width="96" height="96" alt="Open Voice Input Linux microphone icon">
   <h1>Open Voice Input Linux</h1>
   <p><strong>Native adaptive voice input for Linux: speak, and text appears at the caret.</strong></p>
-  <p>Built for Ubuntu, IBus and Chinese-first workflows—without clipboard paste,
-  <code>Ctrl+V</code>, or simulated per-character typing.</p>
+  <p>Built for Ubuntu, IBus and Chinese-first workflows. Caret delivery is the
+  default; remote-desktop users can explicitly copy finals for manual paste.</p>
   <p><a href="README.md">简体中文</a> · <strong>English</strong></p>
   <p>
     <a href="https://github.com/SidUParis/openVoiceInput_linux/actions/workflows/ci.yml"><img src="https://github.com/SidUParis/openVoiceInput_linux/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
     <a href="https://github.com/SidUParis/openVoiceInput_linux/releases"><img src="https://img.shields.io/github/v/release/SidUParis/openVoiceInput_linux?include_prereleases" alt="Release"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue.svg" alt="GPL-3.0-only"></a>
   </p>
-  <strong>Text at the caret</strong> · <strong>No clipboard paste</strong> ·
+  <strong>Text at the caret</strong> · <strong>Remote copy off by default</strong> ·
   <strong>~404 KiB .deb</strong> · <strong>Collection off by default</strong>
 </div>
 
@@ -70,6 +70,15 @@ Partial recognition is rendered with IBus preedit in the focused field, then
 one authoritative final is committed exactly once. The normal path does not
 open a transcription window, read the clipboard, paste with `Ctrl+V`, or
 simulate typing.
+
+For an RDP canvas such as Remmina, settings offers a separate, default-off
+clipboard target. It copies only the authoritative final; it never copies
+partials, auto-pastes, or sends simulated keys. The user confirms the remote
+field and presses `Ctrl+V`. Both desktop sessions can read synchronized
+clipboard contents, so this mode must not be used for passwords, API keys,
+one-time codes, or other secrets. Remote surrounding text is unavailable, so
+automatic correction observation is skipped. See the
+[remote-desktop guide](docs/remote-desktop.md).
 
 ### Learns a precise correction, not your whole document
 
@@ -158,6 +167,7 @@ upload. Read the [privacy notice](docs/privacy.md) and
 | Local / offline ASR | Not implemented yet |
 | Shortcut / indicator | A shortcut must currently be configured by the user; a separate compatibility controller is not part of this repository's daemon package |
 | Password and private fields | Voice acquisition is refused for protected, fake or unsupported input contexts |
+| Remote desktop | IBus preedit cannot cross an RDP canvas; an explicit final-only clipboard target supports user-confirmed manual paste without partials or auto-paste |
 
 See [known changes and limitations](CHANGELOG.md) and the
 [roadmap](ROADMAP.md) before relying on the alpha for daily work.
@@ -166,6 +176,8 @@ See [known changes and limitations](CHANGELOG.md) and the
 
 - Cumulative partial text at the active caret and one authoritative final
   commit, without clipboard paste.
+- Default-off RDP compatibility that copies only the authoritative final for
+  an explicit manual paste; it does not auto-paste or observe remote text.
 - Faithful final delivery by default, or optional final-only local clean
   delivery using bounded, deterministic deletion rules. Partials remain raw;
   cleanup adds no LLM or extra network request and falls back to raw safely.
@@ -238,10 +250,11 @@ Direct writes have no local fallback spool. A stalled or disconnected mount
 can lose an unpublished staged record, while already published records remain.
 The selected filesystem controls its effective access and at-rest protection.
 
-New schema-v3 records keep raw `provider_final`, null human
+New schema-v4 records keep raw `provider_final`, null human
 `spoken_verbatim`/`preferred_output`, and actual
-`machine-derived-unreviewed` delivery as separate fields. Clean deletions are
-replayable from original offsets. Existing v1/v2 records remain immutable;
+`machine-derived-unreviewed` delivery as separate fields; `delivery.target`
+records `caret` or `clipboard`. Clean deletions are replayable from original
+offsets. Existing v1/v2/v3 records remain immutable;
 usage schema v2 counts delivered characters while retaining v1-reader support.
 
 ## Architecture and safety boundaries

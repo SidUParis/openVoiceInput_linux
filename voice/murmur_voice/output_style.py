@@ -75,7 +75,7 @@ class OutputDelivery:
         return bool(self.edits)
 
     def as_record_document(self) -> dict[str, Any]:
-        """Return the strict schema-v3 delivery object for opted-in storage."""
+        """Return style/transformation fields for an opted-in delivery record."""
 
         return {
             "mode": self.mode,

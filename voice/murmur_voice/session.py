@@ -24,6 +24,11 @@ from .output_style import (
     deliver_output,
     validate_output_delivery,
 )
+from .output_target import (
+    DEFAULT_OUTPUT_TARGET,
+    ClipboardWriter,
+    OutputTargetConfig,
+)
 from .preedit import AcquireResult, PreeditClient
 from .state import CommandReply, VoiceState
 from .volcengine import AudioBackpressureError
@@ -47,6 +52,8 @@ VOICE_START_CLEANUP_TIMEOUT_SECONDS = 8.0
 ADAPTIVE_OBSERVATION_SECONDS = 5.0
 ADAPTIVE_OBSERVATION_FINISH_MARGIN_SECONDS = 0.5
 LAST_REVIEW_TTL_SECONDS = 10 * 60.0
+MAX_CLIPBOARD_RESULT_CODEPOINTS = 4096
+MAX_CLIPBOARD_RESULT_UTF8_BYTES = 16 * 1024
 
 
 class _VoiceStartTimeout(RuntimeError):
@@ -85,6 +92,8 @@ class VoiceSession:
         microphone_policy_validator: Any | None = None,
         output_style_reader: Any | None = None,
         output_delivery_factory: Any | None = None,
+        output_target_reader: Any | None = None,
+        clipboard_writer: Any | None = None,
     ) -> None:
         if asr_client_factory is not None:
             self._asr_factory = asr_client_factory
@@ -117,6 +126,10 @@ class VoiceSession:
         self._microphone_policy_validator = microphone_policy_validator
         self._output_style_reader = output_style_reader or OutputStyleConfig
         self._output_delivery_factory = output_delivery_factory or deliver_output
+        self._output_target_reader = output_target_reader or OutputTargetConfig
+        self._clipboard_writer = (
+            clipboard_writer if clipboard_writer is not None else ClipboardWriter()
+        )
 
         self._lock = threading.RLock()
         self._state = VoiceState.IDLE
@@ -124,6 +137,7 @@ class VoiceSession:
         self._revision = 0
         self._latest_text = ""
         self._output_style_mode = DEFAULT_OUTPUT_STYLE_MODE
+        self._output_target = DEFAULT_OUTPUT_TARGET
         self._recording_timer: Any | None = None
         self._warning_timer: Any | None = None
         self._duration_warning = False
@@ -161,9 +175,21 @@ class VoiceSession:
                 code = collection_code
             elif self._last_error_code != "none":
                 code = self._last_error_code
+            elif self._state is VoiceState.IDLE and self._clipboard_is_armed_locked():
+                # This reflects only the current private preference. It neither
+                # probes a helper nor claims that a previous clipboard value is
+                # still present.
+                code = "clipboard-armed"
             else:
                 code = "status"
             return CommandReply(True, code, self._state)
+
+    def _clipboard_is_armed_locked(self) -> bool:
+        try:
+            target = self._output_target_reader()
+        except Exception:
+            return False
+        return isinstance(target, OutputTargetConfig) and target.target == "clipboard"
 
     def review_last(self) -> LastReview | None:
         """Return one recent accepted final without persisting or logging it."""
@@ -231,6 +257,30 @@ class VoiceSession:
                 self._last_error_code = "output-style-invalid"
                 return CommandReply(False, "output-style-invalid", self._state)
 
+            try:
+                output_target = self._output_target_reader()
+                if not isinstance(output_target, OutputTargetConfig):
+                    raise ConfigError("output target configuration is invalid")
+            except (ConfigError, OSError, ValueError, TypeError):
+                # Never silently fall back from an explicit clipboard contract
+                # to caret output (or vice versa).  This remains before every
+                # IBus, provider, and microphone action.
+                logger.error("Output target could not be loaded safely")
+                self._last_error_code = "output-target-invalid"
+                return CommandReply(False, "output-target-invalid", self._state)
+
+            if output_target.target == "clipboard":
+                try:
+                    # The real writer validates a fixed root-owned helper and
+                    # performs one bounded connect/close against the matching
+                    # local display socket. It neither executes the helper nor
+                    # mutates the clipboard.
+                    self._clipboard_writer.preflight()
+                except Exception:
+                    logger.error("Clipboard output is unavailable")
+                    self._last_error_code = "clipboard-unavailable"
+                    return CommandReply(False, "clipboard-unavailable", self._state)
+
             if self._microphone_policy_validator is not None:
                 try:
                     self._microphone_policy_validator()
@@ -252,16 +302,17 @@ class VoiceSession:
             session_serial = self._session_serial
             self._state = VoiceState.STARTING
             self._last_error_code = "none"
-            acquisition = self._preedit.acquire_result(utterance_id)
-            if acquisition is not AcquireResult.ACQUIRED:
-                self._state = VoiceState.IDLE
-                code = (
-                    "preedit-unavailable"
-                    if acquisition is AcquireResult.UNAVAILABLE
-                    else "preedit-rejected"
-                )
-                self._last_error_code = code
-                return CommandReply(False, code, self._state)
+            if output_target.target == "caret":
+                acquisition = self._preedit.acquire_result(utterance_id)
+                if acquisition is not AcquireResult.ACQUIRED:
+                    self._state = VoiceState.IDLE
+                    code = (
+                        "preedit-unavailable"
+                        if acquisition is AcquireResult.UNAVAILABLE
+                        else "preedit-rejected"
+                    )
+                    self._last_error_code = code
+                    return CommandReply(False, code, self._state)
 
             self._utterance_id = utterance_id
             self._revision = 0
@@ -269,6 +320,7 @@ class VoiceSession:
             # Settings are hot-loaded once per utterance. A save during capture
             # applies only to the next start and cannot change terminal text.
             self._output_style_mode = output_style.mode
+            self._output_target = output_target.target
             try:
                 self._require_start_time(start_deadline)
                 asr = self._asr_factory()
@@ -290,13 +342,14 @@ class VoiceSession:
                     # no audio.
                     prepare_audio()
                 self._require_start_time(start_deadline)
-                # Acquire can be invalidated by a focus change while the
-                # bounded microphone preflight runs.  An empty Partial uses the
-                # existing ABI as a session/focus heartbeat without displaying
-                # text; only a still-focused engine can accept it.
-                if not self._preedit.partial(utterance_id, 1, ""):
-                    raise _PreeditHeartbeatRejected
-                self._revision = 1
+                if self._output_target == "caret":
+                    # Acquire can be invalidated by a focus change while the
+                    # bounded microphone preflight runs.  An empty Partial uses
+                    # the existing ABI as a session/focus heartbeat without
+                    # displaying text; only a still-focused engine accepts it.
+                    if not self._preedit.partial(utterance_id, 1, ""):
+                        raise _PreeditHeartbeatRejected
+                    self._revision = 1
                 self._require_start_time(start_deadline)
                 self._begin_data_record_locked(utterance_id, asr)
                 data_record = self._data_record
@@ -454,6 +507,28 @@ class VoiceSession:
                 VoiceState.STOPPING,
             ):
                 return
+            if self._output_target == "clipboard":
+                # Remote-desktop canvases cannot consume an IBus preedit. Keep
+                # live hypotheses only in bounded session memory and write
+                # nothing until the provider signals its authoritative finish.
+                try:
+                    valid = (
+                        type(text) is str
+                        and "\x00" not in text
+                        and len(text) <= MAX_CLIPBOARD_RESULT_CODEPOINTS
+                        and len(text.encode("utf-8")) <= MAX_CLIPBOARD_RESULT_UTF8_BYTES
+                    )
+                except UnicodeError:
+                    valid = False
+                if not valid:
+                    logger.error("Voice provider returned an invalid result")
+                    self._clear_last_review_locked()
+                    self._abort_locked("provider-error")
+                    return
+                self._latest_text = text
+                if self._state is VoiceState.STARTING:
+                    self._state = VoiceState.RECORDING
+                return
             revision = self._revision + 1
             if not self._preedit.partial(utterance_id, revision, text):
                 logger.warning("Focused preedit rejected an ASR partial")
@@ -475,10 +550,55 @@ class VoiceSession:
             provider_final = self._latest_text
             delivery = self._terminal_delivery_locked(provider_final)
             delivered_text = delivery.text
-            # Stop capture before final delivery. Optional retention is only
-            # offered after the same authoritative final was accepted by the
-            # focused IBus client.
+            # Stop capture before terminal delivery. Optional retention is only
+            # offered after the same authoritative final reached its frozen
+            # target successfully.
             self._disconnect_provider_locked()
+            if self._output_target == "clipboard":
+                if not delivered_text:
+                    self._discard_data_record_locked()
+                    self._last_error_code = "none"
+                    self._clear_sensitive_state_locked()
+                    return
+                try:
+                    # The reviewed writer accepts transcript bytes on stdin
+                    # only.  It never simulates a paste or key event: the user
+                    # remains responsible for one manual paste in the remote UI.
+                    self._clipboard_writer.write(delivered_text)
+                except Exception:
+                    logger.error("Clipboard output could not be written")
+                    self._discard_data_record_locked()
+                    self._clear_last_review_locked()
+                    self._clear_sensitive_state_locked()
+                    self._last_error_code = "clipboard-copy-failed"
+                    return
+
+                collection_failed = not self._commit_data_record_locked(
+                    provider_final,
+                    delivery,
+                    "clipboard",
+                )
+                self._remember_last_review_locked(
+                    utterance_id,
+                    provider_final,
+                    delivered_text,
+                )
+                self._last_error_code = (
+                    "data-collection-failed" if collection_failed else "clipboard-ready"
+                )
+                # No surrounding-text observation exists outside the native
+                # caret target. Persist a content-free outcome without hiding
+                # the historical successful-copy status. Callers must not treat
+                # that status as proof the clipboard has not since changed.
+                self._record_observation_skip_locked(
+                    utterance_id,
+                    "clipboard-output-no-surrounding-text",
+                    collection_failed=collection_failed,
+                    preserve_status=True,
+                )
+                self._clear_sensitive_state_locked()
+                return
+
             accepted = False
             observation_deadline = None
             if delivered_text:
@@ -511,6 +631,7 @@ class VoiceSession:
             collection_failed = not self._commit_data_record_locked(
                 provider_final,
                 delivery,
+                "caret",
             )
             self._remember_last_review_locked(
                 utterance_id,
@@ -734,6 +855,7 @@ class VoiceSession:
         reason_code: str,
         *,
         collection_failed: bool,
+        preserve_status: bool = False,
     ) -> None:
         """Persist one content-free skipped-observation outcome, if available."""
 
@@ -743,13 +865,14 @@ class VoiceSession:
                 observation_result = self._observation_result_handler(reason_code)
             except Exception:
                 logger.error("Adaptive correction outcome could not be saved")
-                if not collection_failed:
+                if not collection_failed and not preserve_status:
                     self._last_error_code = "adaptive-correction-failed"
                 return
         if observation_result is not None:
             self._write_data_feedback_locked(utterance_id, observation_result)
             if (
                 not collection_failed
+                and not preserve_status
                 and self._last_error_code != "data-collection-failed"
             ):
                 self._last_error_code = "adaptive-correction-skipped"
@@ -802,7 +925,7 @@ class VoiceSession:
         self._asr = None
         if asr is not None:
             asr.disconnect()
-        if utterance_id is not None:
+        if utterance_id is not None and self._output_target == "caret":
             self._preedit.cancel(utterance_id)
         self._clear_sensitive_state_locked()
         self._last_error_code = code
@@ -832,6 +955,7 @@ class VoiceSession:
         self._revision = 0
         self._latest_text = ""
         self._output_style_mode = DEFAULT_OUTPUT_STYLE_MODE
+        self._output_target = DEFAULT_OUTPUT_TARGET
         self._duration_warning = False
         self._observation_deadline = None
 
@@ -935,6 +1059,7 @@ class VoiceSession:
         self,
         provider_final: str,
         delivery: OutputDelivery,
+        target: str,
     ) -> bool:
         record = self._data_record
         self._data_record = None
@@ -944,7 +1069,7 @@ class VoiceSession:
             record.discard()
             return True
         try:
-            record.commit(provider_final, delivery)
+            record.commit(provider_final, delivery, target)
         except Exception:
             logger.error("Optional local data record could not be completed")
             return False

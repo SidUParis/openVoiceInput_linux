@@ -9,7 +9,7 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/murmur-voice-daemon run --output-style %E/murmur-ime/output-style.json
+ExecStart=/usr/bin/murmur-voice-daemon run --output-style %E/murmur-ime/output-style.json --output-target %E/murmur-ime/output-target.json
 ExecStopPost=/usr/bin/murmur-voice-daemon restore-engine
 Restart=on-failure
 RestartPreventExitStatus=2
@@ -21,6 +21,9 @@ RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 NoNewPrivileges=yes
 PrivateTmp=yes
+# Keep PrivateTmp while exposing only the host X11 socket directory required
+# by the explicitly armed clipboard target. Wayland-only hosts may omit it.
+BindReadOnlyPaths=-/tmp/.X11-unix
 LockPersonality=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

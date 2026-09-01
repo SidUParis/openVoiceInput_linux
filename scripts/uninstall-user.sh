@@ -7,7 +7,8 @@ usage() {
 Usage: scripts/uninstall-user.sh
 
 Remove the managed Open Voice Input Linux user installation. Private API-key,
-vocabulary, correction, interaction, output-style, microphone-priority, and
+vocabulary, correction, interaction, output-style, output-target,
+microphone-priority, and
 data-collection settings are retained. Any dataset in a user-selected external
 directory is never removed.
 EOF
@@ -593,6 +594,6 @@ if [[ $manifest_version == 2 ]]; then
 fi
 printf '%s\n' \
   "$removed_summary" \
-  "The private API-key, vocabulary, correction, interaction, output-style, microphone-priority, and data-collection settings were retained under the XDG config directory." \
+  "The private API-key, vocabulary, correction, interaction, output-style, output-target, microphone-priority, and data-collection settings were retained under the XDG config directory." \
   "Any local training dataset in a user-selected directory was retained and was not inspected or removed." \
   "No IBus daemon, Rime installation, or ~/.config/ibus/rime data was removed."

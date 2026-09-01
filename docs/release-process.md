@@ -67,9 +67,10 @@ integrity; it does not prove who published the file.
    A release with clean output must additionally state that faithful remains
    the missing-config default; cleanup is final-only, local, deletion-only and
    adds no LLM/network call; failures fall back to raw; changed cleanup skips
-   automatic ASR learning; schema-v3 records preserve raw provider text and
-   machine-derived delivery separately; usage v2 counts delivered text; old
-   v1/v2 records remain immutable; and `output-style.json` is private,
+   automatic ASR learning; schema-v4 records preserve raw provider text,
+   machine-derived delivery, and frozen target separately; usage v2 counts
+   delivered text; old v1/v2/v3 records remain immutable; and
+   `output-style.json` is private,
    uninstall-preserved, and excluded from artifacts.
 
 ## Controlled public transition

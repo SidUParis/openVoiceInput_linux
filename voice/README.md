@@ -8,9 +8,11 @@ authoritative final to the existing org.murmur.IME.Preedit1 engine. It briefly
 observes bounded same-focus corrections and then restores the previously
 selected IBus engine.
 
-There is no transcription window and no clipboard/paste fallback. Transcript
-text appears as native IBus preedit at the focused caret and is never written
-to logs. An explicitly enabled local collector is the only intentional
+There is no transcription window or implicit clipboard/paste fallback.
+Transcript text appears as native IBus preedit at the focused caret by default
+and is never written to logs. A separate, explicit remote-desktop target may
+copy only the authoritative final for a user-confirmed manual paste. An
+explicitly enabled local collector is the only intentional
 audio/provider-final record described below.
 
 ## Runtime dependencies
@@ -28,6 +30,8 @@ audio/provider-final record described below.
   not promoted ahead of a known alternative, while an already-default unique
   DJI remains only a final continuity fallback when no non-DJI or recoverable
   input can be selected.
+- Optional `xclip` (X11) or `wl-copy` from `wl-clipboard` (Wayland) for the
+  default-off remote-desktop final-copy target. Caret mode does not need either.
 
 From this directory, install into a virtual environment that can see the
 system PyGObject package:
@@ -93,6 +97,26 @@ excessive/non-replayable edits, or all-content removal. If it changes output,
 the automatic observation is consumed without adaptive extraction; explicit
 review still learns only from raw provider text versus user-entered spoken
 verbatim.
+
+## Explicit remote-desktop final target
+
+The private `$XDG_CONFIG_HOME/murmur-ime/output-target.json` is strict schema
+v1 with target `caret` or `clipboard`. Missing means caret. The daemon freezes
+it at utterance start. Clipboard mode preflights a session-matched helper before
+opening the microphone or constructing a provider, copies only the delivered
+authoritative final, and reports historical success as `clipboard-ready`; it never copies partials,
+reads existing clipboard text, sends `Ctrl+V`, or simulates typing. Missing or
+failed helpers report fixed errors without an automatic fallback.
+While armed and idle, `clipboard-armed` persistently warns that the next final
+will be copied. `clipboard-ready` means only that the last write succeeded;
+another application may already have overwritten the clipboard.
+
+Clipboard synchronization exposes the final to both local and remote sessions,
+so the mode must not be used for passwords, API keys, one-time codes, or other
+secrets. The remote caret supplies no trustworthy IBus surrounding text;
+automatic observation is skipped with
+`clipboard-output-no-surrounding-text`. See
+[the remote-desktop guide](../docs/remote-desktop.md).
 
 ## Optional explicit personal vocabulary
 
@@ -194,11 +218,12 @@ the choice.
 For an enabled utterance, audio chunks successfully submitted to the ASR client
 are copied as exact 16 kHz mono signed 16-bit PCM into bounded memory. They are
 offered to the background writer only after a nonempty authoritative provider
-final was accepted by the focused IBus client. Cancel, failure, final rejection,
-no final, and incomplete audio publish nothing.
+final was successfully delivered to the utterance's frozen target (focused
+IBus caret or explicit clipboard). Cancel, failure, final/copy rejection, no
+final, and incomplete audio publish nothing.
 
 Each atomically published `utterances/<utterance_id>/` contains `audio.wav` and
-schema-v3 `record.json` with identifiers, UTC time, explicit-opt-in consent,
+schema-v4 `record.json` with identifiers, UTC time, explicit-opt-in consent,
 audio format/frame counts and hashes, provider/model identity, microphone
 selection/actual-route provenance, three label roles, and a separate delivery
 audit. `provider_final` is
@@ -206,12 +231,12 @@ audit. `provider_final` is
 ground truth. `spoken_verbatim` and `preferred_output` are both null/unreviewed
 until a separate human-review workflow exists.
 
-`delivery.text` is the exact inserted result with
+`delivery.text` is the exact result delivered to the frozen target with
 `machine-derived-unreviewed` status. It stores mode, processor/version,
-content-free outcome, and replayable deletion edits without replacing raw
-provider text or filling either human label.
+content-free outcome, `target` (`caret` or `clipboard`), and replayable deletion
+edits without replacing raw provider text or filling either human label.
 
-New records use schema v3. Existing v1/v2 records are not rewritten; all three
+New records use schema v4. Existing v1/v2/v3 records are not rewritten; all four
 versions can coexist below the unchanged `openvoiceinput-dataset-v1` marker. The v2
 `microphone` object stores category, a non-unique privacy-safe fingerprint,
 selection provenance, DJI link state at selection, and bounded actual Pulse

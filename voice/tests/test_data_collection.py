@@ -162,8 +162,9 @@ def test_completed_record_is_atomic_wav_plus_raw_and_faithful_delivery(tmp_path)
         "spoken_verbatim": {"text": None, "review_status": "unreviewed"},
         "preferred_output": {"text": None, "review_status": "unreviewed"},
     }
-    assert document["schema_version"] == 3
+    assert document["schema_version"] == 4
     assert document["delivery"] == {
+        "target": "caret",
         "mode": "faithful",
         "text": "teacher final",
         "review_status": "machine-derived-unreviewed",
@@ -227,7 +228,68 @@ def test_clean_delivery_keeps_raw_label_and_usage_counts_delivered_text(tmp_path
     assert runtime.close()
 
 
-def test_new_schema_v3_publication_never_rewrites_existing_v1_or_v2_records(
+def test_schema_v4_records_clipboard_as_delivery_target_without_changing_usage_v2(
+    tmp_path,
+):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-clipboard")
+    assert recorder is not None
+    raw = "remote clipboard final"
+    delivery = deliver_output(raw, "faithful")
+    recorder.add_audio(b"\x00\x00" * 100)
+
+    recorder.commit(raw, delivery, "clipboard")
+    assert runtime.wait_until_idle()
+
+    root = selected / "openvoiceinput-dataset-v1"
+    record = json.loads(
+        (root / "utterances" / "utterance-clipboard" / "record.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    usage = json.loads(
+        (root / "usage" / "utterance-clipboard.json").read_text(encoding="utf-8")
+    )
+    assert record["schema_version"] == 4
+    assert record["delivery"]["target"] == "clipboard"
+    assert record["delivery"]["text"] == raw
+    assert usage["schema_version"] == 2
+    assert usage["character_count_basis"] == "delivered-text"
+    assert runtime.close()
+
+
+def test_invalid_delivery_target_discards_record_before_queueing(tmp_path):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-invalid-target")
+    assert recorder is not None
+    recorder.add_audio(b"\x00\x00" * 100)
+
+    with pytest.raises(DataCollectionError, match="output target"):
+        recorder.commit(
+            "provider final",
+            deliver_output("provider final", "faithful"),
+            "remote",
+        )
+
+    assert runtime.wait_until_idle()
+    assert not (
+        selected
+        / "openvoiceinput-dataset-v1"
+        / "utterances"
+        / "utterance-invalid-target"
+    ).exists()
+    assert runtime.close()
+
+
+def test_new_schema_v4_publication_never_rewrites_existing_v1_v2_or_v3_records(
     tmp_path,
 ):
     selected = tmp_path / "selected"
@@ -236,7 +298,7 @@ def test_new_schema_v3_publication_never_rewrites_existing_v1_or_v2_records(
     save_data_collection_config(True, selected, config_path)
     records_root = selected / "openvoiceinput-dataset-v1" / "utterances"
     sentinels = {}
-    for version in (1, 2):
+    for version in (1, 2, 3):
         record_root = records_root / f"legacy-v{version}"
         record_root.mkdir(mode=0o700)
         payload = f'{{"schema_version":{version},"legacy":"unchanged"}}\n'.encode()
@@ -246,7 +308,7 @@ def test_new_schema_v3_publication_never_rewrites_existing_v1_or_v2_records(
         sentinels[record_path] = payload
 
     runtime = DataCollectionRuntime(config_path, session_id="session-1")
-    recorder = runtime.begin("utterance-v3")
+    recorder = runtime.begin("utterance-v4")
     assert recorder is not None
     recorder.add_audio(b"\x00\x00" * 100)
     recorder.commit("provider final", deliver_output("provider final", "clean"))
@@ -254,9 +316,10 @@ def test_new_schema_v3_publication_never_rewrites_existing_v1_or_v2_records(
 
     assert all(path.read_bytes() == payload for path, payload in sentinels.items())
     current = json.loads(
-        (records_root / "utterance-v3" / "record.json").read_text(encoding="utf-8")
+        (records_root / "utterance-v4" / "record.json").read_text(encoding="utf-8")
     )
-    assert current["schema_version"] == 3
+    assert current["schema_version"] == 4
+    assert current["delivery"]["target"] == "caret"
     assert runtime.close()
 
 
@@ -385,7 +448,7 @@ def test_record_binds_the_actual_provider_without_changing_label_semantics(tmp_p
     assert runtime.close()
 
 
-def test_schema_v3_records_selected_and_actual_microphone_without_private_name(
+def test_schema_v4_records_selected_and_actual_microphone_without_private_name(
     tmp_path,
 ):
     selected = tmp_path / "selected"
@@ -432,7 +495,7 @@ def test_schema_v3_records_selected_and_actual_microphone_without_private_name(
     record_path = dataset_root / "utterances" / "utterance-microphone" / "record.json"
     document = json.loads(record_path.read_text(encoding="utf-8"))
     assert marker["schema_version"] == 1
-    assert document["schema_version"] == 3
+    assert document["schema_version"] == 4
     assert document["microphone"]["selection"] == {
         "backend": "pulse",
         "category": "dji",
