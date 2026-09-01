@@ -41,6 +41,14 @@ from .settings_controller import (  # noqa: E402
 
 APPLICATION_ID = "io.github.SidUParis.OpenVoiceInputLinux.Settings"
 APPLY_NOTICE = "已安全保存到本机；下一次听写会自动读取新设置。"
+SETTINGS_HELP = """usage: open-voice-input-settings [--review-last]
+
+Open the Open Voice Input Linux settings window.
+
+options:
+  -h, --help     show this help message and exit
+  --review-last  open the most recent recognition review
+"""
 
 _MICROPHONE_CATEGORY_LABELS = {
     "dji": "无线麦克风",
@@ -2460,8 +2468,15 @@ class SettingsApplication(Gtk.Application):
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
-    application = SettingsApplication()
     argv = list(arguments) if arguments is not None else sys.argv
+    # GtkApplication keeps a command-line-only invocation alive until its
+    # application lifecycle finishes.  Handle help before registering the GTK
+    # application so package smoke tests and terminal users get an immediate,
+    # side-effect-free response even when no desktop session is available.
+    if any(argument in {"-h", "--help"} for argument in argv[1:]):
+        print(SETTINGS_HELP, end="")
+        return 0
+    application = SettingsApplication()
     return int(application.run(argv))
 
 

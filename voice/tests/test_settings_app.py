@@ -28,8 +28,10 @@ from murmur_voice.microphone_policy import (  # noqa: E402
 )
 from murmur_voice.settings_app import (  # noqa: E402
     APPLY_NOTICE,
+    SETTINGS_HELP,
     SettingsApplication,
     SettingsWindow,
+    main,
 )
 from murmur_voice.settings_controller import (  # noqa: E402
     CORRECTION_TEXT_LIMIT,
@@ -976,6 +978,24 @@ def test_review_last_command_line_is_forwardable_without_registering_a_hotkey():
     assert application.do_command_line(invalid) == 2
     assert application.activations == 2
     assert invalid.errors == ["unsupported settings argument\n"]
+
+
+@pytest.mark.parametrize("help_argument", ("--help", "-h"))
+def test_help_exits_without_registering_gtk_application(
+    monkeypatch, capsys, help_argument
+):
+    def fail_if_constructed():
+        raise AssertionError("help must not register a GtkApplication")
+
+    monkeypatch.setattr(
+        "murmur_voice.settings_app.SettingsApplication",
+        fail_if_constructed,
+    )
+
+    assert main(["open-voice-input-settings", help_argument]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == SETTINGS_HELP
+    assert captured.err == ""
 
 
 def test_service_controls_are_explicit_and_offer_no_restart(window):
