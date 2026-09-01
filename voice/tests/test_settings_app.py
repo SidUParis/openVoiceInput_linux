@@ -280,20 +280,21 @@ def _label_texts(widget):
     ]
 
 
-def test_settings_use_seven_chinese_first_pages_and_native_cards(window):
+def test_settings_use_eight_chinese_first_pages_and_native_cards(window):
     settings_window, _ = window
 
     assert isinstance(settings_window.settings_sidebar, Gtk.StackSidebar)
     assert settings_window.settings_sidebar.get_stack() is (
         settings_window.settings_stack
     )
-    assert settings_window.settings_stack.get_pages().get_n_items() == 7
+    assert settings_window.settings_stack.get_pages().get_n_items() == 8
     assert settings_window.settings_stack.get_visible_child_name() == "overview"
 
     expected_pages = {
         "overview": "首页",
         "cloud": "云端识别",
         "interaction": "快捷键与按住说话",
+        "remote-desktop": "远程桌面",
         "vocabulary": "个人词表",
         "corrections": "纠错学习",
         "microphones": "麦克风",
