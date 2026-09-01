@@ -63,7 +63,7 @@ def write_lock(path: Path, wheels: list[tuple[str, str, Path]]) -> None:
 
 class DebianVersionTests(unittest.TestCase):
     def test_pep440_prereleases_sort_as_debian_prereleases(self) -> None:
-        self.assertEqual(pep440_to_debian("0.1.0a7"), "0.1.0~alpha7-1")
+        self.assertEqual(pep440_to_debian("0.1.0a8"), "0.1.0~alpha8-1")
         self.assertEqual(pep440_to_debian("1.2.3b2"), "1.2.3~beta2-1")
         self.assertEqual(pep440_to_debian("2.0.0rc1"), "2.0.0~rc1-1")
         self.assertEqual(pep440_to_debian("2.0.0"), "2.0.0-1")
@@ -78,10 +78,10 @@ class DebianVersionTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             pyproject = Path(temporary) / "pyproject.toml"
-            pyproject.write_text('[project]\nversion = "0.1.0a7"\n', encoding="utf-8")
+            pyproject.write_text('[project]\nversion = "0.1.0a8"\n', encoding="utf-8")
             self.assertEqual(
                 package_version(pyproject, "1788092310", "b7e0ecbcde30"),
-                "0.1.0~alpha7-1",
+                "0.1.0~alpha8-1",
             )
             with self.assertRaises(DebBuildError):
                 package_version(pyproject, "now", "b7e0ecbcde30")
@@ -168,7 +168,7 @@ class DebianMetadataTests(unittest.TestCase):
         self.assertIn("原生 GTK4 客户端保持轻量", metadata)
         self.assertIn("docs/assets/settings-window.png", metadata)
         self.assertIn("中文优先的原生 GTK4 设置界面", metadata)
-        self.assertIn('<release version="0.1.0-alpha.7" date="2026-09-01">', metadata)
+        self.assertIn('<release version="0.1.0-alpha.8" date="2026-09-01">', metadata)
 
     def test_builder_enforces_lightweight_package_budgets(self) -> None:
         builder = (REPOSITORY / "scripts/build-deb.sh").read_text(encoding="utf-8")
@@ -183,13 +183,13 @@ class DebianMetadataTests(unittest.TestCase):
             render_control(
                 DEBIAN / "control.in",
                 output,
-                version="0.1.0~alpha7-1",
+                version="0.1.0~alpha8-1",
                 installed_size="2048",
             )
             rendered = output.read_text(encoding="utf-8")
-            self.assertIn("Version: 0.1.0~alpha7-1", rendered)
+            self.assertIn("Version: 0.1.0~alpha8-1", rendered)
             self.assertIn("@users.noreply.github.com", rendered)
-            self.assertIn("xclip | wl-clipboard", rendered)
+            self.assertIn("xclip, wl-clipboard", rendered)
             self.assertNotIn("@PACKAGE_VERSION@", rendered)
             self.assertNotIn("@INSTALLED_SIZE@", rendered)
 
@@ -203,7 +203,7 @@ class DebianMetadataTests(unittest.TestCase):
             arguments = {
                 "source_commit": "a" * 40,
                 "source_epoch": "1788092310",
-                "package_version_value": "0.1.0~alpha7-1",
+                "package_version_value": "0.1.0~alpha8-1",
             }
             first = build_sbom(lock, **arguments)
             second = build_sbom(lock, **arguments)

@@ -57,6 +57,16 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.0-alpha.8" date="2026-09-01">
+      <description>
+        <p>
+          Ubuntu 24.04 alpha with an explicit final-only RDP clipboard target,
+          manual paste workflow, local display preflight, and schema-v4
+          delivery-target metadata while native IBus caret output remains the
+          default.
+        </p>
+      </description>
+    </release>
     <release version="0.1.0-alpha.7" date="2026-09-01">
       <description>
         <p>

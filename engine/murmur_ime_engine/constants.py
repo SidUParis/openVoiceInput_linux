@@ -1,6 +1,6 @@
 """Names shared by the prototype engine and its D-Bus clients."""
 
-VERSION = "0.1.0-alpha.7"
+VERSION = "0.1.0-alpha.8"
 
 ENGINE_NAME = "murmur-voice"
 COMPONENT_NAME = "org.murmur.IME.Engine"

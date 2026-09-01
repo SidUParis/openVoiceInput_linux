@@ -37,7 +37,8 @@ sudo apt install xclip
 sudo apt install wl-clipboard
 ```
 
-正式 `.deb` 声明 `xclip | wl-clipboard`。源码安装不会因为这个可选远程模式缺少
+正式 `.deb` 同时声明 `xclip` 和 `wl-clipboard`，避免纯 Wayland 主机因 Debian
+alternative 默认选择 X11 工具而得到一个不可用的显式功能。源码安装不会因为缺少
 工具而阻止默认光标模式；只有用户明确选择剪贴板并开始下一条听写时，运行时
 preflight 才会检查工具。不可用时会在开麦和联系识别服务之前失败关闭，并显示
 `clipboard-unavailable`。

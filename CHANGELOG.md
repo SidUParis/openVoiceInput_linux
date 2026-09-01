@@ -5,6 +5,51 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.8] - 2026-09-01
+
+### Added
+
+- A private, hot-loaded `output-target.json` now selects the existing native
+  IBus caret target or an explicit RDP-compatible clipboard target. Missing
+  configuration remains `caret`; the target is frozen for one utterance and a
+  save affects only the next start.
+- Clipboard target mode bypasses IBus acquisition and live preedit, retains
+  partial hypotheses only in bounded memory, and writes only the authoritative
+  terminal final. It never sends `Ctrl+V` or simulated keys: the user confirms
+  the remote field and pastes manually.
+- The GTK settings application adds a Chinese-first remote-desktop page with
+  persistent armed, copied-history, unavailable, and copy-failure status
+  messages plus explicit clipboard/privacy warnings.
+
+### Changed
+
+- New opted-in `record.json` files advance to schema v4. Raw provider and human
+  label roles remain unchanged; `delivery.target` records the frozen `caret`
+  or `clipboard` destination alongside the existing machine-derived delivery.
+  Existing v1/v2/v3 records remain immutable and readable.
+- Clipboard delivery skips surrounding-text adaptive extraction with the
+  content-free reason `clipboard-output-no-surrounding-text`; explicit
+  review-last continues to start from the raw provider final.
+- Debian packages install both reviewed clipboard helpers for the supported
+  graphical environments, while source installs keep the helpers optional so
+  the default caret path is unaffected.
+
+### Privacy and compatibility
+
+- Clipboard mode is default-off and final-only. The helper receives transcript
+  bytes on standard input—not arguments, environment, or logs—and is accepted
+  only when it is a fixed root-owned executable paired with a live local
+  X11/Wayland Unix socket. Invalid configuration or unavailable helpers fail
+  before microphone/provider startup.
+- Provider text is bounded to the same 4,096-codepoint/16 KiB limit used by the
+  native caret path. Clipboard/write failure, cancellation, missing final, or
+  oversized/malformed provider output publishes neither a successful record
+  nor review state.
+- `PrivateTmp=yes` remains enabled; only `/tmp/.X11-unix` is exposed read-only
+  inside the voice service namespace when present. The clipboard target config
+  is user-private, uninstall-preserved, and explicitly forbidden from public
+  preview/Debian artifacts.
+
 ## [0.1.0-alpha.7] - 2026-09-01
 
 ### Added

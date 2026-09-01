@@ -28,7 +28,7 @@ preedit/commit 流程；它不是实际录屏，也没有调用麦克风、API K
 
 ## 一分钟安装
 
-从 [v0.1.0-alpha.7 Release](https://github.com/SidUParis/openVoiceInput_linux/releases/tag/v0.1.0-alpha.7)
+从 [v0.1.0-alpha.8 Release](https://github.com/SidUParis/openVoiceInput_linux/releases/tag/v0.1.0-alpha.8)
 下载 `.deb`，然后在下载目录运行：
 
 ```bash

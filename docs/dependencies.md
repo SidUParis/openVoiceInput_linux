@@ -23,7 +23,7 @@ notices; it does not vendor or pin Ubuntu packages.
 | PortAudio | Distribution library | Native audio backend for sounddevice | External system package; not vendored |
 | `pactl` (`pulseaudio-utils` on Ubuntu) | Optional PulseAudio-compatible system command | Per-recording source discovery and conservative profile recovery; PortAudio fallback when absent | External system package; not vendored |
 | `libusb-1.0` (`libusb-1.0-0` on Ubuntu) | Optional distribution library, loaded dynamically | Bounded DJI Mic Mini 2 transmitter-link probe before a new dictation; unknown never promotes DJI ahead of a known alternative | LGPL-2.1-or-later; system package, not vendored |
-| `xclip` or `wl-copy` (`xclip` / `wl-clipboard` on Ubuntu) | Optional for source installs; `.deb` declares `xclip | wl-clipboard` | Explicit, default-off remote-desktop target writes one authoritative final to the current X11/Wayland clipboard; never reads or auto-pastes | External system package; not vendored |
+| `xclip` and `wl-copy` (`xclip` / `wl-clipboard` on Ubuntu) | Optional for source installs; `.deb` installs both so X11 and pure Wayland are deterministic | Explicit, default-off remote-desktop target writes one authoritative final to the current X11/Wayland clipboard; never reads or auto-pastes | External system packages; not vendored |
 
 The DJI probe never changes an audio route itself. `libusb` is used only to
 read the receiver's bounded vendor status before opening a new daemon stream;
