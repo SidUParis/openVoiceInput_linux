@@ -133,13 +133,16 @@ locations:
   `$XDG_CONFIG_HOME/murmur-ime/microphone-priority.json`;
 - terminal output style:
   `$XDG_CONFIG_HOME/murmur-ime/output-style.json`;
+- final-delivery target (caret by default; explicit clipboard for remote desktop):
+  `$XDG_CONFIG_HOME/murmur-ime/output-target.json`;
 - optional collected records: `openvoiceinput-dataset-v1/` below the existing
   local or mounted directory explicitly selected by the user.
 
 If `XDG_DATA_HOME` or `XDG_CONFIG_HOME` is unset, the standard
 `~/.local/share` and `~/.config` defaults apply. The generated service records
 the resolved config, vocabulary, manual-correction, adaptive-correction,
-local-collection, microphone-priority, interaction, and output-style paths, so a custom XDG config root is
+local-collection, microphone-priority, interaction, output-style, and
+output-target paths, so a custom XDG config root is
 used consistently even if it is absent from the systemd manager's environment.
 
 The engine service starts after installation and is enabled for subsequent
@@ -196,8 +199,9 @@ The optional explicit vocabulary can be edited separately:
   --vocabulary ~/.config/murmur-ime/vocabulary.json
 ```
 
-The key, vocabulary, manual corrections, adaptive ledger, output style, and
-local-collection choice are reloaded before every new dictation. Missing
+The key, vocabulary, manual corrections, adaptive ledger, output style,
+output target, and local-collection choice are reloaded before every new
+dictation. Missing
 `output-style.json` means faithful delivery; its strict v1 file is private
 `0600` below a `0700` directory. Saving a change never mutates
 an active recording; the next start/idle toggle uses it without a daemon
@@ -206,6 +210,13 @@ microphone/provider use rather than falling back to stale in-memory values.
 Collection remains an optional side path: its invalid setting or unavailable
 destination reports a fixed collection status and leaves normal dictation
 available.
+
+Missing `output-target.json` means caret delivery. Its strict v1 file is
+private `0600` below the same `0700` directory. Explicit clipboard mode
+preflights `xclip`/`wl-copy` before audio/provider use, copies only the
+authoritative final, and never auto-pastes. It intentionally disables remote
+partials and surrounding-text automatic learning; see
+[remote-desktop.md](remote-desktop.md).
 
 ### Faithful and clean final output
 
@@ -489,7 +500,7 @@ files while any managed daemon remains. Only if the current engine is exactly
 stop, never a warning followed by deletion. The managed runtime and units move
 to same-filesystem quarantine before final deletion so an interrupted
 uninstall can roll back. The private API-key, vocabulary, manual-correction,
-adaptive-correction, `interaction.json`, `output-style.json`,
+adaptive-correction, `interaction.json`, `output-style.json`, `output-target.json`,
 `microphone-priority.json`, and `data-collection.json` files are retained. Every
 `openvoiceinput-dataset-v1` below a user-selected folder is outside installer
 ownership and is never removed. No Rime program or user database is touched.

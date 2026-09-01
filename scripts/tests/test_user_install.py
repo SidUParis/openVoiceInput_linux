@@ -966,6 +966,11 @@ class UserInstallTests(unittest.TestCase):
             str(self.harness.config / "murmur-ime/output-style.json"),
             unit,
         )
+        self.assertIn("--output-target", unit)
+        self.assertIn(
+            str(self.harness.config / "murmur-ime/output-target.json"),
+            unit,
+        )
         engine_unit = (
             self.harness.config / "systemd/user/murmur-ime-engine.service"
         ).read_text(encoding="utf-8")
@@ -2136,6 +2141,10 @@ class UserInstallTests(unittest.TestCase):
         output_style_payload = '{"version":1,"mode":"clean"}\n'
         output_style.write_text(output_style_payload, encoding="utf-8")
         output_style.chmod(0o600)
+        output_target = config.parent / "output-target.json"
+        output_target_payload = '{"version":1,"target":"clipboard"}\n'
+        output_target.write_text(output_target_payload, encoding="utf-8")
+        output_target.chmod(0o600)
         install_result = self.harness.run(
             INSTALLER, "--wheelhouse", str(self.harness.wheelhouse)
         )
@@ -2182,9 +2191,14 @@ class UserInstallTests(unittest.TestCase):
         self.assertEqual(interaction.stat().st_mode & 0o777, 0o600)
         self.assertEqual(output_style.read_text(encoding="utf-8"), output_style_payload)
         self.assertEqual(output_style.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(
+            output_target.read_text(encoding="utf-8"), output_target_payload
+        )
+        self.assertEqual(output_target.stat().st_mode & 0o777, 0o600)
         self.assertEqual(audio.read_bytes(), b"unchanged-dataset-sentinel")
         self.assertIn("dataset", result.stdout)
         self.assertIn("output-style", result.stdout)
+        self.assertIn("output-target", result.stdout)
         self.assertFalse((self.harness.data / "murmur-ime/voice-venv").exists())
         self.assertFalse(self.harness.desktop_entry().exists())
         self.assertFalse(self.harness.settings_icon().exists())

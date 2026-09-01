@@ -9,6 +9,9 @@ provides only the controls needed for the standalone voice preview:
 - edit the explicit private personal vocabulary, one term per line;
 - edit bounded, explicit wrong-to-canonical recognition corrections;
 - arrange a complete microphone priority for the user's own equipment;
+- choose faithful/clean terminal expression and a separate final-delivery
+  target: caret by default, or explicit final-only clipboard copy for an RDP
+  workflow;
 - explicitly enable/disable optional local WAV/JSON collection and choose an
   existing absolute local or mounted destination folder;
 - clear the validated local key through an explicit two-step action while the
@@ -26,8 +29,9 @@ or reopens
 
 GTK service operations use fixed `systemctl --user` argument vectors without a
 shell. Disabling/stopping the service is an explicit action and may cancel an
-active dictation. Saved vocabulary, correction, microphone-priority, and
-local-collection settings are reloaded before the next dictation and do not
+active dictation. Saved vocabulary, correction, microphone-priority,
+local-collection, output-style, and output-target settings are reloaded before
+the next dictation and do not
 require a service restart.
 Service enable/disable controls remain explicit lifecycle actions. This alpha
 also has a default-on, event-driven five-second adaptive-correction observation,
@@ -47,6 +51,13 @@ published records are retained. The selected filesystem determines effective
 visibility.
 See [the remote dataset storage guide](../docs/remote-dataset-storage.md) for
 SSHFS disconnect/permission boundaries and asynchronous Google Drive backup.
+
+Clipboard delivery is a separate, default-off remote-desktop compatibility
+path. The UI says that only an authoritative final is copied, the user must
+confirm the remote field and paste manually, both sessions can read the value,
+and passwords/keys/codes are out of scope. No partial is copied, no `Ctrl+V` is
+simulated, and no remote surrounding-text observation is attempted. See
+[the remote-desktop guide](../docs/remote-desktop.md).
 
 The microphone list stores one complete priority order chosen by the user. If
 no priority has ever been saved, the current alpha loads the deterministic

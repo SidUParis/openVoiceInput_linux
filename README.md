@@ -3,15 +3,15 @@
        width="96" height="96" alt="Open Voice Input Linux 麦克风图标">
   <h1>Open Voice Input Linux</h1>
   <p><strong>Linux 原生自适应语音输入：说话，文字直接出现在当前光标。</strong></p>
-  <p>面向 Ubuntu、IBus 和中文输入场景；不读取剪贴板，不发送 <code>Ctrl+V</code>，
-  也不靠模拟逐字按键完成输入。</p>
+  <p>面向 Ubuntu、IBus 和中文输入场景；默认直接进入当前光标，远程桌面可明确选择
+  只复制终稿，再由用户手动粘贴。</p>
   <p><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
   <p>
     <a href="https://github.com/SidUParis/openVoiceInput_linux/actions/workflows/ci.yml"><img src="https://github.com/SidUParis/openVoiceInput_linux/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
     <a href="https://github.com/SidUParis/openVoiceInput_linux/releases"><img src="https://img.shields.io/github/v/release/SidUParis/openVoiceInput_linux?include_prereleases" alt="Release"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue.svg" alt="GPL-3.0-only"></a>
   </p>
-  <strong>光标内出字</strong> · <strong>不碰剪贴板</strong> ·
+  <strong>光标内出字</strong> · <strong>远程复制默认关闭</strong> ·
   <strong>.deb 约 404 KiB</strong> · <strong>数据采集默认关闭</strong>
 </div>
 
@@ -72,7 +72,8 @@ murmur-voice-daemon toggle
 | 能力 | Open Voice Input Linux 的做法 |
 | --- | --- |
 | 光标内实时出字 | 使用 IBus preedit 在当前输入框显示 partial，authoritative final 原位提交且只提交一次 |
-| 不依赖粘贴 | 正常路径不读取剪贴板，不发送 `Ctrl+V`，不模拟逐字键盘输入 |
+| 不依赖粘贴 | 默认路径不读取或写入剪贴板，不发送 `Ctrl+V`，不模拟逐字键盘输入 |
+| 远程桌面兼容 | 可明确选择只复制 authoritative final，再由用户在 Remmina 远端确认位置并手动粘贴；默认关闭 |
 | 忠实/清爽终稿 | partial 始终原样；终稿可原样提交，或仅用本机有界删除规则清理高置信口头停顿与重复 |
 | 记住个人术语 | 在同一输入框内最多观察 5 秒；明确单项可启用，多处修改拆成待确认候选，并提供显式整句 fallback |
 | 动态麦克风 | 每次听写按用户保存的顺序重新选择当前可用输入；首选设备不可用时，下一次自动回退 |
@@ -101,7 +102,7 @@ final，不伪装成实时流。你不需要先去转写窗口复制，再切回
 清理不调用 LLM，也不增加网络请求，不替换术语、数字或大小写；失败、超限、
 不可重放或会删除全部内容时直接交付原始 final。若清理确实改变文本，本条会跳过
 自动学习观察，避免把机器删词当作 ASR 纠错；显式复核始终以原始 provider final
-为来源，实际插入文本只读展示。
+为来源，实际交付文本只读展示。
 
 提交时设置页只把最近结果 ID 与逐字复核送回独立的主机私有 socket；守护进程
 再次核对该 ID 仍是当前未过期结果，再以同一个 ID 更新学习账本，并在数据留存
@@ -109,13 +110,14 @@ final，不伪装成实时流。你不需要先去转写窗口复制，再切回
 消费，重复提交、过期结果和被新听写替换的旧窗口都会被拒绝。界面会区分
 “未启用数据留存”“已进入后台队列”和“反馈未能入队”，不会把入队称为最终落盘。
 
-它不会监听全局键盘、AT-SPI、剪贴板、Rime 历史或其他应用内容，也不会把完整
+自动学习不会监听全局键盘、AT-SPI、剪贴板、Rime 历史或其他应用内容，也不会把完整
 surrounding text 写进纠错账本。失焦、超时和整句润色不会被静默提升为全局规则；
 去口头词或表达润色也不能填写成 `spoken_verbatim`。
 
 ### 3. 可选保留个人 ASR 数据
 
-采集默认关闭。明确启用后，一次被当前 IBus 上下文接受的听写可以保存为：
+采集默认关闭。明确启用后，一次 authoritative final 成功交付到该条冻结的目标
+（当前光标或显式剪贴板）后，可以保存为：
 
 - 精确的 16 kHz 单声道 WAV；
 - 版本化 `record.json`；
@@ -127,10 +129,11 @@ surrounding text 写进纠错账本。失焦、超时和整句润色不会被静
 - 数据集根目录下 append-only 的
   `feedback/<utterance_id>/<event_id>.json` 纠错决定（只有捕获成功时）；
 - 未经人工审核的供应商 final。
-- 实际插入的 `delivery`（机器生成、未经复核），以及可从原始 final 重放的删除
+- 实际交付到冻结目标的 `delivery`（机器生成、未经复核），以及可从原始 final 重放的删除
   位置、原因和原片段；`provider_final` 仍单独保留。
 
-新记录使用 schema v3；旧 v1/v2 不会改写。usage 索引使用 schema v2，并明确按
+新记录使用 schema v4，并在 `delivery.target` 标明 `caret` 或 `clipboard`；旧
+v1/v2/v3 不会改写。usage 索引使用 schema v2，并明确按
 实际交付文本统计字数，同时继续读取旧 v1 摘要。后续修改不会改写不可变的 `record.json`；可捕获的短纠错作为独立 feedback
 事件保存。`spoken_verbatim` 与 `preferred_output` 仍待未来听音审核流程填写，
 因此这些是有价值的候选数据，不是已经确认的 gold label。
@@ -185,7 +188,7 @@ alpha.5 还接入了 Qwen 实时 ASR 与 OpenAI 停录后 Transcribe；两者通
 | 本地 ASR | 尚未实现，Whisper/Qwen 等个人模型属于后续路线 |
 | 快捷键 | 设置可选点按切换或按住说话；按键由用户选择，Wayland 的全局 release 边界会如实显示 |
 | 密码与隐私输入框 | password、PIN、private、fake 或不支持 preedit 的上下文拒绝开始语音 |
-| 远程桌面 | IBus preedit 不能作为普通按键穿过 RDP 画布 |
+| 远程桌面 | IBus preedit 不能穿过 RDP 画布；可显式启用终稿复制，由用户在远端手动 `Ctrl+V`，无 partial、自动粘贴或 surrounding-text 学习 |
 
 这是社区测试用的公开 alpha，不是稳定发行版。请同时查看
 [CHANGELOG](CHANGELOG.md)、[ROADMAP](ROADMAP.md)和
@@ -200,6 +203,13 @@ alpha.5 还接入了 Qwen 实时 ASR 与 OpenAI 停录后 Transcribe；两者通
 个人词表与明确纠错是两份可选的手动配置，只有点击保存才会建立对应文件；
 自动学习使用独立的私有账本。设置页会分别显示这三类来源，以及下一次请求
 实际会带上的纠错上下文数量，避免把“文件不存在”误解为“学习没有运行”。
+
+Remmina 等 RDP 画布不是本机 IBus 输入框。需要把本机识别结果交给远端时，可在
+**远程桌面**页显式选择“同步剪贴板”。它只复制确认后的终稿，不复制 partial、
+不自动粘贴，也不会发送模拟按键；状态只证明上一条写入当时成功，其他应用可能
+随后覆盖剪贴板。由用户确认远端光标并手动 `Ctrl+V`。内容会同时暴露给本机和远程会话的剪贴板，禁止用于密码、Key、验证码
+等秘密；该条也不会尝试 surrounding-text 自动学习。详见
+[远程桌面输入](docs/remote-desktop.md)。
 
 麦克风顺序完全由用户设置。每次新听写都会重新检查当前可用输入，并按照该
 顺序选择；首选设备掉线时自动尝试后续候选，重新连接后也无需重启服务。选择
@@ -230,6 +240,8 @@ flowchart LR
     S["设置与私有配置"] --> V
     V -->|"partial / final · D-Bus"| E["临时 IBus 语音引擎"]
     E -->|"preedit / commit"| F["当前输入框"]
+    V -.->|"用户明确选择 · final only"| C["同步剪贴板"]
+    C -.->|"用户确认后手动粘贴"| R["Remmina 远端输入框"]
     V -.->|"用户明确启用"| D["本地或已挂载的数据目录"]
 ```
 

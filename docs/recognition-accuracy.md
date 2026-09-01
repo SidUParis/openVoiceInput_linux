@@ -70,7 +70,7 @@ exception, oversized input, excessive edit count, non-replayable result, or a
 result that would remove all lexical content falls back to the raw provider
 final. Cleanup therefore never turns a valid final into an input failure. Each
 successful deletion retains original-codepoint offsets, source text, kind,
-reason and empty replacement so an opted-in schema-v3 record can replay the
+reason and empty replacement so an opted-in schema-v4 record can replay the
 exact delivered text from `provider_final`.
 
 When clean delivery differs from the provider final, the daemon immediately
@@ -299,8 +299,9 @@ is written while collection is disabled.
 The separate collector can now retain an accepted utterance, but only after an
 explicit opt-in and only below an existing local or mounted folder selected by
 the user. It stores the exact 16 kHz mono signed 16-bit WAV and a versioned JSON
-schema-v3 record. It retains raw `provider_final` as the pseudo-label and stores
-the actual machine-derived delivery plus replayable deletions separately. The
+schema-v4 record. It retains raw `provider_final` as the pseudo-label and stores
+the actual machine-derived delivery, frozen target, and replayable deletions
+separately. The
 audio/provider-final pair is a future review candidate, not a gold
 sample or evidence that self-training is safe.
 

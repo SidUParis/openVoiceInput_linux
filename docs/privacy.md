@@ -58,6 +58,11 @@ acceptance in this release. MiniMax is planned and not selectable.
   no-extra-field, and atomic-write checks. The daemon reads it once at each
   utterance start, so an in-flight recording cannot change mode underneath the
   user.
+- Final-delivery location is stored separately in private `output-target.json`
+  as strict schema v1. A missing file means `caret`; `clipboard` is accepted
+  only after an explicit save. It uses the same ownership, mode, bounded-read,
+  no-link, no-extra-field, and atomic-write controls. The daemon freezes it at
+  utterance start.
 - The complete microphone category ordering and optional exact-source
   preferences are stored separately in private `microphone-priority.json`.
   They are reloaded before each dictation, are never sent to the recognition
@@ -76,13 +81,38 @@ the terminal event, a bounded local deletion-only processor either produces a
 replayable result or falls back to raw without blocking input; it cannot insert
 content or replace terms, numbers, or letter case.
 
+## Explicit remote-desktop clipboard mode
+
+The remote-desktop target is disabled by default. When the user explicitly
+selects it, the daemon performs a clipboard-tool preflight before microphone or
+provider use. It never reads existing clipboard content. Partials remain local
+and are not copied. After the authoritative final and optional bounded clean
+step, exactly the delivered final is offered to `xclip` for X11 or `wl-copy`
+for Wayland. The program does not synthesize `Ctrl+V`, choose a remote window,
+or retry by simulated typing. A copy failure produces a fixed status and no
+automatic paste fallback.
+
+Clipboard synchronization expands the trust boundary to the local graphical
+session, Remmina/FreeRDP, the remote graphical session, both sessions'
+same-user applications, and any clipboard-history software or host policy.
+Passwords, PINs, API keys, one-time codes, recovery codes, and other secrets
+must not use this mode. The project does not claim it can retract a value from
+remote or historical clipboard stores after copy.
+
+The remote field does not provide an authenticated IBus focus token, private
+purpose, committed-span anchor, or surrounding-text snapshot to the local
+daemon. Clipboard mode therefore does not show remote partials and consumes the
+automatic observation with `clipboard-output-no-surrounding-text`; it does not
+learn from clipboard or remote edits. Explicit review still uses the raw
+provider final kept in bounded daemon memory.
+
 ## Five-second correction observation
 
 This observation is enabled by default in the current alpha after
 a nonempty authoritative final; the settings window does not yet expose a
 disable switch. It is event-driven and does not poll application text.
 
-After one authoritative final commit, the engine can keep the same focused
+In caret mode, after one authoritative final commit, the engine can keep the same focused
 input context for at most five seconds. When that application supports IBus
 surrounding text, it anchors the committed span and later accepts only one
 strict replacement inside it. Pure insertion/deletion, multiple edits, broad
@@ -111,7 +141,9 @@ can be expanded through an unchanged adjacent lexical token; case-only spelling
 corrections remain allowed.
 
 The observer does not open the microphone again and does not inspect the
-clipboard, AT-SPI, a global keyboard hook, or other windows. It temporarily
+clipboard, AT-SPI, a global keyboard hook, or other windows. (The separate,
+explicit remote target can write a final to the clipboard but never feeds it
+to the observer.) It temporarily
 processes only the bounded IBus surrounding snapshot for the current field and
 does not persist that snapshot. Manual corrections take priority; conflicted,
 overlapping, cascading, or cyclic adaptive rules are suppressed. The combined
@@ -171,9 +203,10 @@ Collection is disabled by default. Enabling it requires an explicit settings
 choice and an existing absolute local or mounted directory. The application
 initializes or reopens `openvoiceinput-dataset-v1` below that directory. For an
 enabled utterance, publication happens only after the authoritative provider
-final was accepted by the focused IBus context. Cancelled, failed,
-final-rejected, empty-audio, and no-final utterances are discarded from the
-collector.
+final was successfully delivered to the frozen target: accepted by the focused
+IBus context in caret mode, or copied successfully in explicit clipboard mode.
+Cancelled, failed, final/copy-rejected, empty-audio, and no-final utterances are
+discarded from the collector.
 
 Each atomically published `utterances/<utterance_id>/` contains:
 
@@ -188,8 +221,9 @@ Each atomically published `utterances/<utterance_id>/` contains:
   `teacher-unreviewed`, which is a pseudo-label rather than ground truth;
 - `spoken_verbatim.text` and `preferred_output.text`: both `null` and
   `unreviewed` until a separate human-review workflow exists.
-- `delivery`: exact inserted text with `machine-derived-unreviewed` status,
-  frozen mode, processor/version, outcome, and replayable deletion edits. The
+- `delivery`: exact text delivered to the frozen target with
+  `machine-derived-unreviewed` status, target, mode, processor/version,
+  outcome, and replayable deletion edits. The
   raw provider label is retained even when clean delivery differs.
 
 The immutable utterance record remains exactly `audio.wav` + `record.json`.
@@ -223,8 +257,9 @@ Disabling collection and changing its destination take effect for the next
 utterance without a service restart. A disable that has returned also prevents
 older queued or staged, unpublished records from being published. Already
 published records remain until the user deliberately removes them. The
-uninstaller preserves `output-style.json`, `microphone-priority.json`,
-`data-collection.json`, and every dataset in a user-selected directory.
+uninstaller preserves `output-style.json`, `output-target.json`,
+`microphone-priority.json`, `data-collection.json`, and every dataset in a
+user-selected directory.
 First-party resumable Orange
 transport, label review, deletion tooling, and model training remain future
 work. User-managed SSHFS and asynchronous Google Drive backup are documented in

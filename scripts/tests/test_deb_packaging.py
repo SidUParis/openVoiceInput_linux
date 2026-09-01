@@ -189,6 +189,7 @@ class DebianMetadataTests(unittest.TestCase):
             rendered = output.read_text(encoding="utf-8")
             self.assertIn("Version: 0.1.0~alpha7-1", rendered)
             self.assertIn("@users.noreply.github.com", rendered)
+            self.assertIn("xclip | wl-clipboard", rendered)
             self.assertNotIn("@PACKAGE_VERSION@", rendered)
             self.assertNotIn("@INSTALLED_SIZE@", rendered)
 
@@ -329,6 +330,7 @@ class DebianMaintainerScriptTests(unittest.TestCase):
             "interaction.json",
             "microphone-priority.json",
             "output-style.json",
+            "output-target.json",
             "openvoiceinput-dataset-v1",
         )
         for name in ("preinst", "postinst", "prerm", "postrm"):
@@ -338,7 +340,7 @@ class DebianMaintainerScriptTests(unittest.TestCase):
 
 
 class DebianUnitTests(unittest.TestCase):
-    def test_units_use_system_launchers_and_explicit_output_style_config(
+    def test_units_use_system_launchers_and_explicit_output_configs(
         self,
     ) -> None:
         engine = (DEBIAN / "murmur-ime-engine.service").read_text(encoding="utf-8")
@@ -347,6 +349,10 @@ class DebianUnitTests(unittest.TestCase):
         self.assertIn("ExecStart=/usr/bin/murmur-voice-daemon run", voice)
         self.assertIn(
             "--output-style %E/murmur-ime/output-style.json",
+            voice,
+        )
+        self.assertIn(
+            "--output-target %E/murmur-ime/output-target.json",
             voice,
         )
         self.assertIn("ExecStopPost=/usr/bin/murmur-voice-daemon restore-engine", voice)

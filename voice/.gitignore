@@ -11,4 +11,5 @@ dist/
 /adaptive-corrections.json
 /data-collection.json
 /microphone-priority.json
+/output-target.json
 openvoiceinput-dataset-v1/

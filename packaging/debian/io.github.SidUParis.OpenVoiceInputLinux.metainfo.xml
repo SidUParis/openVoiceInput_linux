@@ -10,7 +10,9 @@
   <description>
     <p>
       Open Voice Input Linux sends live speech recognition text to the focused
-      IBus input context without using the clipboard or simulated paste.
+      IBus input context by default, without using the clipboard or simulated
+      paste. An explicit remote-desktop mode can copy only the final text for
+      user-confirmed manual paste; it never auto-pastes.
     </p>
     <p>
       This Ubuntu 24.04 preview supports adaptive terminology corrections,
@@ -24,7 +26,8 @@
     </p>
     <p xml:lang="zh-CN">
       Open Voice Input Linux 将实时语音识别结果直接写入当前 IBus 输入位置，
-      不依赖剪贴板或模拟粘贴。
+      默认不依赖剪贴板或模拟粘贴。远程桌面模式可由用户明确启用，只复制终稿
+      并由用户确认位置后手动粘贴，不会自动粘贴。
     </p>
     <p xml:lang="zh-CN">
       当前 Ubuntu 24.04 预览版支持术语纠错学习、逐句动态选择麦克风和可选的

@@ -71,6 +71,12 @@ from .output_style import (
     load_output_style_config,
     save_output_style_config,
 )
+from .output_target import (
+    OutputTargetConfig,
+    default_output_target_config_path,
+    load_output_target_config,
+    save_output_target_config,
+)
 
 VOICE_SERVICE = "murmur-ime-voice.service"
 SYSTEMCTL = "/usr/bin/systemctl"
@@ -104,6 +110,10 @@ _STATUS_CODES = frozenset(
         "adaptive-correction-skipped",
         "audio-backpressure",
         "capture-start-failed",
+        "clipboard-armed",
+        "clipboard-copy-failed",
+        "clipboard-ready",
+        "clipboard-unavailable",
         "cancelled",
         "daemon-closed",
         "daemon-shutdown",
@@ -113,6 +123,7 @@ _STATUS_CODES = frozenset(
         "microphone-unavailable",
         "microphone-policy-invalid",
         "output-style-invalid",
+        "output-target-invalid",
         "none",
         "preedit-final-rejected",
         "preedit-lost",
@@ -214,6 +225,7 @@ class SettingsController:
         microphone_policy_path: str | Path | None = None,
         interaction_path: str | Path | None = None,
         output_style_path: str | Path | None = None,
+        output_target_path: str | Path | None = None,
         runner: Runner = subprocess.run,
         status_reader: StatusReader = request_command,
         review_reader: ReviewReader = request_last_review,
@@ -256,6 +268,11 @@ class SettingsController:
             Path(output_style_path)
             if output_style_path is not None
             else default_output_style_config_path()
+        )
+        self._output_target_path = (
+            Path(output_target_path)
+            if output_target_path is not None
+            else default_output_target_config_path()
         )
         self._runner = runner
         self._status_reader = status_reader
@@ -667,6 +684,27 @@ class SettingsController:
         except (ConfigError, OSError) as error:
             raise SettingsError(
                 "The output style setting could not be saved safely."
+            ) from error
+
+    def load_output_target(self) -> OutputTargetConfig:
+        """Return the explicit final-delivery target without reading clipboard."""
+
+        try:
+            return load_output_target_config(self._output_target_path)
+        except ConfigError as error:
+            raise SettingsError(
+                "The output target setting could not be loaded safely."
+            ) from error
+
+    def save_output_target(self, target: str) -> OutputTargetConfig:
+        """Save locally; the daemon freezes the choice at the next start."""
+
+        try:
+            save_output_target_config(target, self._output_target_path)
+            return load_output_target_config(self._output_target_path)
+        except (ConfigError, OSError) as error:
+            raise SettingsError(
+                "The output target setting could not be saved safely."
             ) from error
 
     def save_interaction(

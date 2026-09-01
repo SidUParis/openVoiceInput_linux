@@ -9,7 +9,7 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
-ExecStart=@VOICE_EXEC@ run --config @VOICE_CONFIG@ --vocabulary @VOICE_VOCABULARY@ --corrections @VOICE_CORRECTIONS@ --adaptive-corrections @VOICE_ADAPTIVE_CORRECTIONS@ --data-collection @VOICE_DATA_COLLECTION@ --microphone-priority @VOICE_MICROPHONE_PRIORITY@ --interaction @VOICE_INTERACTION@ --output-style @VOICE_OUTPUT_STYLE@
+ExecStart=@VOICE_EXEC@ run --config @VOICE_CONFIG@ --vocabulary @VOICE_VOCABULARY@ --corrections @VOICE_CORRECTIONS@ --adaptive-corrections @VOICE_ADAPTIVE_CORRECTIONS@ --data-collection @VOICE_DATA_COLLECTION@ --microphone-priority @VOICE_MICROPHONE_PRIORITY@ --interaction @VOICE_INTERACTION@ --output-style @VOICE_OUTPUT_STYLE@ --output-target @VOICE_OUTPUT_TARGET@
 ExecStopPost=@VOICE_EXEC@ restore-engine
 Restart=on-failure
 RestartPreventExitStatus=2

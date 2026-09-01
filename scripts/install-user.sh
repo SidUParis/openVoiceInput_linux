@@ -130,6 +130,7 @@ voice_data_collection="$config_home/murmur-ime/data-collection.json"
 voice_microphone_priority="$config_home/murmur-ime/microphone-priority.json"
 voice_interaction="$config_home/murmur-ime/interaction.json"
 voice_output_style="$config_home/murmur-ime/output-style.json"
+voice_output_target="$config_home/murmur-ime/output-target.json"
 voice_launcher="$install_root/murmur-voice-daemon"
 runtime_root=${XDG_RUNTIME_DIR:-}
 
@@ -726,7 +727,8 @@ python3 -I "$script_dir/render_systemd_units.py" \
   --set "VOICE_DATA_COLLECTION=$voice_data_collection" \
   --set "VOICE_MICROPHONE_PRIORITY=$voice_microphone_priority" \
   --set "VOICE_INTERACTION=$voice_interaction" \
-  --set "VOICE_OUTPUT_STYLE=$voice_output_style"
+  --set "VOICE_OUTPUT_STYLE=$voice_output_style" \
+  --set "VOICE_OUTPUT_TARGET=$voice_output_target"
 chmod 0644 "$stage_engine_unit" "$stage_voice_unit"
 
 service_active murmur-ime-engine.service && engine_was_active=true

@@ -20,6 +20,11 @@ from murmur_voice.config import (
 )
 from murmur_voice.microphone_policy import save_microphone_policy_config
 from murmur_voice.output_style import OutputStyleConfig, save_output_style_config
+from murmur_voice.output_target import (
+    ClipboardWriter,
+    OutputTargetConfig,
+    save_output_target_config,
+)
 
 
 class _InteractiveInput:
@@ -296,7 +301,9 @@ def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_pat
     microphone_priority_path = tmp_path / "microphone-priority.json"
     interaction_path = tmp_path / "interaction.json"
     output_style_path = tmp_path / "output-style.json"
+    output_target_path = tmp_path / "output-target.json"
     save_output_style_config("clean", output_style_path)
+    save_output_target_config("clipboard", output_target_path)
     parser = cli.build_parser()
 
     options = parser.parse_args(
@@ -314,6 +321,8 @@ def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_pat
             str(interaction_path),
             "--output-style",
             str(output_style_path),
+            "--output-target",
+            str(output_target_path),
         ]
     )
 
@@ -323,6 +332,7 @@ def test_run_parser_accepts_only_a_corrections_file_path_not_pair_values(tmp_pat
     assert options.microphone_priority == microphone_priority_path
     assert options.interaction == interaction_path
     assert options.output_style == output_style_path
+    assert options.output_target == output_target_path
     with pytest.raises(SystemExit):
         parser.parse_args(["run", "--wrong", "private wrong form"])
     with pytest.raises(SystemExit):
@@ -380,7 +390,9 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
     data_collection_path = tmp_path / "data-collection.json"
     microphone_priority_path = tmp_path / "microphone-priority.json"
     output_style_path = tmp_path / "output-style.json"
+    output_target_path = tmp_path / "output-target.json"
     save_output_style_config("clean", output_style_path)
+    save_output_target_config("clipboard", output_target_path)
     captured = []
     runtime_arguments = []
     data_runtime_arguments = []
@@ -471,6 +483,7 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
             data_collection_path=data_collection_path,
             microphone_policy_path=microphone_priority_path,
             output_style_path=output_style_path,
+            output_target_path=output_target_path,
             review_socket_path=review_socket_path,
         )
         == 0
@@ -499,6 +512,10 @@ def test_run_wires_per_dictation_hot_reload_and_adaptive_observer(
     assert options["output_style_reader"]() == OutputStyleConfig("clean")
     save_output_style_config("faithful", output_style_path)
     assert options["output_style_reader"]() == OutputStyleConfig("faithful")
+    assert options["output_target_reader"]() == OutputTargetConfig("clipboard")
+    save_output_target_config("caret", output_target_path)
+    assert options["output_target_reader"]() == OutputTargetConfig("caret")
+    assert isinstance(options["clipboard_writer"], ClipboardWriter)
     assert (
         options["data_collection_status_reader"]
         is FakeDataCollectionRuntime.status_code

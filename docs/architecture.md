@@ -14,10 +14,16 @@ self-contained provider-neutral voice daemon that prove native caret-local
 preedit and final commit with this transition flow:
 
 ```text
-current IBus engine -> murmur-voice -> Acquire/Partial/Final over D-Bus
+current IBus engine -> murmur-voice -> frozen caret target
+                    -> Acquire/Partial/Final over D-Bus
                     -> frozen faithful/clean terminal delivery
                     -> <=5 s same-focus correction observation
                     -> exact previous IBus engine
+
+explicit RDP mode  -> frozen clipboard target -> preflight before audio/provider
+                    -> authoritative final only -> local synchronized clipboard
+                    -> user confirms remote field and manually pastes
+                    -> no remote partial or surrounding-text auto-learning
 ```
 
 After final commit, the previous engine is restored when bounded correction
@@ -78,6 +84,9 @@ Responsibilities:
   handling behind one bounded ASR client interface;
 - provider-supported partials, authoritative final, timeout, and cancellation
   events;
+- a per-utterance private output-target snapshot: caret by default, or an
+  explicit clipboard path that preflights `xclip`/`wl-copy`, writes only the
+  authoritative delivered final, and never auto-pastes;
 - deterministic extraction and private persistence of at most one strict
   replacement from the bounded post-final snapshot;
 - per-dictation reload and conflict-safe compilation of manual/adaptive
@@ -101,7 +110,8 @@ a live utterance between microphones.
 
 A bounded GTK4 settings application now manages the private key-only fallback,
 explicit vocabulary, optional explicit recognition corrections, microphone
-category priority, faithful/clean output style, a disabled-by-default local
+category priority, faithful/clean output style, a default-caret final target
+with an explicit remote-desktop clipboard option, a disabled-by-default local
 dataset destination, and service controls. Priority, output-style and
 collection saves take effect at the next utterance
 without a daemon restart. Adaptive correction memory is maintained automatically
@@ -137,32 +147,42 @@ increasing `revision`. The engine ignores any mismatched, stale, or late event.
 
 ## Text lifecycle
 
-1. A streaming hypothesis replaces the entire voice preedit.
-2. A `definite` two-pass sentence replaces the corresponding hypothesis.
-3. The connection-level final event freezes raw `provider_final`. Faithful mode
+1. At start, the daemon freezes `output-target.json`. Missing means `caret`.
+   `clipboard` requires a session-matched clipboard-helper preflight before
+   microphone/provider work. A failure stops without switching to caret or
+   auto-paste.
+2. In caret mode, a streaming hypothesis replaces the entire voice preedit.
+   Clipboard mode does not send or copy partials.
+3. A `definite` two-pass sentence replaces the corresponding hypothesis.
+4. The connection-level final event freezes raw `provider_final`. Faithful mode
    delivers it unchanged; clean mode runs only the bounded local deletion
-   processor. Failure falls back to raw. A single `commit_text` receives the
-   resulting `delivery.text`; partials are never cleaned.
-4. A newer IBus surrounding-text revision anchors the exact committed span.
+   processor. Failure falls back to raw. In caret mode, a single `commit_text`
+   receives the resulting `delivery.text`. In clipboard mode, exactly that
+   final is copied and the user performs any remote paste; no synthetic
+   `Ctrl+V` is emitted. Partials are never cleaned.
+5. In caret mode, a newer IBus surrounding-text revision anchors the exact committed span.
    If unsupported or ambiguous, commit still succeeds but learning is disabled.
    If clean delivery changed the final, this observation is consumed
    immediately with a content-free skip reason and never reaches extraction.
-5. For at most five seconds the same focus may produce one observation
+   Clipboard mode has no trustworthy remote anchor and instead consumes
+   observation with `clipboard-output-no-surrounding-text`.
+6. For at most five seconds the same caret focus may produce one observation
    snapshot. Only a single replacement inside the anchored span is eligible;
    insertion, deletion, multiple edits, polishing, a final active selection,
    focus/private
    changes, or timeout learns nothing.
-6. Finish restores the exact previous IBus engine. A next toggle may finish
+7. Finish restores the exact previous IBus engine. A next toggle may finish
    observation early before starting another dictation.
-7. Focus loss clears preedit or invalidates observation immediately. After a
+8. Focus loss clears preedit or invalidates observation immediately. After a
    committed final, the daemon restores the previous engine when the remaining
    lease expires because this prototype has no reverse focus-loss signal.
-8. The implemented safety timeout cancels preedit when an authoritative final
+9. The implemented safety timeout cancels preedit when an authoritative final
    is missing. Any future manual recovery must remain explicit and must never
    silently commit into a different application.
 
-Clipboard injection and synthetic `Ctrl+V` are not part of the primary path.
-The observer also avoids clipboard, AT-SPI, and global keyboard monitoring. It
+Synthetic `Ctrl+V` is not part of either path. The optional remote target writes
+only a final to the clipboard and never reads it. The observer also avoids
+clipboard, AT-SPI, and global keyboard monitoring. It
 retains only a bounded pair/state/support ledger, never a separate surrounding
 snapshot or transcript record.
 

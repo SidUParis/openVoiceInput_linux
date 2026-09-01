@@ -20,6 +20,7 @@ from murmur_voice.data_collection import DataCollectionConfig
 from murmur_voice.control import ControlError, LastReview, ReviewSubmitReply
 from murmur_voice.interaction import InteractionConfig, load_interaction_config
 from murmur_voice.output_style import OutputStyleConfig, load_output_style_config
+from murmur_voice.output_target import OutputTargetConfig, load_output_target_config
 from murmur_voice.microphone_policy import (
     DEFAULT_MICROPHONE_PRIORITY,
     MicrophonePolicyConfig,
@@ -84,6 +85,7 @@ def _controller(
         "microphone_policy_path": tmp_path / "private" / "microphone-priority.json",
         "interaction_path": tmp_path / "private" / "interaction.json",
         "output_style_path": tmp_path / "private" / "output-style.json",
+        "output_target_path": tmp_path / "private" / "output-target.json",
         "runner": runner or RecordingRunner(),
     }
     if status_reader is not None:
@@ -647,6 +649,26 @@ def test_untrusted_daemon_status_is_allowlisted(tmp_path):
     assert private_term not in repr(snapshot)
 
 
+@pytest.mark.parametrize(
+    "status_code",
+    (
+        "clipboard-armed",
+        "clipboard-ready",
+        "clipboard-unavailable",
+        "clipboard-copy-failed",
+        "output-target-invalid",
+    ),
+)
+def test_clipboard_status_codes_are_allowlisted(tmp_path, status_code):
+    controller = _controller(
+        tmp_path,
+        RecordingRunner(active_state="active"),
+        lambda command: {"ok": True, "state": "idle", "code": status_code},
+    )
+
+    assert controller.service_status() == ServiceSnapshot("active", "idle", status_code)
+
+
 def test_unknown_systemctl_output_is_not_forwarded_to_the_view(tmp_path):
     private_output = "private-key-sentinel"
 
@@ -731,6 +753,33 @@ def test_output_style_rejects_invalid_mode_without_running_service(tmp_path):
         controller.save_output_style("polish")
 
     assert not (tmp_path / "private" / "output-style.json").exists()
+    assert runner.calls == []
+
+
+def test_output_target_defaults_and_save_are_private_local_and_hot_loaded(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+
+    assert controller.load_output_target() == OutputTargetConfig("caret")
+
+    saved = controller.save_output_target("clipboard")
+    path = tmp_path / "private" / "output-target.json"
+
+    assert saved == OutputTargetConfig("clipboard")
+    assert load_output_target_config(path) == saved
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert runner.calls == []
+
+
+def test_output_target_rejects_invalid_value_without_running_service(tmp_path):
+    runner = RecordingRunner()
+    controller = _controller(tmp_path, runner)
+
+    with pytest.raises(SettingsError, match="could not be saved safely"):
+        controller.save_output_target("auto-paste")
+
+    assert not (tmp_path / "private" / "output-target.json").exists()
     assert runner.calls == []
 
 

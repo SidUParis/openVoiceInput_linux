@@ -427,6 +427,7 @@ jobs:
               "interaction.json",
               "microphone-priority.json",
               "output-style.json",
+              "output-target.json",
               "vocabulary.json",
               "voice.json",
           }

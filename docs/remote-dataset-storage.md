@@ -16,9 +16,10 @@
   中明确授权；Open Voice Input Linux 不读取或保存该 OAuth token。
 - `provider_final` 始终是 `teacher-unreviewed` 未审核伪标签；远程存储或备份
   不会把它变成 gold label。
-- schema-v3 `delivery` 是实际插入但仍
+- schema-v4 `delivery` 是实际交付到冻结目标但仍
   `machine-derived-unreviewed` 的文本及可重放删除审计；它与原始
-  `provider_final`、仍为空的人工标签分开，备份不会改变这些语义。
+  `provider_final`、仍为空的人工标签分开，并由 `target` 标明 `caret` 或
+  `clipboard`；备份不会改变这些语义。
 
 下面的命令使用公开占位符，不包含任何真实 Orange 地址或凭据。
 

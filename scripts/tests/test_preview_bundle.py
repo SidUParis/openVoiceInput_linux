@@ -491,6 +491,7 @@ class PreviewBundleTests(unittest.TestCase):
             "interaction.json",
             "microphone-priority.json",
             "output-style.json",
+            "output-target.json",
         ):
             with (
                 self.subTest(forbidden=forbidden),

@@ -36,9 +36,15 @@
   context, or audio. Manual pairs take priority; conflicts, unsafe overlaps,
   and cycles must be suppressed, and the provider view remains capped at 50
   pairs.
+- Keep clipboard delivery a separate, explicit, default-off target. It may
+  write one authoritative final through a fixed reviewed helper, but must never
+  read existing clipboard data, copy partials, synthesize paste, or treat
+  remote edits as adaptive evidence. Warn that both sessions can read the
+  synchronized value and exclude passwords, keys, and codes.
 - Local audio/provider-final collection must remain off by default and require
-  an existing user-selected absolute directory. Publish only after the focused
-  client accepts the authoritative final. Mark that provider text
+  an existing user-selected absolute directory. Publish only after the frozen
+  target accepts the authoritative final (focused caret commit or explicit
+  clipboard copy). Mark that provider text
   `teacher-unreviewed`; leave `spoken_verbatim` and `preferred_output` null
   until independent review.
 - Collection filesystem work must stay outside the audio callback/session lock,

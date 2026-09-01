@@ -22,6 +22,7 @@ from murmur_voice.data_collection import DataCollectionConfig  # noqa: E402
 from murmur_voice.control import LastReview, ReviewSubmitReply  # noqa: E402
 from murmur_voice.interaction import InteractionConfig  # noqa: E402
 from murmur_voice.output_style import OutputStyleConfig  # noqa: E402
+from murmur_voice.output_target import OutputTargetConfig  # noqa: E402
 from murmur_voice.microphone_policy import (  # noqa: E402
     DEFAULT_MICROPHONE_PRIORITY,
     MicrophonePolicyConfig,
@@ -56,6 +57,7 @@ class FakeController:
         self.saved_data_collection = None
         self.saved_interaction = None
         self.saved_output_style = None
+        self.saved_output_target = None
         self.submitted_adaptive_feedback = None
         self.submitted_last_review = None
         self.review_submit_reply = ReviewSubmitReply(
@@ -84,6 +86,7 @@ class FakeController:
         self.loaded_data_collection = DataCollectionConfig()
         self.loaded_interaction = InteractionConfig()
         self.loaded_output_style = OutputStyleConfig()
+        self.loaded_output_target = OutputTargetConfig()
         self.loaded_dataset_statistics = DatasetStatistics("disabled")
         self.dataset_statistics_calls = 0
         self.dataset_statistics_started = threading.Event()
@@ -202,6 +205,14 @@ class FakeController:
         self.saved_output_style = mode
         self.loaded_output_style = OutputStyleConfig(mode)
         return self.loaded_output_style
+
+    def load_output_target(self):
+        return self.loaded_output_target
+
+    def save_output_target(self, target):
+        self.saved_output_target = target
+        self.loaded_output_target = OutputTargetConfig(target)
+        return self.loaded_output_target
 
     def load_dataset_statistics(self):
         self.dataset_statistics_calls += 1
@@ -525,6 +536,39 @@ def test_clean_output_style_save_applies_next_utterance_without_service_action(w
     assert controller.saved_output_style == "clean"
     assert settings_window.clean_output_button.get_active() is True
     assert "下一条听写" in settings_window.message_label.get_text()
+    assert controller.service_actions == []
+
+
+def test_remote_desktop_output_defaults_to_caret_and_discloses_boundaries(window):
+    settings_window, _ = window
+
+    assert settings_window.caret_output_target_button.get_active() is True
+    assert settings_window.clipboard_output_target_button.get_active() is False
+    notice = settings_window.output_target_notice_label.get_text()
+    assert "默认关闭" in notice
+    assert "authoritative final" in notice
+    assert "不复制实时 partial" in notice
+    assert "不自动粘贴" in notice
+    assert "手动按 Ctrl+V" in notice
+    assert "其他应用可能随后覆盖剪贴板" in notice
+    assert "本机与远程会话" in notice
+    assert "密码、API Key、验证码" in notice
+    assert "surrounding text" in notice
+    assert "不会启动自动纠错学习" in notice
+    assert "xclip" in notice
+    assert "wl-copy" in notice
+
+
+def test_clipboard_target_save_is_explicit_and_never_starts_service(window):
+    settings_window, controller = window
+    settings_window.clipboard_output_target_button.set_active(True)
+
+    settings_window.save_output_target()
+
+    assert controller.saved_output_target == "clipboard"
+    assert settings_window.clipboard_output_target_button.get_active() is True
+    assert "下一条终稿" in settings_window.message_label.get_text()
+    assert "手动按 Ctrl+V" in settings_window.message_label.get_text()
     assert controller.service_actions == []
 
 
@@ -1030,6 +1074,26 @@ def test_microphone_policy_invalid_status_has_repair_action(window):
     assert "保存一个完整顺序" in label
 
 
+@pytest.mark.parametrize(
+    ("status_code", "expected"),
+    (
+        ("clipboard-armed", "下一条终稿会复制"),
+        ("clipboard-ready", "上一条终稿已复制；剪贴板可能已被其他应用覆盖"),
+        ("clipboard-unavailable", "xclip（X11）或 wl-clipboard（Wayland）"),
+        ("clipboard-copy-failed", "没有自动粘贴"),
+        ("output-target-invalid", "远程桌面页重新保存"),
+    ),
+)
+def test_clipboard_status_is_actionable(window, status_code, expected):
+    settings_window, _ = window
+
+    settings_window._set_service_snapshot(
+        ServiceSnapshot("active", "idle", status_code)
+    )
+
+    assert expected in settings_window.service_status_label.get_text()
+
+
 def test_local_collection_is_off_by_default_and_discloses_exact_scope(window):
     settings_window, _ = window
 
@@ -1044,7 +1108,7 @@ def test_local_collection_is_off_by_default_and_discloses_exact_scope(window):
     assert "未经复核的伪标签" in notice
     assert "provider_final" in notice
     assert "delivery" in notice
-    assert "实际插入" in notice
+    assert "实际交付" in notice
     assert "可从原文重放" in notice
     assert "机器生成" in notice
     assert "openvoiceinput-dataset-v1" in notice

@@ -40,16 +40,17 @@ silently alter `spoken_verbatim`. This separation permits ASR acoustic/language
 adaptation to use the faithful label while a later correction or formatting
 layer can learn the preferred output.
 
-Schema v3 also stores a separate `delivery` object. It is not a human label:
-its `text` is exactly what was inserted, with
+Schema v4 stores a separate `delivery` object. It is not a human label:
+its `text` is exactly what was delivered to the frozen target, with
 `machine-derived-unreviewed` status. Faithful mode records an identity
 processor. Clean mode records the bounded local processor name/version,
 content-free outcome, and every deletion's original-codepoint offsets, kind,
 reason, source and empty replacement. Replaying those edits against raw
-`provider_final` must reproduce `delivery.text`. This audit must never be used
-as `spoken_verbatim` merely because it looks cleaner.
+`provider_final` must reproduce `delivery.text`. `delivery.target` records
+`caret` or `clipboard`. This audit must never be used as `spoken_verbatim`
+merely because it looks cleaner.
 
-## Implemented opt-in record (schema v3)
+## Implemented opt-in record (schema v4)
 
 The GTK settings window keeps collection off by default. Enabling requires an
 existing absolute local or mounted folder and initializes or reopens a marked
@@ -57,9 +58,10 @@ existing absolute local or mounted folder and initializes or reopens a marked
 dictation, so saving enable/disable/path changes takes effect without a service
 restart.
 
-A record is offered only after the focused IBus client accepts a nonempty
-authoritative provider final. Cancelled, failed, final-rejected, empty-audio,
-and no-final sessions publish nothing. One random utterance directory contains:
+A record is offered only after a nonempty authoritative provider final reaches
+the frozen target: focused IBus caret acceptance or successful explicit
+clipboard copy. Cancelled, failed, final/copy-rejected, empty-audio, and
+no-final sessions publish nothing. One random utterance directory contains:
 
 - `audio.wav`, preserving the exact captured 16 kHz, mono, signed 16-bit PCM;
 - `record.json`, with schema/dataset/utterance/session IDs, UTC time, explicit
