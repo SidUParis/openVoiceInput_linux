@@ -197,6 +197,55 @@ class AudioQualityAuditTests(unittest.TestCase):
             manifest["classification_basis"], "heuristic-threshold-policy-v1"
         )
 
+    def test_accepts_current_schema_v5_record_and_publishes_manifest(self) -> None:
+        root = _dataset(self.root)
+        utterance_id = "20" * 16
+        _, record_path = _record(root, utterance_id, self._clean_samples())
+
+        def upgrade_to_current_v5(document: dict[str, Any]) -> None:
+            document["schema_version"] = 5
+            document["delivery"] = {
+                "target": "caret",
+                "mode": "faithful",
+                "text": "private transcript must not enter the sidecar",
+                "review_status": "machine-derived-unreviewed",
+                "pipeline": [
+                    {
+                        "input_basis": "provider-final",
+                        "processor": {
+                            "name": "openvoice-confirmed-correction",
+                            "version": 1,
+                        },
+                        "outcome": "unchanged",
+                        "edits": [],
+                    },
+                    {
+                        "input_basis": "previous-stage",
+                        "processor": {"name": "identity", "version": 1},
+                        "outcome": "faithful",
+                        "edits": [],
+                    },
+                ],
+            }
+
+        _rewrite_record(record_path, upgrade_to_current_v5)
+        sidecars = self.root / "quality-v1"
+
+        result = audit.audit_dataset(root, sidecars, audit.ZoneInfo("UTC"))
+
+        self.assertEqual(result["snapshot"]["schema_versions"], {"5": 1})
+        self.assertEqual(result["snapshot"]["structural_failures"], {})
+        self.assertEqual(result["sidecars"]["records"], {"created": 1})
+        self.assertEqual(result["sidecars"]["manifest"]["status"], "created")
+        sidecar = (sidecars / utterance_id / "quality.json").read_text()
+        self.assertNotIn("private transcript", sidecar)
+        manifests = list((sidecars / "manifests").glob("*/manifest.json"))
+        self.assertEqual(len(manifests), 1)
+        manifest = json.loads(manifests[0].read_text())
+        self.assertEqual(manifest["snapshot_record_count"], 1)
+        self.assertEqual(manifest["records"][0]["utterance_id"], utterance_id)
+        self.assertEqual(manifest["timezone"], "UTC")
+
     def test_rejects_severely_clipped_and_dc_offset_audio(self) -> None:
         root = _dataset(self.root)
         _record(root, "2" * 32, array.array("h", [32_767] * 16_000))

@@ -932,6 +932,7 @@ def audit_dataset(
                         2,
                         3,
                         4,
+                        5,
                     ):
                         raise AuditError("record schema version is unsupported")
                     audio = record.get("audio")
