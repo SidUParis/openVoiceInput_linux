@@ -9,7 +9,7 @@ import uuid
 from typing import Any
 
 from .audio import AudioCapture, AudioDeviceError, MicrophonePolicyError
-from .config import ConfigError, VoiceConfig
+from .config import ConfigError, CorrectionPair, VoiceConfig, normalize_correction_pairs
 from .control import (
     MAX_REVIEW_TEXT_CODEPOINTS,
     MAX_REVIEW_TEXT_UTF8_BYTES,
@@ -138,6 +138,7 @@ class VoiceSession:
         self._latest_text = ""
         self._output_style_mode = DEFAULT_OUTPUT_STYLE_MODE
         self._output_target = DEFAULT_OUTPUT_TARGET
+        self._terminal_corrections: tuple[CorrectionPair, ...] = ()
         self._recording_timer: Any | None = None
         self._warning_timer: Any | None = None
         self._duration_warning = False
@@ -325,6 +326,9 @@ class VoiceSession:
                 self._require_start_time(start_deadline)
                 asr = self._asr_factory()
                 self._asr = asr
+                self._terminal_corrections = normalize_correction_pairs(
+                    getattr(asr, "terminal_corrections", ())
+                )
                 asr.on_open = lambda: self._on_asr_open(session_serial, asr)
                 asr.on_result = lambda text: self._on_asr_result(
                     session_serial, asr, text
@@ -881,13 +885,24 @@ class VoiceSession:
         """Apply the frozen terminal policy with a raw, non-blocking fallback."""
 
         try:
-            delivery = self._output_delivery_factory(
-                provider_final,
-                self._output_style_mode,
-            )
+            if self._terminal_corrections:
+                delivery = self._output_delivery_factory(
+                    provider_final,
+                    self._output_style_mode,
+                    corrections=self._terminal_corrections,
+                )
+            else:
+                delivery = self._output_delivery_factory(
+                    provider_final,
+                    self._output_style_mode,
+                )
             if not isinstance(delivery, OutputDelivery):
                 raise TypeError("output delivery is invalid")
-            validate_output_delivery(provider_final, delivery)
+            validate_output_delivery(
+                provider_final,
+                delivery,
+                allowed_corrections=self._terminal_corrections,
+            )
             return delivery
         except Exception:
             # The default implementation already catches cleaner errors. Keep
@@ -956,6 +971,7 @@ class VoiceSession:
         self._latest_text = ""
         self._output_style_mode = DEFAULT_OUTPUT_STYLE_MODE
         self._output_target = DEFAULT_OUTPUT_TARGET
+        self._terminal_corrections = ()
         self._duration_warning = False
         self._observation_deadline = None
 

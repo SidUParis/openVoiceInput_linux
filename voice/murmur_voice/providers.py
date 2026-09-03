@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from .config import VoiceConfig
+from .config import CorrectionPair, VoiceConfig
 
 ProviderAvailability = Literal["ready", "planned"]
 
@@ -24,6 +24,7 @@ class ASRClient(Protocol):
     on_finish: Any
     on_error: Any
     on_auth_error: Any
+    terminal_corrections: tuple[CorrectionPair, ...]
 
     def connect(self) -> None: ...
 

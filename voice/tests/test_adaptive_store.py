@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from murmur_voice.config import MAX_CORRECTION_PAIRS, CorrectionPair
 from murmur_voice.adaptive_store import (
     ADAPTIVE_CORRECTIONS_SCHEMA_VERSION,
     MAX_ADAPTIVE_ENTRIES,
@@ -13,6 +14,7 @@ from murmur_voice.adaptive_store import (
     adaptive_statistics,
     compile_provider_correction_report,
     compile_provider_corrections,
+    compile_terminal_corrections,
     normalized_key,
     parse_adaptive_ledger,
     record_correction,
@@ -20,7 +22,27 @@ from murmur_voice.adaptive_store import (
     serialize_adaptive_ledger,
     with_last_result,
 )
-from murmur_voice.config import MAX_CORRECTION_PAIRS, CorrectionPair
+
+
+def test_terminal_corrections_include_manual_and_only_explicit_active_adaptive():
+    manual = (CorrectionPair("manual wrong", "ManualRight"),)
+    ledger = AdaptiveLedger(
+        entries=(
+            AdaptiveEntry("automatic wrong", "AutomaticRight", evidence="strong"),
+            AdaptiveEntry("explicit wrong", "ExplicitRight", evidence="explicit"),
+            AdaptiveEntry(
+                "candidate wrong",
+                "CandidateRight",
+                state="candidate",
+                evidence="explicit",
+            ),
+        )
+    )
+
+    assert compile_terminal_corrections(manual, ledger) == (
+        CorrectionPair("manual wrong", "ManualRight"),
+        CorrectionPair("explicit wrong", "ExplicitRight"),
+    )
 
 
 def test_parse_serialize_round_trip_preserves_all_states_and_support():

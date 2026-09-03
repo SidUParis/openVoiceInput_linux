@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Private output-style policy and deterministic terminal delivery.
 
-The provider transcript remains the authoritative ASR result.  ``clean`` is a
-small, local deletion-only postprocessor applied only after the provider has
-finished; live partials are never rewritten.  Every result carries enough
-information for an opted-in dataset record to replay the delivery from the raw
-provider final.
+The provider transcript remains the retained authoritative ASR result. A
+bounded confirmed-correction stage runs first; ``clean`` is a separate local
+deletion-only stage. Both run only after the provider finishes, and live
+partials are never rewritten. Every result carries enough information for an
+opted-in dataset record to replay delivery from the raw provider final.
 """
 
 from __future__ import annotations
@@ -22,11 +22,24 @@ from .clean_expression import (
     CleanExpressionResult,
     clean_expression,
 )
+from .confirmed_correction import (
+    CONFIRMED_CORRECTION_PROCESSOR_NAME,
+    CONFIRMED_CORRECTION_PROCESSOR_VERSION,
+    MAX_CONFIRMED_CORRECTION_EDITS,
+    ConfirmedCorrectionEdit,
+    ConfirmedCorrectionResult,
+    ConfirmedCorrectionReasonCode,
+    apply_confirmed_corrections,
+    replay_confirmed_corrections,
+    validate_confirmed_correction_result,
+)
 from .config import (
+    CorrectionPair,
     ConfigError,
     _load_private_bytes,
     _reject_duplicate_json_fields,
     _write_private_json,
+    normalize_correction_pairs,
 )
 
 OUTPUT_STYLE_CONFIG_VERSION = 1
@@ -69,10 +82,15 @@ class OutputDelivery:
     processor_version: int
     outcome: DeliveryOutcome
     edits: tuple[CleanExpressionEdit, ...] = field(default=(), repr=False)
+    correction_outcome: ConfirmedCorrectionReasonCode = "unchanged"
+    correction_edits: tuple[ConfirmedCorrectionEdit, ...] = field(
+        default=(), repr=False
+    )
+    correction_authority: tuple[CorrectionPair, ...] = field(default=(), repr=False)
 
     @property
     def changed(self) -> bool:
-        return bool(self.edits)
+        return bool(self.correction_edits or self.edits)
 
     def as_record_document(self) -> dict[str, Any]:
         """Return style/transformation fields for an opted-in delivery record."""
@@ -81,26 +99,34 @@ class OutputDelivery:
             "mode": self.mode,
             "text": self.text,
             "review_status": "machine-derived-unreviewed",
-            "processor": {
-                "name": self.processor,
-                "version": self.processor_version,
-            },
-            "outcome": self.outcome,
-            "edits": [
+            "pipeline": [
                 {
-                    "start": edit.start,
-                    "end": edit.end,
-                    "kind": edit.kind,
-                    "reason": edit.reason,
-                    "source": edit.source,
-                    "replacement": edit.replacement,
-                }
-                for edit in self.edits
+                    "input_basis": "provider-final",
+                    "processor": {
+                        "name": CONFIRMED_CORRECTION_PROCESSOR_NAME,
+                        "version": CONFIRMED_CORRECTION_PROCESSOR_VERSION,
+                    },
+                    "outcome": self.correction_outcome,
+                    "edits": [_edit_document(edit) for edit in self.correction_edits],
+                },
+                {
+                    "input_basis": "previous-stage",
+                    "processor": {
+                        "name": self.processor,
+                        "version": self.processor_version,
+                    },
+                    "outcome": self.outcome,
+                    "edits": [_edit_document(edit) for edit in self.edits],
+                },
             ],
         }
 
 
 Cleaner = Callable[[str], CleanExpressionResult]
+Corrector = Callable[
+    [str, tuple[CorrectionPair, ...] | list[CorrectionPair]],
+    ConfirmedCorrectionResult,
+]
 
 
 def default_output_style_config_path() -> Path:
@@ -162,9 +188,11 @@ def deliver_output(
     provider_final: str,
     mode: str,
     *,
+    corrections: tuple[CorrectionPair, ...] | list[CorrectionPair] = (),
     cleaner: Cleaner = clean_expression,
+    corrector: Corrector = apply_confirmed_corrections,
 ) -> OutputDelivery:
-    """Create terminal delivery, falling back to raw on every clean failure.
+    """Create terminal delivery with independently fail-open bounded stages.
 
     This function is deliberately total for a valid provider-final string and
     reviewed mode.  A cleaner exception or malformed result never blocks the
@@ -174,19 +202,51 @@ def deliver_output(
     if not isinstance(provider_final, str):
         raise TypeError("provider_final must be a string")
     config = OutputStyleConfig(mode=mode)
+    try:
+        correction_authority = normalize_correction_pairs(corrections)
+    except Exception:
+        correction_authority = ()
+        correction_result = ConfirmedCorrectionResult(
+            provider_final,
+            reason_code="processor-error",
+        )
+        corrected = provider_final
+    else:
+        try:
+            correction_result = corrector(provider_final, correction_authority)
+            if not isinstance(correction_result, ConfirmedCorrectionResult):
+                raise TypeError("corrector returned an invalid result")
+            corrected = validate_confirmed_correction_result(
+                provider_final,
+                correction_result,
+                correction_authority,
+            )
+        except Exception:
+            correction_result = ConfirmedCorrectionResult(
+                provider_final,
+                reason_code="processor-error",
+            )
+            corrected = provider_final
     if config.mode == "faithful":
         delivery = OutputDelivery(
             mode="faithful",
-            text=provider_final,
+            text=corrected,
             processor="identity",
             processor_version=1,
             outcome="faithful",
+            correction_outcome=correction_result.reason_code,
+            correction_edits=correction_result.edits,
+            correction_authority=correction_authority,
         )
-        validate_output_delivery(provider_final, delivery)
+        validate_output_delivery(
+            provider_final,
+            delivery,
+            allowed_corrections=correction_authority,
+        )
         return delivery
 
     try:
-        result = cleaner(provider_final)
+        result = cleaner(corrected)
         if not isinstance(result, CleanExpressionResult):
             raise TypeError("cleaner returned an invalid result")
         if (
@@ -204,7 +264,7 @@ def deliver_output(
             "would-remove-all-content",
         }:
             raise ValueError("cleaner returned an invalid outcome")
-        _validate_clean_result(provider_final, result)
+        _validate_clean_result(corrected, result)
         delivery = OutputDelivery(
             mode="clean",
             text=result.text,
@@ -212,27 +272,41 @@ def deliver_output(
             processor_version=OUTPUT_PROCESSOR_VERSION,
             outcome=result.reason_code,
             edits=result.edits,
+            correction_outcome=correction_result.reason_code,
+            correction_edits=correction_result.edits,
+            correction_authority=correction_authority,
         )
-        validate_output_delivery(provider_final, delivery)
+        validate_output_delivery(
+            provider_final,
+            delivery,
+            allowed_corrections=correction_authority,
+        )
         return delivery
     except Exception:
         # No value derived from an untrusted/future cleaner escapes this
-        # boundary.  The fixed raw fallback deliberately needs no replay
-        # validation, so a validator regression cannot suppress a valid final.
+        # boundary. The fixed previous-stage fallback deliberately needs no
+        # clean replay, so a validator regression cannot suppress a valid final.
         return OutputDelivery(
             mode="clean",
-            text=provider_final,
+            text=corrected,
             processor=OUTPUT_PROCESSOR_NAME,
             processor_version=OUTPUT_PROCESSOR_VERSION,
             outcome="processor-error",
+            correction_outcome=correction_result.reason_code,
+            correction_edits=correction_result.edits,
+            correction_authority=correction_authority,
         )
 
 
 def validate_output_delivery(
     provider_final: str,
     delivery: OutputDelivery,
+    *,
+    allowed_corrections: tuple[CorrectionPair, ...]
+    | list[CorrectionPair]
+    | None = None,
 ) -> None:
-    """Validate the complete identity/deletion-only delivery invariant."""
+    """Validate confirmed-replacement then identity/deletion-only invariants."""
 
     if not isinstance(provider_final, str) or not isinstance(delivery, OutputDelivery):
         raise TypeError("output delivery is invalid")
@@ -244,11 +318,35 @@ def validate_output_delivery(
         or not isinstance(delivery.outcome, str)
         or not isinstance(delivery.edits, tuple)
         or len(delivery.edits) > MAX_CLEAN_EXPRESSION_EDITS
+        or not isinstance(delivery.correction_outcome, str)
+        or not isinstance(delivery.correction_edits, tuple)
+        or len(delivery.correction_edits) > MAX_CONFIRMED_CORRECTION_EDITS
+        or not isinstance(delivery.correction_authority, tuple)
     ):
         raise ValueError("output delivery metadata is invalid")
+    correction_authority = normalize_correction_pairs(delivery.correction_authority)
+    if correction_authority != delivery.correction_authority:
+        raise ValueError("output delivery correction authority is invalid")
+    if allowed_corrections is not None:
+        expected_authority = normalize_correction_pairs(allowed_corrections)
+        if correction_authority != expected_authority:
+            raise ValueError("output delivery correction authority is invalid")
+    corrected = replay_confirmed_corrections(
+        provider_final,
+        delivery.correction_edits,
+    )
+    validate_confirmed_correction_result(
+        provider_final,
+        ConfirmedCorrectionResult(
+            corrected,
+            delivery.correction_edits,
+            delivery.correction_outcome,
+        ),
+        correction_authority,
+    )
     if delivery.mode == "faithful":
         if (
-            delivery.text != provider_final
+            delivery.text != corrected
             or delivery.processor != "identity"
             or delivery.processor_version != 1
             or delivery.outcome != "faithful"
@@ -274,17 +372,30 @@ def validate_output_delivery(
         raise ValueError("clean output delivery metadata is invalid")
     result_reason = "cleaned" if delivery.outcome == "cleaned" else delivery.outcome
     if result_reason == "processor-error":
-        if delivery.text != provider_final or delivery.edits:
-            raise ValueError("processor-error delivery changed provider text")
+        if delivery.text != corrected or delivery.edits:
+            raise ValueError("processor-error delivery changed corrected text")
         return
     _validate_clean_result(
-        provider_final,
+        corrected,
         CleanExpressionResult(
             text=delivery.text,
             edits=delivery.edits,
             reason_code=result_reason,
         ),
     )
+
+
+def _edit_document(
+    edit: CleanExpressionEdit | ConfirmedCorrectionEdit,
+) -> dict[str, int | str]:
+    return {
+        "start": edit.start,
+        "end": edit.end,
+        "kind": edit.kind,
+        "reason": edit.reason,
+        "source": edit.source,
+        "replacement": edit.replacement,
+    }
 
 
 def _validate_clean_result(

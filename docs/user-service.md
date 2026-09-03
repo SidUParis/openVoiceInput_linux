@@ -189,8 +189,10 @@ restart loop.
 
 Optional user-confirmed recognition corrections are edited in the native
 settings window. They are private `recognized as` to `correct to` pairs and are
-sent in Volcengine's documented provider-side `context.correct_words` map.
-They are not applied as a local string replacement.
+sent as best-effort Volcengine guidance in the raw WebSocket
+`request.corpus.context.correct_words` map. Manual and explicitly confirmed
+active pairs are also enforced once by a bounded, boundary-aware local terminal
+stage; live partials remain untouched.
 
 The optional explicit vocabulary can be edited separately:
 
@@ -248,9 +250,10 @@ armed clipboard target, the collector publishes one
 `preferred_output` are both null/unreviewed: the current pair is a future
 review candidate, not a gold label or distillation-ready sample.
 
-Schema v4 separately stores actual `delivery.text` as
-`machine-derived-unreviewed`, the frozen style and target, processor/version,
-outcome and replayable deletion edits. It never overwrites raw provider text.
+Schema v5 separately stores actual `delivery.text` as
+`machine-derived-unreviewed`, the frozen style and target, and an ordered,
+replayable confirmed-correction plus identity/clean pipeline. It never
+overwrites raw provider text.
 
 The v1 utterance directory stays an immutable two-file pair. After it is
 published, the writer atomically adds a separate private

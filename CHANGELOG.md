@@ -5,6 +5,30 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+### Fixed
+
+- Volcengine request context now follows the official raw WebSocket hierarchy:
+  the compact hotword/correction JSON string is carried by
+  `request.corpus.context`, while reviewed managed-table selectors remain in
+  the same `corpus` object. Correction canonicals also receive a deduplicated,
+  priority request hotword boost. Because the provider publishes a token cap
+  without its tokenizer, whole terms are bounded independently by entry,
+  codepoint and UTF-8-byte proxies rather than treating tokens as entries.
+- Manual corrections and explicitly confirmed active adaptive corrections are
+  enforced by a bounded, boundary-aware terminal pass. It is local-only,
+  non-cascading, skips common URL/code contexts, and fails open without an
+  additional model or network request.
+
+### Changed
+
+- New opted-in records advance to schema v5. `delivery.pipeline` stores the
+  replayable confirmed-correction stage followed by the faithful/clean style
+  stage, while raw `provider_final` remains unchanged. Existing v1-v4 records
+  remain immutable.
+- Volcengine result selection records content-free counts when `result.text`
+  differs from the selected `definite` assembly; neither transcript variant nor
+  correction content is logged.
+
 ## [0.1.0-alpha.8] - 2026-09-02
 
 ### Added

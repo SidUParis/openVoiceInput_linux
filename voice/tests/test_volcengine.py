@@ -13,6 +13,7 @@ from murmur_voice.volcengine import (
     AudioBackpressureError,
     VolcengineASRClient,
     VolcengineProtocolError,
+    ResultSelectionMetrics,
     _COMPRESSION_GZIP,
     _LAST_WITH_SEQUENCE,
     _SERIALIZATION_JSON,
@@ -67,6 +68,7 @@ def test_default_payload_and_api_key_headers():
     assert payload["request"]["enable_nonstream"] is True
     assert payload["request"]["enable_ddc"] is True
     assert "context" not in payload["request"]
+    assert "corpus" not in payload["request"]
 
 
 @pytest.mark.parametrize("result_type", ("incremental", "FULL", "", 1))
@@ -96,7 +98,8 @@ def test_personal_vocabulary_uses_official_request_context_json(caplog):
     with caplog.at_level(logging.DEBUG):
         payload = client._build_payload()
 
-    context = payload["request"]["context"]
+    assert "context" not in payload["request"]
+    context = payload["request"]["corpus"]["context"]
     assert isinstance(context, str)
     assert json.loads(context) == {
         "hotwords": [{"word": "PrivateName"}, {"word": "专业词"}]
@@ -118,10 +121,16 @@ def test_explicit_corrections_use_official_correct_words_context_json(caplog):
     with caplog.at_level(logging.DEBUG):
         payload = client._build_payload()
 
-    context = payload["request"]["context"]
+    assert "context" not in payload["request"]
+    context = payload["request"]["corpus"]["context"]
     assert isinstance(context, str)
-    assert context == '{"correct_words":{"deep seek":"DeepSeek"}}'
-    assert json.loads(context) == {"correct_words": {private_wrong: private_canonical}}
+    assert context == (
+        '{"hotwords":[{"word":"DeepSeek"}],"correct_words":{"deep seek":"DeepSeek"}}'
+    )
+    assert json.loads(context) == {
+        "hotwords": [{"word": private_canonical}],
+        "correct_words": {private_wrong: private_canonical},
+    }
     assert private_wrong not in caplog.text
     assert private_canonical not in caplog.text
 
@@ -141,17 +150,146 @@ def test_hotwords_and_corrections_share_one_compact_context_string(caplog):
     with caplog.at_level(logging.DEBUG):
         payload = client._build_payload()
 
-    context = payload["request"]["context"]
+    context = payload["request"]["corpus"]["context"]
     assert context == (
-        '{"hotwords":[{"word":"PrivateName"}],"correct_words":{"欧盆爱":"OpenAI"}}'
+        '{"hotwords":[{"word":"OpenAI"},{"word":"PrivateName"}],'
+        '"correct_words":{"欧盆爱":"OpenAI"}}'
     )
     assert json.loads(context) == {
-        "hotwords": [{"word": private_hotword}],
+        "hotwords": [{"word": private_canonical}, {"word": private_hotword}],
         "correct_words": {private_wrong: private_canonical},
     }
     assert private_hotword not in caplog.text
     assert private_wrong not in caplog.text
     assert private_canonical not in caplog.text
+
+
+def test_context_merges_with_reviewed_corpus_table_fields():
+    settings = VoiceConfig(
+        "test-key",
+        corrections=(CorrectionPair("deep seek", "DeepSeek"),),
+    ).provider_settings()
+    settings["corpus"] = {
+        "boosting_table_id": "boost-table-id",
+        "correct_table_id": "correct-table-id",
+    }
+
+    payload = VolcengineASRClient(settings)._build_payload()
+
+    corpus = payload["request"]["corpus"]
+    assert corpus["boosting_table_id"] == "boost-table-id"
+    assert corpus["correct_table_id"] == "correct-table-id"
+    assert json.loads(corpus["context"])["correct_words"] == {"deep seek": "DeepSeek"}
+    assert "context" not in payload["request"]
+
+
+def test_encoded_raw_websocket_request_nests_context_at_corpus_level_three():
+    client = VolcengineASRClient(
+        VoiceConfig(
+            "test-key",
+            corrections=(CorrectionPair("Elas", "ILaaS"),),
+        ).provider_settings()
+    )
+
+    frame = _encode_full_request(client._build_payload())
+    payload_size = struct.unpack(">I", frame[4:8])[0]
+    payload = json.loads(frame[8 : 8 + payload_size].decode("utf-8"))
+
+    assert "context" not in payload["request"]
+    assert json.loads(payload["request"]["corpus"]["context"])["correct_words"] == {
+        "Elas": "ILaaS"
+    }
+
+
+def test_correction_canonicals_are_prioritized_without_treating_tokens_as_entries():
+    long_ascii_terms = tuple(f"T{index:03d}" + ("x" * 60) for index in range(200))
+    settings = VoiceConfig(
+        "test-key",
+        long_ascii_terms,
+        (
+            CorrectionPair("deep seek", "DeepSeek"),
+            CorrectionPair("deep-seek", "DeepSeek"),
+        ),
+    ).provider_settings()
+
+    payload = VolcengineASRClient(settings)._build_payload()
+    context = json.loads(payload["request"]["corpus"]["context"])
+    hotwords = context["hotwords"]
+
+    assert hotwords[0] == {"word": "DeepSeek"}
+    assert sum(item == {"word": "DeepSeek"} for item in hotwords) == 1
+    selected = [item["word"] for item in hotwords]
+    assert len(hotwords) <= 50
+    assert sum(len(term) for term in selected) <= 50
+    assert sum(len(term.encode("utf-8")) for term in selected) <= 100
+    assert all(term == "DeepSeek" or term in long_ascii_terms for term in selected)
+    assert all(len(term) in {8, 64} for term in selected)
+    assert context["correct_words"] == {
+        "deep seek": "DeepSeek",
+        "deep-seek": "DeepSeek",
+    }
+
+
+def test_hotword_proxy_enforces_utf8_budget_before_codepoint_budget():
+    terms = (
+        ("甲" * 19) + "一",
+        ("乙" * 19) + "二",
+        ("丙" * 19) + "三",
+    )
+    payload = VolcengineASRClient(
+        VoiceConfig("test-key", terms).provider_settings()
+    )._build_payload()
+
+    selected = [
+        item["word"]
+        for item in json.loads(payload["request"]["corpus"]["context"])["hotwords"]
+    ]
+
+    assert selected == list(terms[:1])
+    assert sum(len(term) for term in selected) <= 50
+    assert sum(len(term.encode("utf-8")) for term in selected) <= 100
+    assert sum(len(term) for term in terms[:2]) <= 50
+    assert sum(len(term.encode("utf-8")) for term in terms[:2]) > 100
+
+
+def test_hotword_proxy_keeps_a_separate_short_entry_cap():
+    candidates = (str(index) for index in range(10))
+    latin = (chr(codepoint) for codepoint in range(0x00C0, 0x0250))
+    terms = []
+    seen = set()
+    for term in (*candidates, *latin):
+        key = term.casefold()
+        if not term.isalnum() or key in seen:
+            continue
+        seen.add(key)
+        terms.append(term)
+        if len(terms) == 60:
+            break
+    terms = tuple(terms)
+    payload = VolcengineASRClient(
+        VoiceConfig("test-key", terms).provider_settings()
+    )._build_payload()
+
+    hotwords = json.loads(payload["request"]["corpus"]["context"])["hotwords"]
+
+    assert len(hotwords) == 50
+    assert [item["word"] for item in hotwords] == list(terms[:50])
+    assert sum(len(item["word"].encode("utf-8")) for item in hotwords) <= 100
+
+
+def test_punctuation_bearing_correction_canonical_is_not_added_as_a_hotword():
+    settings = VoiceConfig(
+        "test-key",
+        ("C++", "tab\tword"),
+        corrections=(CorrectionPair("see plus plus", "C++"),),
+    ).provider_settings()
+
+    context = json.loads(
+        VolcengineASRClient(settings)._build_payload()["request"]["corpus"]["context"]
+    )
+
+    assert "hotwords" not in context
+    assert context["correct_words"] == {"see plus plus": "C++"}
 
 
 def test_client_never_applies_a_local_correction_to_provider_results():
@@ -175,6 +313,86 @@ def test_client_never_applies_a_local_correction_to_provider_results():
         9,
     )
     assert events == ["wrong form remains"]
+
+
+def test_result_text_vs_definite_instrumentation_is_content_free(caplog):
+    private_result = "private stale hypothesis"
+    private_definite = "private authoritative result"
+    client = VolcengineASRClient(VoiceConfig("test-key").provider_settings())
+    with client._lock:
+        client._generation = 9
+        client._active = True
+    client.on_result = lambda _text: None
+    client.on_finish = lambda: None
+
+    with caplog.at_level(logging.INFO):
+        client._handle_message(
+            _server_frame(
+                {
+                    "result": {
+                        "text": private_result,
+                        "utterances": [
+                            {
+                                "definite": True,
+                                "start_time": 0,
+                                "end_time": 100,
+                                "text": private_definite,
+                            }
+                        ],
+                    }
+                },
+                final=True,
+            ),
+            9,
+        )
+
+    assert client.result_selection_metrics == ResultSelectionMetrics(
+        frames_with_result_text=1,
+        frames_with_definite=1,
+        mismatch_frames=1,
+    )
+    assert "result representations differed" in caplog.text
+    assert private_result not in caplog.text
+    assert private_definite not in caplog.text
+
+
+def test_single_result_diagnostics_compare_current_frame_scope_not_accumulation(caplog):
+    settings = VoiceConfig("test-key").provider_settings()
+    settings["result_type"] = "single"
+    client = VolcengineASRClient(settings)
+    with client._lock:
+        client._generation = 9
+        client._active = True
+    client.on_result = lambda _text: None
+
+    with caplog.at_level(logging.INFO):
+        for sequence, text in enumerate(("first", "second"), start=1):
+            client._handle_message(
+                _server_frame(
+                    {
+                        "result": {
+                            "text": text,
+                            "utterances": [
+                                {
+                                    "definite": True,
+                                    "start_time": sequence * 100,
+                                    "end_time": sequence * 100 + 50,
+                                    "text": text,
+                                }
+                            ],
+                        }
+                    },
+                    sequence=sequence,
+                ),
+                9,
+            )
+
+    assert client.result_selection_metrics == ResultSelectionMetrics(
+        frames_with_result_text=2,
+        frames_with_definite=2,
+        mismatch_frames=0,
+    )
+    assert "result representations differed" not in caplog.text
 
 
 def test_request_and_audio_binary_envelopes():
