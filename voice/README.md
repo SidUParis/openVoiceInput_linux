@@ -88,15 +88,14 @@ with mode `faithful` or `clean`, stored as a user-owned `0600` file below a
 `0700` directory. Missing means faithful. The daemon freezes the setting once
 at utterance start, so saving during capture affects only the next dictation.
 
-Streaming partials are always raw. Faithful mode commits the authoritative
-provider final unchanged. Clean mode applies the bounded local deterministic
-deletion-only cleaner only at the provider terminal event. It makes no LLM or
-extra network request, never inserts text or substitutes a term, number, or
-letter case, and falls back to raw on any error, oversize,
-excessive/non-replayable edits, or all-content removal. If it changes output,
-the automatic observation is consumed without adaptive extraction; explicit
-review still learns only from raw provider text versus user-entered spoken
-verbatim.
+Streaming partials are always raw. At the terminal event, a bounded local pass
+first applies only manual or explicitly confirmed active corrections. Faithful
+mode then performs no expression cleanup; clean mode applies the separate local
+deterministic deletion-only cleaner. Neither stage calls an LLM or makes an
+extra network request, and each fails open to its input. If either changes
+output, automatic observation is consumed without adaptive extraction;
+explicit review still learns only from raw provider text versus user-entered
+spoken verbatim.
 
 ## Explicit remote-desktop final target
 
@@ -148,13 +147,17 @@ The daemon safely reloads the file before every new dictation. A change affects
 the next dictation without restarting the foreground process or installed user
 service; an invalid replacement fails closed before microphone/provider use.
 
-Each ASR request then sends only those explicit terms through the selected
-provider's reviewed context mechanism. Volcengine receives its documented
-`request.context` hotwords JSON string; Qwen receives request vocabulary and
-OpenAI receives a prompt. Terms never come from command arguments, clipboard, selected text,
-typing history, documents, transcripts, or the Rime database, and they are
-never written to logs. Provider-side handling follows the selected service's
-terms and the user's account configuration.
+Each ASR request then sends a bounded eligible view through the selected
+provider's reviewed context mechanism. Volcengine receives the raw WebSocket
+`request.corpus.context` hotwords JSON string; because its tokenizer is not
+public, the client uses whole-term ceilings of 50 entries, 50 codepoints and
+100 UTF-8 bytes instead of treating the documented 100 tokens as 100 terms.
+The byte ceiling is a defensive proxy, not an inferred tokenizer count.
+Qwen receives request vocabulary and OpenAI receives a prompt. Terms never come
+from command arguments, clipboard, selected text, typing history, documents,
+transcripts, or the Rime database, and they are never written to logs.
+Provider-side handling follows the selected service's terms and the user's
+account configuration.
 
 ## Configurable microphone priority
 
@@ -188,9 +191,11 @@ and conflicting duplicate sources. Corrections are safely reloaded before each
 new dictation, so changing them does not require a service restart.
 
 Each saved pair is compiled into the selected provider's bounded context
-mechanism: Volcengine receives `request.context.correct_words`, while Qwen and
-OpenAI receive vocabulary/prompt context without a promise of exact
-replacement. After a nonempty authoritative final, the
+mechanism: Volcengine receives best-effort guidance in
+`request.corpus.context.correct_words`, while Qwen and OpenAI receive
+vocabulary/prompt context without a promise of exact replacement. Manual and
+explicitly confirmed active pairs are also enforced by a bounded,
+boundary-aware local terminal pass. After a nonempty authoritative final, the
 current alpha enables a bounded five-second adaptive observation by default.
 If the same focused field supplies trustworthy IBus surrounding text, one
 high-confidence replacement can activate immediately; multiple independent
@@ -223,7 +228,7 @@ IBus caret or explicit clipboard). Cancel, failure, final/copy rejection, no
 final, and incomplete audio publish nothing.
 
 Each atomically published `utterances/<utterance_id>/` contains `audio.wav` and
-schema-v4 `record.json` with identifiers, UTC time, explicit-opt-in consent,
+schema-v5 `record.json` with identifiers, UTC time, explicit-opt-in consent,
 audio format/frame counts and hashes, provider/model identity, microphone
 selection/actual-route provenance, three label roles, and a separate delivery
 audit. `provider_final` is
@@ -232,11 +237,13 @@ ground truth. `spoken_verbatim` and `preferred_output` are both null/unreviewed
 until a separate human-review workflow exists.
 
 `delivery.text` is the exact result delivered to the frozen target with
-`machine-derived-unreviewed` status. It stores mode, processor/version,
-content-free outcome, `target` (`caret` or `clipboard`), and replayable deletion
-edits without replacing raw provider text or filling either human label.
+`machine-derived-unreviewed` status. Its ordered pipeline records the bounded
+confirmed-correction stage followed by identity/clean style, including each
+processor/version, content-free outcome, `target` (`caret` or `clipboard`), and
+replayable edits without replacing raw provider text or filling either human
+label.
 
-New records use schema v4. Existing v1/v2/v3 records are not rewritten; all four
+New records use schema v5. Existing v1/v2/v3/v4 records are not rewritten; all five
 versions can coexist below the unchanged `openvoiceinput-dataset-v1` marker. The v2
 `microphone` object stores category, a non-unique privacy-safe fingerprint,
 selection provenance, DJI link state at selection, and bounded actual Pulse

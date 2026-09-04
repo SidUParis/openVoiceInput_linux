@@ -7,7 +7,8 @@ from murmur_voice.adaptive_runtime import (
     AdaptiveObservedCandidate,
 )
 from murmur_voice.audio import AudioDeviceError, MicrophonePolicyError
-from murmur_voice.config import ConfigError, VoiceConfig
+from murmur_voice.confirmed_correction import ConfirmedCorrectionEdit
+from murmur_voice.config import ConfigError, CorrectionPair, VoiceConfig
 from murmur_voice.preedit import AcquireResult, ObservationSnapshot
 from murmur_voice.output_style import OutputDelivery, OutputStyleConfig
 from murmur_voice.output_target import OutputTargetConfig
@@ -873,6 +874,34 @@ def test_clean_mode_keeps_partials_raw_and_cleans_only_terminal_delivery():
     assert review.delivered_text == "我觉得，可以。"
 
 
+def test_confirmed_correction_is_frozen_and_only_changes_terminal_delivery():
+    reasons = []
+    session, asr, _audio, preedit, timers, _order = _session(
+        observation_result_handler=lambda reason: (
+            reasons.append(reason) or AdaptiveObservationResult(reason)
+        ),
+    )
+    asr.terminal_corrections = (CorrectionPair("Elas", "ILaaS"),)
+    session.start()
+    asr.terminal_corrections = (CorrectionPair("Elas", "mutated-too-late"),)
+
+    asr.on_result("Elas is ready")
+    partial = [call for call in preedit.calls if call[0] == "partial"][-1]
+    assert partial[-1] == "Elas is ready"
+    asr.on_finish()
+
+    final = next(call for call in preedit.calls if call[0] == "final")
+    assert final[-1] == "ILaaS is ready"
+    assert session.state is VoiceState.IDLE
+    assert reasons == ["postprocessed-output-not-safe-for-asr-learning"]
+    assert [call[0] for call in preedit.calls].count("finish-observation") == 1
+    assert len(timers) == 2
+    review = session.review_last()
+    assert review is not None
+    assert review.provider_text == "Elas is ready"
+    assert review.delivered_text == "ILaaS is ready"
+
+
 def test_clean_mode_is_frozen_at_start_and_a_save_applies_next_utterance():
     current = [OutputStyleConfig("clean")]
     utterances = iter(("utterance-1", "utterance-2"))
@@ -1297,6 +1326,39 @@ def test_malformed_delivery_factory_can_never_commit_arbitrary_terminal_text():
     assert final[-1] == "raw provider final"
     assert "arbitrary replacement" not in repr(session.review_last())
     assert session.state is VoiceState.OBSERVING
+
+
+def test_delivery_factory_cannot_inject_a_correction_outside_frozen_rules():
+    unauthorized_edit = ConfirmedCorrectionEdit(
+        start=0,
+        end=4,
+        source="Elas",
+        replacement="UNAUTHORIZED",
+    )
+
+    def malicious(_raw, _mode, *, corrections):
+        del corrections
+        return OutputDelivery(
+            mode="faithful",
+            text="UNAUTHORIZED is ready",
+            processor="identity",
+            processor_version=1,
+            outcome="faithful",
+            correction_outcome="corrected",
+            correction_edits=(unauthorized_edit,),
+        )
+
+    session, asr, _audio, preedit, _timers, _order = _session(
+        output_delivery_factory=malicious,
+    )
+    asr.terminal_corrections = (CorrectionPair("Elas", "ILaaS"),)
+    session.start()
+    asr.on_result("Elas is ready")
+
+    asr.on_finish()
+
+    final = next(call for call in preedit.calls if call[0] == "final")
+    assert final[-1] == "Elas is ready"
 
 
 def test_explicit_review_learns_from_raw_provider_not_cleaned_delivery():

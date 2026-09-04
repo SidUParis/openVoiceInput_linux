@@ -423,6 +423,32 @@ def compile_provider_corrections(
     ).pairs
 
 
+def compile_terminal_corrections(
+    manual_pairs: Iterable[CorrectionPair],
+    ledger: AdaptiveLedger,
+    *,
+    limit: int = MAX_CORRECTION_PAIRS,
+) -> tuple[CorrectionPair, ...]:
+    """Compile deterministic delivery rules from explicit authority only.
+
+    Manual pairs are explicit by definition.  Learned pairs must be both
+    active and backed by explicit review; automatically activated strong
+    evidence remains provider guidance until a person confirms it.  Reusing
+    the provider compiler preserves its conflict, overlap, cascade and capacity
+    safeguards for the selected explicit subset.
+    """
+
+    validated = _validated_ledger(ledger)
+    explicit = AdaptiveLedger(
+        entries=tuple(
+            entry
+            for entry in validated.entries
+            if entry.state == "active" and entry.evidence == "explicit"
+        )
+    )
+    return compile_provider_corrections(manual_pairs, explicit, limit=limit)
+
+
 def compile_provider_correction_report(
     manual_pairs: Iterable[CorrectionPair],
     ledger: AdaptiveLedger,

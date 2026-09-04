@@ -178,9 +178,11 @@ See [known changes and limitations](CHANGELOG.md) and the
   commit, without clipboard paste.
 - Default-off RDP compatibility that copies only the authoritative final for
   an explicit manual paste; it does not auto-paste or observe remote text.
-- Faithful final delivery by default, or optional final-only local clean
-  delivery using bounded, deterministic deletion rules. Partials remain raw;
-  cleanup adds no LLM or extra network request and falls back to raw safely.
+- Faithful output style by default, or optional final-only local clean style
+  using bounded, deterministic deletion rules. Manual and explicitly confirmed
+  terminology corrections run in a separate bounded terminal stage. Partials
+  remain raw; neither stage adds an LLM or extra network request, and each fails
+  open to its input.
 - Focus token, D-Bus sender, utterance ID and monotonically increasing revision
   checks; stale or late results are rejected.
 - Cancellation on focus loss, engine disable or sidecar disappearance.
@@ -250,11 +252,11 @@ Direct writes have no local fallback spool. A stalled or disconnected mount
 can lose an unpublished staged record, while already published records remain.
 The selected filesystem controls its effective access and at-rest protection.
 
-New schema-v4 records keep raw `provider_final`, null human
+New schema-v5 records keep raw `provider_final`, null human
 `spoken_verbatim`/`preferred_output`, and actual
 `machine-derived-unreviewed` delivery as separate fields; `delivery.target`
-records `caret` or `clipboard`. Clean deletions are replayable from original
-offsets. Existing v1/v2/v3 records remain immutable;
+records `caret` or `clipboard`. The confirmed-correction and faithful/clean
+stages are replayable in order. Existing v1/v2/v3/v4 records remain immutable;
 usage schema v2 counts delivered characters while retaining v1-reader support.
 
 ## Architecture and safety boundaries

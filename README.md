@@ -129,11 +129,11 @@ surrounding text 写进纠错账本。失焦、超时和整句润色不会被静
 - 数据集根目录下 append-only 的
   `feedback/<utterance_id>/<event_id>.json` 纠错决定（只有捕获成功时）；
 - 未经人工审核的供应商 final。
-- 实际交付到冻结目标的 `delivery`（机器生成、未经复核），以及可从原始 final 重放的删除
-  位置、原因和原片段；`provider_final` 仍单独保留。
+- 实际交付到冻结目标的 `delivery`（机器生成、未经复核），以及可从原始 final
+  按顺序重放的明确术语纠错与清理阶段；`provider_final` 仍单独保留。
 
-新记录使用 schema v4，并在 `delivery.target` 标明 `caret` 或 `clipboard`；旧
-v1/v2/v3 不会改写。usage 索引使用 schema v2，并明确按
+新记录使用 schema v5，并在 `delivery.target` 标明 `caret` 或 `clipboard`；旧
+v1/v2/v3/v4 不会改写。usage 索引使用 schema v2，并明确按
 实际交付文本统计字数，同时继续读取旧 v1 摘要。后续修改不会改写不可变的 `record.json`；可捕获的短纠错作为独立 feedback
 事件保存。`spoken_verbatim` 与 `preferred_output` 仍待未来听音审核流程填写，
 因此这些是有价值的候选数据，不是已经确认的 gold label。

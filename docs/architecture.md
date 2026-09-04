@@ -154,15 +154,16 @@ increasing `revision`. The engine ignores any mismatched, stale, or late event.
 2. In caret mode, a streaming hypothesis replaces the entire voice preedit.
    Clipboard mode does not send or copy partials.
 3. A `definite` two-pass sentence replaces the corresponding hypothesis.
-4. The connection-level final event freezes raw `provider_final`. Faithful mode
-   delivers it unchanged; clean mode runs only the bounded local deletion
-   processor. Failure falls back to raw. In caret mode, a single `commit_text`
-   receives the resulting `delivery.text`. In clipboard mode, exactly that
-   final is copied and the user performs any remote paste; no synthetic
-   `Ctrl+V` is emitted. Partials are never cleaned.
+4. The connection-level final event freezes raw `provider_final`. A bounded
+   terminal correction stage enforces only manual or explicitly confirmed
+   active rules, then faithful mode uses identity while clean mode runs the
+   bounded local deletion processor. Either stage fails open to its input. In
+   caret mode, a single `commit_text` receives the resulting `delivery.text`.
+   In clipboard mode, exactly that final is copied and the user performs any
+   remote paste; no synthetic `Ctrl+V` is emitted. Partials are never changed.
 5. In caret mode, a newer IBus surrounding-text revision anchors the exact committed span.
    If unsupported or ambiguous, commit still succeeds but learning is disabled.
-   If clean delivery changed the final, this observation is consumed
+   If either local delivery stage changed the final, this observation is consumed
    immediately with a content-free skip reason and never reaches extraction.
    Clipboard mode has no trustworthy remote anchor and instead consumes
    observation with `clipboard-output-no-surrounding-text`.
@@ -191,8 +192,9 @@ also freezes the exact captured PCM and offers it to a bounded background
 queue. The writer completes `audio.wav` and `record.json` below `.pending`, then
 atomically renames that unchanged two-file pair into the selected dataset's
 `utterances/` tree. It subsequently publishes a transcript-free summary at
-`usage/<utterance_id>.json`. Schema-v4 `record.json` keeps raw `provider_final`
-as an unreviewed pseudo-label and stores delivery/auditable deletions plus the
+`usage/<utterance_id>.json`. Schema-v5 `record.json` keeps raw `provider_final`
+as an unreviewed pseudo-label and stores the auditable correction/cleanup
+delivery pipeline plus the
 frozen `caret` or `clipboard` target separately;
 `spoken_verbatim`/`preferred_output` remain null. Usage schema v2
 counts delivered non-whitespace characters and readers still accept v1.

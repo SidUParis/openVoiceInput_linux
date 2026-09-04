@@ -11,7 +11,7 @@ from dataclasses import replace
 import pytest
 
 import murmur_voice.data_collection as data_collection
-from murmur_voice.config import ConfigError
+from murmur_voice.config import ConfigError, CorrectionPair
 from murmur_voice.data_collection import (
     CHANNELS,
     SAMPLE_RATE,
@@ -162,15 +162,29 @@ def test_completed_record_is_atomic_wav_plus_raw_and_faithful_delivery(tmp_path)
         "spoken_verbatim": {"text": None, "review_status": "unreviewed"},
         "preferred_output": {"text": None, "review_status": "unreviewed"},
     }
-    assert document["schema_version"] == 4
+    assert document["schema_version"] == 5
     assert document["delivery"] == {
         "target": "caret",
         "mode": "faithful",
         "text": "teacher final",
         "review_status": "machine-derived-unreviewed",
-        "processor": {"name": "identity", "version": 1},
-        "outcome": "faithful",
-        "edits": [],
+        "pipeline": [
+            {
+                "input_basis": "provider-final",
+                "processor": {
+                    "name": "openvoice-confirmed-correction",
+                    "version": 1,
+                },
+                "outcome": "unchanged",
+                "edits": [],
+            },
+            {
+                "input_basis": "previous-stage",
+                "processor": {"name": "identity", "version": 1},
+                "outcome": "faithful",
+                "edits": [],
+            },
+        ],
     }
     assert document["recorded_at_utc"] == "2026-08-30T12:00:00Z"
     usage_path = selected / "openvoiceinput-dataset-v1" / "usage" / "utterance-1.json"
@@ -217,7 +231,7 @@ def test_clean_delivery_keeps_raw_label_and_usage_counts_delivered_text(tmp_path
     assert document["labels"]["spoken_verbatim"]["text"] is None
     assert document["labels"]["preferred_output"]["text"] is None
     assert document["delivery"]["text"] == delivery.text
-    assert document["delivery"]["outcome"] == "cleaned"
+    assert document["delivery"]["pipeline"][1]["outcome"] == "cleaned"
     assert document["delivery"]["review_status"] == ("machine-derived-unreviewed")
     assert usage["non_whitespace_character_count"] == sum(
         not character.isspace() for character in delivery.text
@@ -228,7 +242,47 @@ def test_clean_delivery_keeps_raw_label_and_usage_counts_delivered_text(tmp_path
     assert runtime.close()
 
 
-def test_schema_v4_records_clipboard_as_delivery_target_without_changing_usage_v2(
+def test_schema_v5_retains_raw_provider_text_and_replayable_correction_stage(tmp_path):
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    config_path = tmp_path / "private" / "data-collection.json"
+    save_data_collection_config(True, selected, config_path)
+    runtime = DataCollectionRuntime(config_path, session_id="session-1")
+    recorder = runtime.begin("utterance-corrected")
+    assert recorder is not None
+    raw = "Elas is ready"
+    delivery = deliver_output(
+        raw,
+        "faithful",
+        corrections=(CorrectionPair("Elas", "ILaaS"),),
+    )
+    recorder.add_audio(b"\x00\x00" * 100)
+
+    recorder.commit(raw, delivery)
+    assert runtime.wait_until_idle()
+
+    record_path = (
+        selected
+        / "openvoiceinput-dataset-v1"
+        / "utterances"
+        / "utterance-corrected"
+        / "record.json"
+    )
+    document = json.loads(record_path.read_text(encoding="utf-8"))
+    assert document["schema_version"] == 5
+    assert document["labels"]["provider_final"]["text"] == raw
+    assert document["delivery"]["text"] == "ILaaS is ready"
+    correction_stage = document["delivery"]["pipeline"][0]
+    assert correction_stage["input_basis"] == "provider-final"
+    assert correction_stage["outcome"] == "corrected"
+    replay = raw
+    for edit in reversed(correction_stage["edits"]):
+        replay = replay[: edit["start"]] + edit["replacement"] + replay[edit["end"] :]
+    assert replay == document["delivery"]["text"]
+    assert runtime.close()
+
+
+def test_schema_v5_records_clipboard_as_delivery_target_without_changing_usage_v2(
     tmp_path,
 ):
     selected = tmp_path / "selected"
@@ -254,7 +308,7 @@ def test_schema_v4_records_clipboard_as_delivery_target_without_changing_usage_v
     usage = json.loads(
         (root / "usage" / "utterance-clipboard.json").read_text(encoding="utf-8")
     )
-    assert record["schema_version"] == 4
+    assert record["schema_version"] == 5
     assert record["delivery"]["target"] == "clipboard"
     assert record["delivery"]["text"] == raw
     assert usage["schema_version"] == 2
@@ -289,7 +343,7 @@ def test_invalid_delivery_target_discards_record_before_queueing(tmp_path):
     assert runtime.close()
 
 
-def test_new_schema_v4_publication_never_rewrites_existing_v1_v2_or_v3_records(
+def test_new_schema_v5_publication_never_rewrites_existing_v1_through_v4_records(
     tmp_path,
 ):
     selected = tmp_path / "selected"
@@ -298,7 +352,7 @@ def test_new_schema_v4_publication_never_rewrites_existing_v1_v2_or_v3_records(
     save_data_collection_config(True, selected, config_path)
     records_root = selected / "openvoiceinput-dataset-v1" / "utterances"
     sentinels = {}
-    for version in (1, 2, 3):
+    for version in (1, 2, 3, 4):
         record_root = records_root / f"legacy-v{version}"
         record_root.mkdir(mode=0o700)
         payload = f'{{"schema_version":{version},"legacy":"unchanged"}}\n'.encode()
@@ -308,7 +362,7 @@ def test_new_schema_v4_publication_never_rewrites_existing_v1_v2_or_v3_records(
         sentinels[record_path] = payload
 
     runtime = DataCollectionRuntime(config_path, session_id="session-1")
-    recorder = runtime.begin("utterance-v4")
+    recorder = runtime.begin("utterance-v5")
     assert recorder is not None
     recorder.add_audio(b"\x00\x00" * 100)
     recorder.commit("provider final", deliver_output("provider final", "clean"))
@@ -316,9 +370,9 @@ def test_new_schema_v4_publication_never_rewrites_existing_v1_v2_or_v3_records(
 
     assert all(path.read_bytes() == payload for path, payload in sentinels.items())
     current = json.loads(
-        (records_root / "utterance-v4" / "record.json").read_text(encoding="utf-8")
+        (records_root / "utterance-v5" / "record.json").read_text(encoding="utf-8")
     )
-    assert current["schema_version"] == 4
+    assert current["schema_version"] == 5
     assert current["delivery"]["target"] == "caret"
     assert runtime.close()
 
@@ -448,7 +502,7 @@ def test_record_binds_the_actual_provider_without_changing_label_semantics(tmp_p
     assert runtime.close()
 
 
-def test_schema_v4_records_selected_and_actual_microphone_without_private_name(
+def test_schema_v5_records_selected_and_actual_microphone_without_private_name(
     tmp_path,
 ):
     selected = tmp_path / "selected"
@@ -495,7 +549,7 @@ def test_schema_v4_records_selected_and_actual_microphone_without_private_name(
     record_path = dataset_root / "utterances" / "utterance-microphone" / "record.json"
     document = json.loads(record_path.read_text(encoding="utf-8"))
     assert marker["schema_version"] == 1
-    assert document["schema_version"] == 4
+    assert document["schema_version"] == 5
     assert document["microphone"]["selection"] == {
         "backend": "pulse",
         "category": "dji",

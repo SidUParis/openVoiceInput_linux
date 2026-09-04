@@ -40,9 +40,10 @@ Open Voice Input Linux is designed to preserve these properties:
    failure cannot block dictation.
 10. DJI transmitter status affects only the daemon's new capture stream and
     never changes a playback sink or requests a system-wide default source.
-11. Clean delivery is local, final-only, deletion-only, replayable and bounded.
-    A processor failure or invalid result falls back to raw provider text; a
-    machine-cleaned span is never used as automatic ASR correction evidence.
+11. Terminal processing is local, final-only, replayable and bounded. The first
+    stage enforces only manual or explicitly confirmed corrections; the second
+    clean stage is deletion-only. Each stage fails open to its input, and any
+    machine-changed span is never used as automatic ASR correction evidence.
 12. Clipboard delivery is disabled unless the user explicitly selects it. It
     writes only an authoritative final, never reads existing clipboard data,
     never auto-pastes, and never treats remote edits as adaptive evidence.
@@ -257,9 +258,9 @@ The background writer first creates a complete private staging directory under
 `openvoiceinput-dataset-v1/.pending`, including WAV and JSON hashes, then uses
 one atomic rename into `utterances/<utterance_id>`. The JSON identifies
 `provider_final` as `teacher-unreviewed`; it leaves both `spoken_verbatim` and
-`preferred_output` null and unreviewed. Schema v4 separately records the frozen
-delivery target, actual machine-derived delivery, and replayable deletion
-metadata while retaining raw provider text. This prevents an ASR result or
+`preferred_output` null and unreviewed. Schema v5 separately records the frozen
+delivery target, actual machine-derived delivery, and replayable ordered
+correction/cleanup metadata while retaining raw provider text. This prevents an ASR result or
 cleaned output from being
 silently presented as a human-verified acoustic label or preferred text.
 

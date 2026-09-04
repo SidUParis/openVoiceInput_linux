@@ -29,6 +29,7 @@ from .adaptive_store import (
     adaptive_statistics,
     compile_provider_correction_report,
     compile_provider_corrections,
+    compile_terminal_corrections,
     normalized_key,
     parse_adaptive_ledger,
     record_evidence,
@@ -189,6 +190,7 @@ class AdaptiveCorrectionRuntime:
         with self._lock:
             config, vocabulary, manual, ledger = self._load_snapshot()
             try:
+                terminal_corrections = compile_terminal_corrections(manual, ledger)
                 effective = replace(
                     config,
                     hotwords=vocabulary,
@@ -201,7 +203,12 @@ class AdaptiveCorrectionRuntime:
         # status-only commands.
         from .providers import create_asr_client
 
-        return create_asr_client(effective)
+        client = create_asr_client(effective)
+        # This tuple comes from the same locked snapshot as the provider
+        # context.  VoiceSession copies it before opening the network or mic,
+        # so an edit saved during capture applies only to the next utterance.
+        client.terminal_corrections = terminal_corrections
+        return client
 
     def observe(self, snapshot: Any) -> bool:
         """Compatibility wrapper returning whether a provider rule activated."""

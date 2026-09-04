@@ -3,7 +3,8 @@
 Open Voice Input Linux treats a live ASR hypothesis as a draft. It can be wrong
 and may be replaced several times before the provider emits the authoritative
 two-pass result. Only that final result is eligible for terminal delivery; the
-user can choose the raw final or conservative local deletion-only cleanup.
+user can choose faithful or conservative clean style after any explicitly
+confirmed terminology correction has been applied locally.
 
 ## Accuracy layers
 
@@ -51,13 +52,20 @@ frames can still build on the definite intervals retained before a malformed
 frame. Any result type other than `full` or `single` is rejected when the
 client is initialized.
 
+The client also keeps content-free per-connection counters for frames carrying
+`result.text`, frames carrying at least one `definite` utterance, and frames
+where the selected definite assembly differs from `result.text`. A mismatch log
+contains only the fixed event name: neither representation, its length, a
+correction rule, nor a provider payload is logged.
+
 ### 2. Faithful or clean terminal delivery
 
 The private `output-style.json` has two modes and is frozen when each utterance
 starts. A missing file means `faithful`, so an upgrade never silently changes
 output. Saving during a recording affects only the next utterance.
 
-- `faithful` commits the raw authoritative provider final unchanged.
+- `faithful` performs no expression cleanup. Explicitly confirmed terminology
+  corrections still apply in the separate correction stage described below.
 - `clean` keeps every live partial raw, then runs a bounded deterministic local
   cleaner only after the provider terminal event. It deletes only standalone
   high-confidence hesitations and adjacent exact/self-restart fragments. It
@@ -67,11 +75,11 @@ output. Saving during a recording affects only the next utterance.
 
 The cleaner accepts at most 4,096 codepoints and 64 deletion operations. An
 exception, oversized input, excessive edit count, non-replayable result, or a
-result that would remove all lexical content falls back to the raw provider
-final. Cleanup therefore never turns a valid final into an input failure. Each
+result that would remove all lexical content falls back to the correction-stage
+result. Cleanup therefore never turns a valid final into an input failure. Each
 successful deletion retains original-codepoint offsets, source text, kind,
-reason and empty replacement so an opted-in schema-v4 record can replay the
-exact delivered text from `provider_final`.
+reason and empty replacement so an opted-in schema-v5 record can replay the
+exact delivered text through both stages from `provider_final`.
 
 When clean delivery differs from the provider final, the daemon immediately
 consumes the IBus observation lease and records the content-free reason
@@ -79,8 +87,8 @@ consumes the IBus observation lease and records the content-free reason
 extraction for that utterance: edits to machine-cleaned text are not safe
 evidence about the raw ASR span. Explicit review still uses raw
 `provider_final` as the only correction source; delivered text is read-only
-context. If cleanup is unchanged or falls back to raw, normal observation is
-preserved.
+context. Normal observation is preserved only when both terminal stages leave
+the provider final unchanged.
 
 ### 3. Explicit personal vocabulary
 
@@ -100,11 +108,22 @@ The local boundary is deliberately conservative:
 - the file is reloaded before each new dictation, so an idle daemon does not
   need to be restarted after a change.
 
-For a non-empty list, every ASR request adds `request.context` as the compact
-JSON string documented by Volcengine, containing `hotwords` objects with one
-`word` each. Empty lists omit `context` completely. No weight, automatic
-ranking, or managed table is included in this first local implementation. The
-bounded GTK4 settings window edits the same explicit list one term per line.
+For a non-empty list, every Volcengine ASR request adds the compact context JSON
+string at raw-wire `request.corpus.context`, containing `hotwords` objects with
+one `word` each. Empty context omits `corpus` unless a managed table selector is
+present. Confirmed correction canonicals are deduplicated and considered before
+explicit vocabulary, so terminology correction receives priority for the
+bounded recognition boost. Volcengine publishes a 100-token limit but does not
+expose this endpoint's tokenizer, so the client never equates one entry with one
+token. It uses three defensive content ceilings instead: at most 50 complete
+terms, 50 Unicode codepoints and 100 UTF-8 bytes. The byte ceiling is a
+byte-level worst-case proxy, not a claim that the private tokenizer count is
+known. A term that does not fit is skipped rather than split. Only
+letters/numbers and literal spaces enter this provider subfield; punctuation
+and other whitespace/control forms are excluded without removing their bounded
+`correct_words` or local terminal rule. No weight or automatic ranking is
+included. The bounded GTK4 settings window edits the explicit list one term per
+line.
 
 Volcengine separately documents request-level hotwords and managed hotword
 tables. Its managed tables support up to 5,000 terms, a per-term weight from 1
@@ -130,16 +149,30 @@ request-level pair count, phrase-length limit, or matching-boundary guarantee:
 - the file is reloaded before each new dictation.
 
 For a non-empty mapping, the daemon merges `correct_words` with any existing
-`hotwords` inside the same compact `request.context` JSON string documented by
-Volcengine. The provider performs the correction during recognition. The
-client does not run `.replace()` or a post-hoc term substitution, so it cannot
-accidentally alter an unrelated committed phrase. The optional clean delivery
-above is deletion-only and cannot change one spelling into another. Nothing is learned
-from partial hypotheses or from unrelated typing or clipboard content.
+`hotwords` inside the same compact raw-wire `request.corpus.context` string.
+Managed `boosting_table_*` and `correct_table_*` corpus selectors, when supplied
+by reviewed code, remain siblings of `context`. Volcengine's SDK documentation
+shows the inner `correct_words` shape, while the raw WebSocket parameter table
+and official Go demo establish the `request.corpus.context` carrier. The dynamic
+map is therefore sent as best-effort provider guidance, not treated as proof
+that the provider applied a replacement.
 
-See the official [streaming SDK
+At the terminal event, manual pairs and active adaptive pairs backed by explicit
+review are applied once locally before output-style cleanup. Automatically
+activated strong evidence remains provider guidance until a person confirms it.
+The bounded pass is leftmost-longest, non-overlapping and non-cascading. ASCII
+sources match exact letter case, require lexical boundaries, and are skipped in
+common URL, dotted-name, identifier and Markdown-code contexts, so `Elas` can become `ILaaS` without
+changing `Elastic`, `Elasticsearch`, a URL path or a code token. Input and
+corrected output are each limited to 4,096 codepoints and 16 KiB, with at most
+64 replacements; limit, validation or processor failure preserves the raw
+provider final for that stage. Nothing is
+learned from partial hypotheses or unrelated typing or clipboard content.
+
+See the official [raw WebSocket API](https://www.volcengine.com/docs/6561/1354869)
+for the `request.corpus.context` hierarchy and the [streaming SDK
 example](https://www.volcengine.com/docs/6561/1395846), which documents
-`{"correct_words":{"deep seek":"DeepSeek"}}` inside `context`.
+`{"correct_words":{"deep seek":"DeepSeek"}}` inside the context string.
 
 ### 5. Bounded adaptive correction memory
 
@@ -153,9 +186,9 @@ replacement can activate immediately. Several independent bounded
 replacements are split into medium-confidence candidates and stay inactive
 until the user confirms them; the daemon never rewrites text already corrected.
 
-If clean terminal delivery removed anything, this observation is consumed
-without extraction as described above. Unchanged clean output and faithful
-output continue through the normal five-second path.
+If either terminal stage changed anything, this observation is consumed without
+extraction as described above. Unchanged clean or faithful output continues
+through the normal five-second path.
 
 This intentionally rejects ambiguous feedback:
 
@@ -233,10 +266,12 @@ learned mappings, source or canonical overlaps, provider cascades, and cycles
 are suppressed instead of silently replacing one another; more-specific active
 mappings are preferred.
 The private ledger may retain more observations, but the combined
-`context.correct_words` view sent for one provider request remains bounded to
-50 pairs. Reload happens at each dictation, with no service restart. These are
-provider hints and correction memory, not post-hoc local replacement, a
-generative rewrite, online model training, or an autoregressive learner.
+`request.corpus.context.correct_words` view sent for one provider request
+remains bounded to 50 pairs. Reload happens at each dictation, with no service
+restart. The provider view may include safe active automatic evidence; the
+deterministic terminal view contains only manual or explicitly confirmed active
+pairs. Neither path calls a generative model, trains online, or runs an
+autoregressive learner.
 When the user confirms a retained candidate, the runtime atomically replaces
 the private adaptive ledger, reloads that on-disk generation, and recompiles
 the provider view before reporting that it will be available to the next
@@ -299,8 +334,9 @@ is written while collection is disabled.
 The separate collector can now retain an accepted utterance, but only after an
 explicit opt-in and only below an existing local or mounted folder selected by
 the user. It stores the exact 16 kHz mono signed 16-bit WAV and a versioned JSON
-schema-v4 record. It retains raw `provider_final` as the pseudo-label and stores
-the actual machine-derived delivery, frozen target, and replayable deletions
+schema-v5 record. It retains raw `provider_final` as the pseudo-label and stores
+the actual machine-derived delivery, frozen target, and replayable correction
+and cleanup stages
 separately. The
 audio/provider-final pair is a future review candidate, not a gold
 sample or evidence that self-training is safe.

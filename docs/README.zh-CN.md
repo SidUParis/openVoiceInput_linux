@@ -252,9 +252,10 @@ provider view 合计仍不超过 50 对。这是确定性的纠错记忆，不�
 采集会阻止尚未发布的排队记录继续发布，不会删除已经发布的数据。
 
 软件不做应用层静态加密；实际访问权限和静态保护由用户所选文件系统决定。
-新 `record.json` 使用 schema v4：原始 `provider_final`、机器生成且未经复核的
+新 `record.json` 使用 schema v5：原始 `provider_final`、机器生成且未经复核的
 `delivery`、仍为空的两个人工标签彼此独立，并由 `delivery.target` 标明 `caret`
-或 `clipboard`；旧 v1/v2/v3 不会改写。usage v2
+或 `clipboard`；`delivery.pipeline` 可从原始 final 依次重放明确术语纠错与
+faithful/clean 阶段；旧 v1/v2/v3/v4 不会改写。usage v2
 明确按实际交付文本统计字符，同时仍兼容旧 v1 摘要。
 完整 SSHFS、断线恢复、权限验证和 rclone 操作见
 [远程数据集存储指南](remote-dataset-storage.md)，标签边界见

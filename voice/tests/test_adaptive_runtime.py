@@ -179,10 +179,12 @@ def test_each_client_factory_call_hot_reloads_manual_vocabulary_and_adaptive(
     runtime, config, vocabulary, corrections, adaptive = _runtime(tmp_path)
     del config
     settings = []
+    clients = []
 
     class FakeClient:
         def __init__(self, provider_settings):
             settings.append(provider_settings)
+            clients.append(self)
 
     from murmur_voice import volcengine
 
@@ -191,7 +193,16 @@ def test_each_client_factory_call_hot_reloads_manual_vocabulary_and_adaptive(
     save_vocabulary(("Austral",), vocabulary)
     save_corrections((CorrectionPair("Ostro", "Austral"),), corrections)
     save_adaptive_ledger(
-        AdaptiveLedger(entries=(AdaptiveEntry("bench mark", "benchmark"),)),
+        AdaptiveLedger(
+            entries=(
+                AdaptiveEntry("bench mark", "benchmark"),
+                AdaptiveEntry(
+                    "Elas",
+                    "ILaaS",
+                    evidence="explicit",
+                ),
+            )
+        ),
         adaptive,
     )
     runtime.create_asr_client()
@@ -202,6 +213,12 @@ def test_each_client_factory_call_hot_reloads_manual_vocabulary_and_adaptive(
     assert settings[1]["corrections"] == (
         CorrectionPair("Ostro", "Austral"),
         CorrectionPair("bench mark", "benchmark"),
+        CorrectionPair("Elas", "ILaaS"),
+    )
+    assert clients[0].terminal_corrections == ()
+    assert clients[1].terminal_corrections == (
+        CorrectionPair("Ostro", "Austral"),
+        CorrectionPair("Elas", "ILaaS"),
     )
 
 

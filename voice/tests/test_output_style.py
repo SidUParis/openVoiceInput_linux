@@ -7,7 +7,11 @@ from dataclasses import replace
 import pytest
 
 from murmur_voice.clean_expression import CleanExpressionEdit, CleanExpressionResult
-from murmur_voice.config import ConfigError
+from murmur_voice.confirmed_correction import (
+    ConfirmedCorrectionEdit,
+    ConfirmedCorrectionResult,
+)
+from murmur_voice.config import ConfigError, CorrectionPair
 from murmur_voice.output_style import (
     OUTPUT_PROCESSOR_NAME,
     OUTPUT_PROCESSOR_VERSION,
@@ -102,35 +106,157 @@ def test_clean_delivery_has_replayable_machine_derived_audit():
         "mode": "clean",
         "text": "我觉得，可以。",
         "review_status": "machine-derived-unreviewed",
-        "processor": {
-            "name": OUTPUT_PROCESSOR_NAME,
-            "version": OUTPUT_PROCESSOR_VERSION,
-        },
-        "outcome": "cleaned",
-        "edits": [
+        "pipeline": [
             {
-                "start": 0,
-                "end": 1,
-                "kind": "self-repetition",
-                "reason": "adjacent-exact-restart",
-                "source": "我",
-                "replacement": "",
+                "input_basis": "provider-final",
+                "processor": {
+                    "name": "openvoice-confirmed-correction",
+                    "version": 1,
+                },
+                "outcome": "unchanged",
+                "edits": [],
             },
             {
-                "start": 5,
-                "end": 7,
-                "kind": "filler",
-                "reason": "standalone-hesitation",
-                "source": "呃，",
-                "replacement": "",
+                "input_basis": "previous-stage",
+                "processor": {
+                    "name": OUTPUT_PROCESSOR_NAME,
+                    "version": OUTPUT_PROCESSOR_VERSION,
+                },
+                "outcome": "cleaned",
+                "edits": [
+                    {
+                        "start": 0,
+                        "end": 1,
+                        "kind": "self-repetition",
+                        "reason": "adjacent-exact-restart",
+                        "source": "我",
+                        "replacement": "",
+                    },
+                    {
+                        "start": 5,
+                        "end": 7,
+                        "kind": "filler",
+                        "reason": "standalone-hesitation",
+                        "source": "呃，",
+                        "replacement": "",
+                    },
+                ],
             },
         ],
     }
     replay = raw
-    for edit in reversed(document["edits"]):
-        assert replay[edit["start"] : edit["end"]] == edit["source"]
-        replay = replay[: edit["start"]] + edit["replacement"] + replay[edit["end"] :]
+    for stage in document["pipeline"]:
+        for edit in reversed(stage["edits"]):
+            assert replay[edit["start"] : edit["end"]] == edit["source"]
+            replay = (
+                replay[: edit["start"]] + edit["replacement"] + replay[edit["end"] :]
+            )
     assert replay == document["text"]
+
+
+def test_confirmed_correction_runs_before_clean_and_both_stages_replay():
+    raw = "Elas 我我继续。"
+
+    delivery = deliver_output(
+        raw,
+        "clean",
+        corrections=(CorrectionPair("Elas", "ILaaS"),),
+    )
+    document = delivery.as_record_document()
+
+    assert delivery.text == "ILaaS 我继续。"
+    assert delivery.changed is True
+    assert [stage["outcome"] for stage in document["pipeline"]] == [
+        "corrected",
+        "cleaned",
+    ]
+    replay = raw
+    for stage in document["pipeline"]:
+        for edit in reversed(stage["edits"]):
+            assert replay[edit["start"] : edit["end"]] == edit["source"]
+            replay = (
+                replay[: edit["start"]] + edit["replacement"] + replay[edit["end"] :]
+            )
+    assert replay == delivery.text
+
+
+def test_confirmed_correction_failure_is_raw_fail_open_before_clean():
+    raw = "Elas 我我继续。"
+
+    def fail(_text, _pairs):
+        raise RuntimeError(raw)
+
+    delivery = deliver_output(
+        raw,
+        "clean",
+        corrections=(CorrectionPair("Elas", "ILaaS"),),
+        corrector=fail,
+    )
+
+    assert delivery.text == "Elas 我继续。"
+    assert delivery.correction_outcome == "processor-error"
+    assert delivery.correction_edits == ()
+    assert raw not in repr(delivery)
+
+
+def test_unauthorized_replayable_correction_is_rejected_and_fails_open():
+    raw = "Elas is ready"
+
+    def malicious(_text, _pairs):
+        edit = ConfirmedCorrectionEdit(
+            start=0,
+            end=4,
+            source="Elas",
+            replacement="UNAUTHORIZED",
+        )
+        return ConfirmedCorrectionResult(
+            "UNAUTHORIZED is ready",
+            (edit,),
+            "corrected",
+        )
+
+    delivery = deliver_output(
+        raw,
+        "faithful",
+        corrections=(CorrectionPair("Elas", "ILaaS"),),
+        corrector=malicious,
+    )
+
+    assert delivery.text == raw
+    assert delivery.correction_outcome == "processor-error"
+    assert delivery.correction_edits == ()
+
+
+def test_final_validator_rechecks_frozen_correction_authority():
+    raw = "Elas is ready"
+    valid = deliver_output(
+        raw,
+        "faithful",
+        corrections=(CorrectionPair("Elas", "ILaaS"),),
+    )
+
+    with pytest.raises(ValueError, match="authority"):
+        validate_output_delivery(
+            raw,
+            valid,
+            allowed_corrections=(CorrectionPair("Elas", "Different"),),
+        )
+
+
+def test_correction_expansion_over_terminal_limit_delivers_raw():
+    prefix = " ".join("x" for _ in range(64))
+    raw = prefix + (" y" * ((4096 - len(prefix)) // 2))
+    raw = raw + ("z" * (4096 - len(raw)))
+
+    delivery = deliver_output(
+        raw,
+        "faithful",
+        corrections=(CorrectionPair("x", "X" * 64),),
+    )
+
+    assert delivery.text == raw
+    assert delivery.correction_outcome == "output-too-large"
+    assert delivery.correction_edits == ()
 
 
 def test_clean_delivery_does_not_change_terms_numbers_or_letter_case():

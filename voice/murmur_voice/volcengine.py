@@ -70,6 +70,22 @@ _MAX_DECOMPRESSED_PAYLOAD_BYTES = 8 * 1024 * 1024
 _MAX_TRANSCRIPT_CODEPOINTS = 4096
 _MAX_TRANSCRIPT_UTF8_BYTES = 16 * 1024
 _SUPPORTED_RESULT_TYPES = frozenset(("full", "single"))
+_CORPUS_TABLE_FIELDS = frozenset(
+    {
+        "boosting_table_name",
+        "boosting_table_id",
+        "correct_table_name",
+        "correct_table_id",
+    }
+)
+_MAX_CORPUS_TABLE_VALUE_CHARACTERS = 256
+# Volcengine publishes a token limit, not an entry limit, and does not expose
+# the tokenizer used by this endpoint. These three independent content ceilings
+# include a 100-byte worst-case proxy; they do not claim to compute provider
+# tokens. Whole terms are kept or skipped, never truncated into a new hotword.
+_MAX_REQUEST_HOTWORD_ENTRIES = 50
+_MAX_REQUEST_HOTWORD_CODEPOINTS = 50
+_MAX_REQUEST_HOTWORD_UTF8_BYTES = 100
 
 
 class VolcengineProtocolError(RuntimeError):
@@ -98,6 +114,15 @@ class ParsedFrame:
     is_last: bool
     payload: Any = None
     error_code: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResultSelectionMetrics:
+    """Content-free counters comparing provider result representations."""
+
+    frames_with_result_text: int = 0
+    frames_with_definite: int = 0
+    mismatch_frames: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +242,103 @@ def _validate_transcript_size(text: str) -> str:
     ):
         raise ValueError("Volcengine ASR transcript exceeds its safe limit")
     return text
+
+
+def _normalize_corpus(value: Any) -> dict[str, str]:
+    """Validate only documented corpus table selectors supplied by callers."""
+
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or not set(value).issubset(_CORPUS_TABLE_FIELDS):
+        raise ValueError("unsupported Volcengine corpus settings")
+    corpus: dict[str, str] = {}
+    for name, raw in value.items():
+        if (
+            not isinstance(raw, str)
+            or any(not character.isprintable() for character in raw)
+            or not raw.strip()
+            or len(raw.strip()) > _MAX_CORPUS_TABLE_VALUE_CHARACTERS
+        ):
+            raise ValueError("invalid Volcengine corpus table selector")
+        corpus[name] = raw.strip()
+    return corpus
+
+
+def _bounded_request_hotwords(
+    vocabulary: tuple[str, ...],
+    corrections: tuple[Any, ...],
+) -> tuple[str, ...]:
+    """Prioritise correction canonicals, then fill the request hotword budget."""
+
+    selected: list[str] = []
+    seen: set[str] = set()
+    selected_codepoints = 0
+    selected_utf8_bytes = 0
+    correction_canonicals = (pair.canonical for pair in corrections)
+    values = (*correction_canonicals, *vocabulary)
+    for value in values:
+        key = value.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        if not _is_supported_request_hotword(value):
+            continue
+        try:
+            value_utf8_bytes = len(value.encode("utf-8"))
+        except UnicodeEncodeError:
+            continue
+        if (
+            selected_codepoints + len(value) > _MAX_REQUEST_HOTWORD_CODEPOINTS
+            or selected_utf8_bytes + value_utf8_bytes > _MAX_REQUEST_HOTWORD_UTF8_BYTES
+        ):
+            continue
+        selected.append(value)
+        selected_codepoints += len(value)
+        selected_utf8_bytes += value_utf8_bytes
+        if len(selected) == _MAX_REQUEST_HOTWORD_ENTRIES:
+            break
+    return tuple(selected)
+
+
+def _is_supported_request_hotword(value: str) -> bool:
+    """Keep only whole punctuation-free terms accepted by provider guidance."""
+
+    return any(character.isalnum() for character in value) and all(
+        character.isalnum() or character == " " for character in value
+    )
+
+
+def _observe_result_selection(
+    metrics: ResultSelectionMetrics,
+    payload: Any,
+    selected_text: str,
+    result_type: str,
+) -> tuple[ResultSelectionMetrics, bool]:
+    full_text = _extract_full_result_text(payload)
+    frame = _timed_utterances(payload)
+    has_definite = frame.state is _UtteranceFrameState.VALID and any(
+        item.definite for item in frame.utterances
+    )
+    comparison_text = selected_text
+    if result_type == "single" and has_definite:
+        comparison_text = "".join(
+            item.text
+            for item in sorted(
+                (item for item in frame.utterances if item.definite),
+                key=lambda item: (item.start_time, item.end_time),
+            )
+        )
+    mismatch = bool(full_text and has_definite and full_text != comparison_text)
+    return (
+        ResultSelectionMetrics(
+            frames_with_result_text=(
+                metrics.frames_with_result_text + int(bool(full_text))
+            ),
+            frames_with_definite=metrics.frames_with_definite + int(has_definite),
+            mismatch_frames=metrics.mismatch_frames + int(mismatch),
+        ),
+        mismatch,
+    )
 
 
 class _VolcengineResultAssembler:
@@ -604,6 +726,10 @@ class VolcengineASRClient:
         )
         self._hotwords = normalize_vocabulary_terms(settings.get("hotwords", ()))
         self._corrections = normalize_correction_pairs(settings.get("corrections", ()))
+        self.terminal_corrections = normalize_correction_pairs(
+            settings.get("terminal_corrections", self._corrections)
+        )
+        self._corpus = _normalize_corpus(settings.get("corpus"))
         raw_result_type = (
             settings["result_type"] if "result_type" in settings else "full"
         )
@@ -640,6 +766,7 @@ class VolcengineASRClient:
         self._generation = 0
         self._last_text = ""
         self._result_assembler = _VolcengineResultAssembler(self._result_type)
+        self._result_selection_metrics = ResultSelectionMetrics()
 
         self.on_open: Callable[[], None] | None = None
         self.on_result: Callable[[str], None] | None = None
@@ -657,6 +784,11 @@ class VolcengineASRClient:
         with self._lock:
             return len(self._pending_audio)
 
+    @property
+    def result_selection_metrics(self) -> ResultSelectionMetrics:
+        with self._lock:
+            return self._result_selection_metrics
+
     def _build_headers(self, connect_id: str | None = None) -> dict[str, str]:
         return {
             "X-Api-Key": self._api_key,
@@ -667,9 +799,14 @@ class VolcengineASRClient:
 
     def _build_payload(self) -> dict[str, Any]:
         request = dict(self._request_options)
+        corpus = dict(self._corpus)
         context: dict[str, Any] = {}
-        if self._hotwords:
-            context["hotwords"] = [{"word": term} for term in self._hotwords]
+        request_hotwords = _bounded_request_hotwords(
+            self._hotwords,
+            self._corrections,
+        )
+        if request_hotwords:
+            context["hotwords"] = [{"word": term} for term in request_hotwords]
         if self._corrections:
             context["correct_words"] = {
                 pair.wrong: pair.canonical for pair in self._corrections
@@ -678,11 +815,16 @@ class VolcengineASRClient:
             # Volcengine's request-level API expects context itself to be a
             # compact JSON string, not a nested JSON object. Hotwords and
             # explicit replacements are members of that same inner object.
-            request["context"] = json.dumps(
+            corpus["context"] = json.dumps(
                 context,
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
+        if corpus:
+            # The raw WebSocket contract nests level-3 ``context`` below the
+            # level-2 ``request.corpus`` object.  SDK parameter examples expose
+            # a different SDK-side shape and must not be copied onto the wire.
+            request["corpus"] = corpus
         return {
             "user": {"uid": self._uid, "platform": "Linux"},
             "audio": {
@@ -712,6 +854,7 @@ class VolcengineASRClient:
             self._buffer_failed = False
             self._last_text = ""
             self._result_assembler.reset()
+            self._result_selection_metrics = ResultSelectionMetrics()
             loop = asyncio.new_event_loop()
             self._loop = loop
             thread = threading.Thread(
@@ -950,6 +1093,14 @@ class VolcengineASRClient:
                 if generation != self._generation or not self._active:
                     return True
                 text = self._result_assembler.update(parsed.payload)
+                self._result_selection_metrics, representations_differed = (
+                    _observe_result_selection(
+                        self._result_selection_metrics,
+                        parsed.payload,
+                        text,
+                        self._result_type,
+                    )
+                )
                 changed = bool(text) and text != self._last_text
                 if changed:
                     self._last_text = text
@@ -962,6 +1113,11 @@ class VolcengineASRClient:
             return True
         if changed:
             self._invoke(self.on_result, generation, text)
+        if representations_differed:
+            # Do not log either representation, lengths, correction rules or
+            # provider payloads.  The count alone is enough to diagnose which
+            # authoritative result path the client selected.
+            logger.info("Volcengine result representations differed")
         if parsed.is_last:
             self._invoke(self.on_finish, generation)
             return True

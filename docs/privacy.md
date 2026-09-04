@@ -41,8 +41,9 @@ acceptance in this release. MiniMax is planned and not selectable.
 - The optional vocabulary is stored separately as `vocabulary.json` under the
   same private directory, with the same ownership and permission checks.
 - Optional recognition corrections are stored separately as
-  `corrections.json` with the same checks. They are sent provider-side only;
-  no local global replacement is applied to committed text.
+  `corrections.json` with the same checks. They are sent as provider guidance;
+  manual and explicitly confirmed active rules are also applied once by the
+  bounded terminal correction stage, with ASCII lexical/code/URL guards.
 - Adaptive correction memory is stored separately as
   `adaptive-corrections.json` with private ownership and permission checks.
   Each retained entry contains only a wrong/canonical pair of at most 64
@@ -74,12 +75,13 @@ acceptance in this release. MiniMax is planned and not selectable.
 - Live text travels over the user's session D-Bus to the focused IBus engine.
   It does not use clipboard paste in the primary path.
 
-Clean expression mode does not change the provider upload boundary: the same
-explicit dictation audio has already gone to the selected ASR provider. It
-adds no LLM call and no extra network request. Live partial text stays raw. At
-the terminal event, a bounded local deletion-only processor either produces a
-replayable result or falls back to raw without blocking input; it cannot insert
-content or replace terms, numbers, or letter case.
+Terminal processing does not change the provider upload boundary: the same
+explicit dictation audio has already gone to the selected ASR provider. It adds
+no LLM call and no extra network request. Live partial text stays raw. At the
+terminal event, the bounded confirmed-correction stage runs first and fails
+open to raw; the separate clean deletion stage then produces a replayable
+result or fails open to the previous stage. Clean itself cannot insert content
+or replace terms, numbers, or letter case.
 
 ## Explicit remote-desktop clipboard mode
 
