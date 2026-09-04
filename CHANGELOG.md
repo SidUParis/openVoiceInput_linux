@@ -5,6 +5,8 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.9] - 2026-09-04
+
 ### Fixed
 
 - Volcengine request context now follows the official raw WebSocket hierarchy:

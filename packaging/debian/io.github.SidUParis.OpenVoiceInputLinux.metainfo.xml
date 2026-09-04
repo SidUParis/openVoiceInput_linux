@@ -57,6 +57,16 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.0-alpha.9" date="2026-09-04">
+      <description>
+        <p>
+          Ubuntu 24.04 alpha with correctly nested Volcengine request context,
+          bounded local enforcement of explicitly confirmed terminology, and
+          replayable schema-v5 delivery metadata while raw provider text
+          remains unchanged.
+        </p>
+      </description>
+    </release>
     <release version="0.1.0-alpha.8" date="2026-09-02">
       <description>
         <p>
