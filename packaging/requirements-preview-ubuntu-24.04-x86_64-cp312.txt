@@ -8,7 +8,8 @@ sounddevice==0.5.6 \
     --hash=sha256:de099612311ad81e55d31ccbd83f43ea6bf4d87b48f9b6ea55a1fbcde0eee4e0
 cffi==2.1.1 \
     --hash=sha256:c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf
-pycparser==3.0 \
-    --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
+pycparser==3.11 \
+    --hash=sha256:51d5a8ba2be0bbe440b99d2112604c95bbbc3c2748a64260186c541e1729cd80 \
+    --hash=sha256:d875f09c3507d00e1aba0eecc6dcadc1352f30fff09dc6bff2f1c2935e97c2bc
 websockets==17.0.1 \
     --hash=sha256:f47b0815af3948ec6a440b3afa02f05b18cc0939549e91b5c677b5d9c2c8472a
