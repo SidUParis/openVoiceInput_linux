@@ -12,8 +12,10 @@ here. The project has not published a stable release yet.
   open 16 kHz mono. When `pactl` is absent, the daemon now asks WirePlumber
   (`wpctl inspect @DEFAULT_AUDIO_SOURCE@`) for the default source and, only if
   it is exactly an `Audio/Source` that is not a monitor, records through
-  PipeWire's resampling `pipewire` ALSA endpoint. Any doubt keeps the strict
-  hardware-only fallback. No extra packages are needed.
+  PipeWire's resampling `pipewire` ALSA endpoint, bound to that exact node
+  with `PIPEWIRE_NODE` (as `PULSE_SOURCE` binds the Pulse path), and classified
+  from WirePlumber's device facts. Any doubt keeps the strict hardware-only
+  fallback. No extra packages are needed.
 
 ## [0.1.0-alpha.9] - 2026-09-04
 

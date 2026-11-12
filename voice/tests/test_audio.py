@@ -2404,6 +2404,83 @@ def test_failed_wpctl_keeps_the_strict_hardware_fallback():
     assert selection.metadata.provenance == "portaudio-default"
 
 
+def test_pipewire_selection_is_pinned_and_classified_from_wireplumber_facts():
+    wpctl_output = (
+        _WPCTL_MICROPHONE.replace(
+            '"Built-in Digital Microphone"',
+            '"500 Series Chipset Family On-Package HD Audio Digital Microphone"',
+        )
+        + '    device.bus = "pci"\n'
+    )
+
+    selection = resolve_input_device(
+        pactl_runner=_missing_pactl,
+        sounddevice_module=PipeWireSoundDevice(),
+        wpctl_runner=lambda arguments: wpctl_output,
+    )
+
+    assert selection.pipewire_node == (
+        "alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__Mic1__source"
+    )
+    assert selection.metadata.identity.category == "built-in"
+
+
+def test_pipewire_accepts_a_display_microphone_and_classifies_bluetooth():
+    display = _WPCTL_MICROPHONE.replace(
+        "alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__Mic1__source",
+        "alsa_input.usb-Dell_Dell_UltraSharp_Monitor-00.mono-fallback",
+    )
+    headset = _WPCTL_MICROPHONE.replace(
+        "alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__Mic1__source",
+        "bluez_input.00_11_22_33_44_55.0",
+    )
+
+    usb = resolve_input_device(
+        pactl_runner=_missing_pactl,
+        sounddevice_module=PipeWireSoundDevice(),
+        wpctl_runner=lambda arguments: display,
+    )
+    bluetooth = resolve_input_device(
+        pactl_runner=_missing_pactl,
+        sounddevice_module=PipeWireSoundDevice(),
+        wpctl_runner=lambda arguments: headset,
+    )
+
+    assert usb.metadata.identity.category == "external"
+    assert bluetooth.metadata.identity.category == "headset"
+
+
+def test_wpctl_is_never_consulted_when_pactl_answers():
+    calls = []
+
+    def failing_pactl(arguments):
+        raise RuntimeError("pactl failed")
+
+    with pytest.raises(AudioDeviceError):
+        resolve_input_device(
+            pactl_runner=failing_pactl,
+            sounddevice_module=PipeWireSoundDevice(),
+            wpctl_runner=lambda arguments: calls.append(arguments) or "",
+        )
+
+    assert calls == []
+
+
+def test_stream_open_binds_pipewire_node_and_restores_environment(monkeypatch):
+    monkeypatch.delenv("PIPEWIRE_NODE", raising=False)
+    monkeypatch.setenv("PULSE_SOURCE", "kept")
+
+    with audio_module._pulse_source_environment(None, "alsa_input.test-node"):
+        assert os.environ["PIPEWIRE_NODE"] == "alsa_input.test-node"
+        assert os.environ["PULSE_SOURCE"] == "kept"
+
+    assert "PIPEWIRE_NODE" not in os.environ
+    assert os.environ["PULSE_SOURCE"] == "kept"
+    with pytest.raises(AudioDeviceError):
+        with audio_module._pulse_source_environment(None, "bad\x00node"):
+            pass
+
+
 def test_wpctl_properties_parse_marked_and_unmarked_lines():
     properties = audio_module._parse_wpctl_properties(_WPCTL_MICROPHONE)
 
@@ -2422,6 +2499,7 @@ def test_unindexed_physical_default_is_frozen_only_after_unique_enumeration():
     assert (
         _resolve_input_device(
             pactl_runner=_missing_pactl,
+            wpctl_runner=_missing_wpctl,
             sounddevice_module=sounddevice,
         )
         == 0
@@ -2456,6 +2534,7 @@ def test_no_pactl_generic_ambiguous_monitor_or_bad_index_fails_closed(default, d
     with pytest.raises(AudioDeviceError, match="no unique usable microphone"):
         _resolve_input_device(
             pactl_runner=_missing_pactl,
+            wpctl_runner=_missing_wpctl,
             sounddevice_module=FlexibleSoundDevice(default, devices),
         )
 
@@ -2470,6 +2549,7 @@ def test_no_pactl_default_index_is_frozen_during_prepare():
         ),
         input_resolver=lambda: _resolve_input_device(
             pactl_runner=_missing_pactl,
+            wpctl_runner=_missing_wpctl,
             sounddevice_module=sounddevice,
         ),
     )

@@ -294,15 +294,18 @@ class AudioCapture:
                     "latency": "low",
                 }
                 pulse_source: str | None = None
+                pipewire_node: str | None = None
                 if isinstance(device, _PulseInputSelection):
                     pulse_source = device.source
                     stream_options["device"] = device.portaudio_device
                 elif device is not None:
                     stream_options["device"] = device
+                    if isinstance(device, _PortAudioInputSelection):
+                        pipewire_node = getattr(device, "pipewire_node", None)
                 # Serialize every PortAudio open.  Otherwise a simultaneous
                 # non-Pulse selection could inherit another capture's brief
                 # process-global PULSE_SOURCE override.
-                with _pulse_source_environment(pulse_source):
+                with _pulse_source_environment(pulse_source, pipewire_node):
                     stream = self._stream_factory(**stream_options)
                     self._stream = stream
                     stream.start()
@@ -1423,27 +1426,36 @@ def _recovery_is_reverted(
 
 
 @contextmanager
-def _pulse_source_environment(source: str | None) -> Iterator[None]:
-    """Serialize stream opens and optionally bind one exact Pulse source."""
+def _pulse_source_environment(
+    source: str | None,
+    pipewire_node: str | None = None,
+) -> Iterator[None]:
+    """Serialize stream opens and optionally bind one exact source.
 
-    if source is not None and _safe_name(source) != source:
-        raise AudioDeviceError("invalid PulseAudio microphone source")
+    ``PULSE_SOURCE`` binds the ``pulse`` ALSA endpoint; ``PIPEWIRE_NODE``
+    binds the ``pipewire`` one (read by PipeWire's ALSA plugin).
+    """
+
+    bindings = {"PULSE_SOURCE": source, "PIPEWIRE_NODE": pipewire_node}
+    for value in bindings.values():
+        if value is not None and _safe_name(value) != value:
+            raise AudioDeviceError("invalid microphone source")
     with _PULSE_SOURCE_ENVIRONMENT_LOCK:
-        if source is None:
-            yield
-            return
-        was_present = "PULSE_SOURCE" in os.environ
-        previous = os.environ.get("PULSE_SOURCE")
-        os.environ["PULSE_SOURCE"] = source
+        previous = {
+            name: os.environ.get(name)
+            for name, value in bindings.items()
+            if value is not None
+        }
+        for name in previous:
+            os.environ[name] = bindings[name]  # type: ignore[assignment]
         try:
             yield
         finally:
-            if was_present:
-                # os.environ values are always strings when present.
-                assert previous is not None
-                os.environ["PULSE_SOURCE"] = previous
-            else:
-                os.environ.pop("PULSE_SOURCE", None)
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
 
 def _current_card_profile(
@@ -1527,7 +1539,8 @@ def _resolve_pipewire_default_input(
     if (
         media_class != "Audio/Source"
         or not node_name
-        or "monitor" in node_name.casefold()
+        or _safe_name(node_name) != node_name
+        or _is_monitor_source(node_name)
     ):
         return None
     try:
@@ -1553,12 +1566,29 @@ def _resolve_pipewire_default_input(
         candidates.append(index)
     if len(candidates) != 1:
         return None
-    description = properties.get("node.description") or "pipewire"
-    return _portaudio_input_selection(
-        candidates[0],
-        {"name": description},
-        "portaudio-default",
+    # Classify from WirePlumber's device facts, as the Pulse path does from
+    # pactl's, rather than guessing from the human-readable description.
+    category = _category_from_metadata(node_name, {}, properties)
+    identity = privacy_preserving_microphone_identity(
+        category,
+        bus=properties.get("device.bus"),
+        vendor_id=_normalized_hex_identifier(properties.get("device.vendor.id")),
+        product_id=_normalized_hex_identifier(properties.get("device.product.id")),
+        form_factor=properties.get("device.form_factor"),
     )
+    selection = _PortAudioInputSelection(
+        candidates[0],
+        MicrophoneSelectionMetadata(
+            identity,
+            "portaudio",
+            "portaudio-default",
+            "unknown" if category == "dji" else "not-present",
+        ),
+    )
+    # Bind the stream to the node just checked; the endpoint would otherwise
+    # follow whatever the default becomes before or during the recording.
+    selection.pipewire_node = node_name
+    return selection
 
 
 def _parse_wpctl_properties(output: str) -> dict[str, str]:
