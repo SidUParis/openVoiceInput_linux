@@ -22,6 +22,7 @@ notices; it does not vendor or pin Ubuntu packages.
 | `pycparser` | Preview lock `3.0` (transitive) | cffi parser dependency on CPython | BSD-3-Clause metadata |
 | PortAudio | Distribution library | Native audio backend for sounddevice | External system package; not vendored |
 | `pactl` (`pulseaudio-utils` on Ubuntu) | Optional PulseAudio-compatible system command | Per-recording source discovery and conservative profile recovery; PortAudio fallback when absent | External system package; not vendored |
+| `wpctl` (WirePlumber, part of PipeWire desktops) | Optional system command | Without `pactl`, proves that PipeWire's default source is a real input before the `pipewire` ALSA endpoint is used | External system package; not vendored |
 | `libusb-1.0` (`libusb-1.0-0` on Ubuntu) | Optional distribution library, loaded dynamically | Bounded DJI Mic Mini 2 transmitter-link probe before a new dictation; unknown never promotes DJI ahead of a known alternative | LGPL-2.1-or-later; system package, not vendored |
 | `xclip` and `wl-copy` (`xclip` / `wl-clipboard` on Ubuntu) | Optional for source installs; `.deb` installs both so X11 and pure Wayland are deterministic | Explicit, default-off remote-desktop target writes one authoritative final to the current X11/Wayland clipboard; never reads or auto-pastes | External system packages; not vendored |
 

@@ -37,6 +37,8 @@ BLOCK_SIZE = 4096
 _MAX_PACTL_OUTPUT_BYTES = 512 * 1024
 _SOURCE_REENUMERATION_DELAYS = (0.0, 0.05, 0.1, 0.2, 0.4)
 _PACTL_COMMAND_TIMEOUT_SECONDS = 0.5
+_WPCTL_COMMAND_TIMEOUT_SECONDS = 0.5
+_MAX_WPCTL_OUTPUT_BYTES = 64 * 1024
 _PREFLIGHT_FORWARD_TIMEOUT_SECONDS = 3.0
 _PREFLIGHT_ROLLBACK_TIMEOUT_SECONDS = 7.0
 # Catch the existing router's open-time move, then keep a ten-minute capture
@@ -292,15 +294,18 @@ class AudioCapture:
                     "latency": "low",
                 }
                 pulse_source: str | None = None
+                pipewire_node: str | None = None
                 if isinstance(device, _PulseInputSelection):
                     pulse_source = device.source
                     stream_options["device"] = device.portaudio_device
                 elif device is not None:
                     stream_options["device"] = device
+                    if isinstance(device, _PortAudioInputSelection):
+                        pipewire_node = getattr(device, "pipewire_node", None)
                 # Serialize every PortAudio open.  Otherwise a simultaneous
                 # non-Pulse selection could inherit another capture's brief
                 # process-global PULSE_SOURCE override.
-                with _pulse_source_environment(pulse_source):
+                with _pulse_source_environment(pulse_source, pipewire_node):
                     stream = self._stream_factory(**stream_options)
                     self._stream = stream
                     stream.start()
@@ -471,6 +476,7 @@ def resolve_input_device(
     monotonic: Callable[[], float] = time.monotonic,
     dji_link_probe: Callable[[], bool | None] = probe_dji_link_state,
     microphone_policy: MicrophonePolicyConfig = MicrophonePolicyConfig(),
+    wpctl_runner: Callable[[Sequence[str]], str] | None = None,
 ) -> _PulseInputSelection | int | str | None:
     """Resolve one microphone afresh for each explicitly started recording.
 
@@ -490,7 +496,17 @@ def resolve_input_device(
         sources = _list_pulse_sources(budget.forward)
     except FileNotFoundError:
         # Only failure of the first pactl probe establishes a non-Pulse host.
-        return _resolve_portaudio_input(sounddevice_module or _load_sounddevice())
+        sounddevice_module = sounddevice_module or _load_sounddevice()
+        # A PipeWire desktop without pactl (stock Fedora) still offers a
+        # resampling ALSA endpoint, used only once WirePlumber proves that the
+        # default source is a real input rather than a monitor.
+        pipewire = _resolve_pipewire_default_input(
+            sounddevice_module,
+            wpctl_runner or _run_wpctl,
+        )
+        if pipewire is not None:
+            return pipewire
+        return _resolve_portaudio_input(sounddevice_module)
     except AudioDeviceError:
         raise
     except Exception as error:
@@ -1410,27 +1426,36 @@ def _recovery_is_reverted(
 
 
 @contextmanager
-def _pulse_source_environment(source: str | None) -> Iterator[None]:
-    """Serialize stream opens and optionally bind one exact Pulse source."""
+def _pulse_source_environment(
+    source: str | None,
+    pipewire_node: str | None = None,
+) -> Iterator[None]:
+    """Serialize stream opens and optionally bind one exact source.
 
-    if source is not None and _safe_name(source) != source:
-        raise AudioDeviceError("invalid PulseAudio microphone source")
+    ``PULSE_SOURCE`` binds the ``pulse`` ALSA endpoint; ``PIPEWIRE_NODE``
+    binds the ``pipewire`` one (read by PipeWire's ALSA plugin).
+    """
+
+    bindings = {"PULSE_SOURCE": source, "PIPEWIRE_NODE": pipewire_node}
+    for value in bindings.values():
+        if value is not None and _safe_name(value) != value:
+            raise AudioDeviceError("invalid microphone source")
     with _PULSE_SOURCE_ENVIRONMENT_LOCK:
-        if source is None:
-            yield
-            return
-        was_present = "PULSE_SOURCE" in os.environ
-        previous = os.environ.get("PULSE_SOURCE")
-        os.environ["PULSE_SOURCE"] = source
+        previous = {
+            name: os.environ.get(name)
+            for name, value in bindings.items()
+            if value is not None
+        }
+        for name in previous:
+            os.environ[name] = bindings[name]  # type: ignore[assignment]
         try:
             yield
         finally:
-            if was_present:
-                # os.environ values are always strings when present.
-                assert previous is not None
-                os.environ["PULSE_SOURCE"] = previous
-            else:
-                os.environ.pop("PULSE_SOURCE", None)
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
 
 def _current_card_profile(
@@ -1487,6 +1512,125 @@ def _resolve_pulse_portaudio_device(
     if len(candidates) != 1:
         raise AudioDeviceError("no unique usable PulseAudio PortAudio input exists")
     return candidates[0]
+
+
+def _resolve_pipewire_default_input(
+    sounddevice_module: Any,
+    wpctl_runner: Callable[[Sequence[str]], str],
+) -> _PortAudioInputSelection | None:
+    """Use PipeWire's ALSA endpoint when its default source is a real input.
+
+    The generic ``pipewire`` PortAudio device is otherwise untrusted because it
+    could resolve to an output monitor. WirePlumber's description of the
+    current default source settles that: only a node of exactly class
+    ``Audio/Source`` whose name is not a monitor is accepted. Any doubt (no
+    wpctl, unexpected output, no unique endpoint) returns ``None`` so the
+    stricter hardware-only fallback still decides.
+    """
+
+    try:
+        properties = _parse_wpctl_properties(
+            wpctl_runner(("inspect", "@DEFAULT_AUDIO_SOURCE@"))
+        )
+    except Exception:
+        return None
+    media_class = properties.get("media.class")
+    node_name = properties.get("node.name", "")
+    if (
+        media_class != "Audio/Source"
+        or not node_name
+        or _safe_name(node_name) != node_name
+        or _is_monitor_source(node_name)
+    ):
+        return None
+    try:
+        devices = sounddevice_module.query_devices()
+    except Exception:
+        return None
+    candidates: list[int] = []
+    for index, device in enumerate(devices):
+        if not isinstance(device, Mapping) or device.get("name") != "pipewire":
+            continue
+        channels = _nonnegative_int(device.get("max_input_channels"))
+        if channels is None or channels < 1:
+            continue
+        try:
+            sounddevice_module.check_input_settings(
+                device=index,
+                channels=CHANNELS,
+                dtype=SAMPLE_DTYPE,
+                samplerate=SAMPLE_RATE,
+            )
+        except Exception:
+            continue
+        candidates.append(index)
+    if len(candidates) != 1:
+        return None
+    # Classify from WirePlumber's device facts, as the Pulse path does from
+    # pactl's, rather than guessing from the human-readable description.
+    category = _category_from_metadata(node_name, {}, properties)
+    identity = privacy_preserving_microphone_identity(
+        category,
+        bus=properties.get("device.bus"),
+        vendor_id=_normalized_hex_identifier(properties.get("device.vendor.id")),
+        product_id=_normalized_hex_identifier(properties.get("device.product.id")),
+        form_factor=properties.get("device.form_factor"),
+    )
+    selection = _PortAudioInputSelection(
+        candidates[0],
+        MicrophoneSelectionMetadata(
+            identity,
+            "portaudio",
+            "portaudio-default",
+            "unknown" if category == "dji" else "not-present",
+        ),
+    )
+    # Bind the stream to the node just checked; the endpoint would otherwise
+    # follow whatever the default becomes before or during the recording.
+    selection.pipewire_node = node_name
+    return selection
+
+
+def _parse_wpctl_properties(output: str) -> dict[str, str]:
+    """Parse ``wpctl inspect`` ``key = "value"`` lines (``*`` marks are kept)."""
+
+    properties: dict[str, str] = {}
+    for line in output.splitlines():
+        line = line.strip().removeprefix("*").strip()
+        key, separator, value = line.partition(" = ")
+        if not separator or not key or " " in key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            value = value[1:-1]
+        properties.setdefault(key, value)
+    return properties
+
+
+def _run_wpctl(arguments: Sequence[str]) -> str:
+    executable = shutil.which("wpctl")
+    if executable is None:
+        raise FileNotFoundError("wpctl is unavailable")
+    environment = os.environ.copy()
+    environment["LC_ALL"] = "C"
+    environment["LANG"] = "C"
+    result = subprocess.run(
+        [executable, *arguments],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=_WPCTL_COMMAND_TIMEOUT_SECONDS,
+        check=False,
+        env=environment,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("wpctl inspect failed")
+    if len(result.stdout.encode("utf-8")) > _MAX_WPCTL_OUTPUT_BYTES:
+        raise RuntimeError("wpctl output is too large")
+    return result.stdout
 
 
 def _resolve_portaudio_input(sounddevice_module: Any) -> int | str | None:
