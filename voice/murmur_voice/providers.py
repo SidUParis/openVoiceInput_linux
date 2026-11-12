@@ -69,6 +69,15 @@ PROVIDER_DESCRIPTORS: tuple[ProviderDescriptor, ...] = (
         supports_corrections=False,
     ),
     ProviderDescriptor(
+        provider_id="gemini",
+        display_name="Google Gemini",
+        description="Gemini Live 实时转写；自动识别中英混说，支持自定义词表。",
+        availability="ready",
+        streaming=True,
+        supports_hotwords=True,
+        supports_corrections=False,
+    ),
+    ProviderDescriptor(
         provider_id="openai",
         display_name="OpenAI Transcribe",
         description="停录后批量转写；支持提示词，但不提供实时 partial。",
@@ -117,6 +126,10 @@ def create_asr_client(config: VoiceConfig) -> ASRClient:
         from .qwen import QwenASRClient
 
         return QwenASRClient(settings)
+    if provider == "gemini":
+        from .gemini import GeminiASRClient
+
+        return GeminiASRClient(settings)
     if provider == "openai":
         from .openai_transcription import OpenAITranscriptionClient
 

@@ -13,10 +13,22 @@ from typing import Any
 DEFAULT_ENDPOINT = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async"
 DEFAULT_RESOURCE_ID = "volc.seedasr.sauc.duration"
 VOICE_CONFIG_SCHEMA_VERSION = 2
-SUPPORTED_PROVIDERS = ("volcengine", "qwen", "openai", "minimax")
+SUPPORTED_PROVIDERS = ("volcengine", "qwen", "gemini", "openai", "minimax")
 QWEN_ENDPOINT = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 QWEN_DEFAULT_MODEL = "qwen-audio-3.0-asr-flash-streaming"
 QWEN_MODELS = (QWEN_DEFAULT_MODEL,)
+GEMINI_ENDPOINT = (
+    "wss://generativelanguage.googleapis.com/ws/"
+    "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+)
+GEMINI_DEFAULT_MODEL = "gemini-3.5-transcribe-live"
+GEMINI_MODELS = (GEMINI_DEFAULT_MODEL,)
+# BCP-47 hints; Gemini still detects code-switching between them. The Simplified
+# Chinese hint keeps mixed Chinese-English output in Simplified characters.
+GEMINI_LANGUAGE_CODES = ("cmn-Hans-CN", "en-US")
+GEMINI_TRANSCRIPTION_MODES = ("VERBATIM", "SMART")
+# Gemini accepts up to 1,000 terms but documents the best results up to ~100.
+GEMINI_MAX_VOCABULARY_TERMS = 100
 OPENAI_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions"
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini-transcribe"
 OPENAI_MODELS = (
@@ -80,6 +92,24 @@ class VoiceConfig:
                 "sample_rate": 16_000,
                 "language_hints": ("zh", "en", "fr"),
                 "vocabulary": tuple(dict.fromkeys(vocabulary)),
+                "final_result_timeout": 20.0,
+                "max_pending_audio_seconds": 10.0,
+            }
+        if provider == "gemini":
+            vocabulary = list(normalize_vocabulary_terms(self.hotwords))
+            vocabulary.extend(
+                pair.canonical for pair in normalize_correction_pairs(self.corrections)
+            )
+            return {
+                "api_key": self.api_key,
+                "endpoint": GEMINI_ENDPOINT,
+                "model": model,
+                "sample_rate": 16_000,
+                "language_codes": GEMINI_LANGUAGE_CODES,
+                "vocabulary": tuple(dict.fromkeys(vocabulary))[
+                    :GEMINI_MAX_VOCABULARY_TERMS
+                ],
+                "mode": "VERBATIM",
                 "final_result_timeout": 20.0,
                 "max_pending_audio_seconds": 10.0,
             }
@@ -699,6 +729,11 @@ def _validate_provider_configuration(
         model = model_value or QWEN_DEFAULT_MODEL
         if model not in QWEN_MODELS:
             raise ConfigError("Qwen recognition model is unsupported")
+        return provider_value, model
+    if provider_value == "gemini":
+        model = model_value or GEMINI_DEFAULT_MODEL
+        if model not in GEMINI_MODELS:
+            raise ConfigError("Gemini recognition model is unsupported")
         return provider_value, model
     if provider_value == "openai":
         model = model_value or OPENAI_DEFAULT_MODEL

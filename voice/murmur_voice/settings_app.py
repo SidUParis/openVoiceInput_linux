@@ -919,7 +919,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.corrections_help_label = Gtk.Label(
             label=(
                 "下一次听写会按当前识别服务应用这些信息：火山引擎可接收完整替换映射；"
-                "Qwen 与 OpenAI 只会把标准写法作为上下文提示，不保证执行逐项替换。"
+                "Qwen、Gemini 与 OpenAI 只会把标准写法作为上下文提示，不保证执行逐项替换。"
                 "自动学习会拆分多处"
                 "替换：高置信单项可立即启用，中等置信与冲突项只进入本地候选，"
                 "不会把整句润色误当成全局规则。个人词表与明确纠错只有点击保存"

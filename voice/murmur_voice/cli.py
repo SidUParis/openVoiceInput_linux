@@ -159,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
     configure_parser.add_argument("--config", type=Path, default=default_config_path())
     configure_parser.add_argument(
         "--provider",
-        choices=("volcengine", "qwen", "openai"),
+        choices=("volcengine", "qwen", "gemini", "openai"),
         default="volcengine",
         help="reviewed ASR backend (default: volcengine)",
     )

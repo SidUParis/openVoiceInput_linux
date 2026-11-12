@@ -95,6 +95,7 @@ def test_save_api_key_refuses_symlink_directory(tmp_path):
     (
         ("volcengine", None),
         ("qwen", "qwen-audio-3.0-asr-flash-streaming"),
+        ("gemini", "gemini-3.5-transcribe-live"),
         ("openai", "gpt-4o-mini-transcribe"),
     ),
 )
@@ -117,6 +118,7 @@ def test_provider_config_v2_round_trip_is_private(tmp_path, provider, model):
         {"version": 1, "provider": "qwen", "api_key": "key", "model": None},
         {"version": 2, "provider": "unknown", "api_key": "key", "model": None},
         {"version": 2, "provider": "qwen", "api_key": "key", "model": "other"},
+        {"version": 2, "provider": "gemini", "api_key": "key", "model": "other"},
         {"version": 2, "provider": "volcengine", "api_key": "key", "model": "x"},
     ),
 )

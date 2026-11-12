@@ -5,6 +5,17 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+### Added
+
+- Google Gemini real-time provider (`gemini-3.5-transcribe-live` over the
+  Gemini Live API). Each dictation is one manual activity, cumulative interim
+  transcripts drive the preedit, and the authoritative final arrives after
+  `activityEnd`. Personal vocabulary and correction canonicals become
+  `customVocabulary` (capped at 100 terms), and Simplified Chinese plus English
+  hints keep mixed Chinese-English output in Simplified characters. The key is
+  sent only in the `x-goog-api-key` header. Tested with a real key on Fedora 44;
+  automated tests use a fake transport.
+
 ## [0.1.0-alpha.9] - 2026-09-04
 
 ### Fixed
