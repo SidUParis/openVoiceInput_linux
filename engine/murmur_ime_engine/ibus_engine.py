@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from collections.abc import Mapping
 
 import gi
 
@@ -27,6 +29,47 @@ from .session import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+LISTENING_HINTS = {"zh": "● 正在听写", "en": "● Dictating"}
+LISTENING_HINT_TAIL_CHARACTERS = 32
+
+
+def listening_hint_label(environ: Mapping[str, str] = os.environ) -> str:
+    """The marker in the desktop's message language, as gettext resolves it.
+
+    The locale is the first set of LC_ALL, LC_MESSAGES and LANG. In the C or
+    POSIX locale messages stay untranslated; otherwise LANGUAGE, when set,
+    takes priority over the locale for the message language.
+    """
+
+    locale_name = next(
+        (
+            environ.get(variable, "")
+            for variable in ("LC_ALL", "LC_MESSAGES", "LANG")
+            if environ.get(variable, "")
+        ),
+        "",
+    )
+    if not locale_name or locale_name in ("C", "POSIX") or locale_name.startswith("C."):
+        return LISTENING_HINTS["en"]
+    language = environ.get("LANGUAGE", "").split(":", 1)[0] or locale_name
+    return LISTENING_HINTS.get(language[:2].lower(), LISTENING_HINTS["en"])
+
+
+LISTENING_HINT = listening_hint_label()
+
+
+def listening_hint(text: str, label: str | None = None) -> str:
+    """The caret hint: the listening marker plus the newest characters."""
+
+    label = label or LISTENING_HINT
+    text = " ".join(text.split())
+    if not text:
+        return label
+    if len(text) > LISTENING_HINT_TAIL_CHARACTERS:
+        text = "…" + text[-LISTENING_HINT_TAIL_CHARACTERS:]
+    return f"{label} · {text}"
 
 
 class MurmurEngine(IBus.Engine):
@@ -82,6 +125,10 @@ class MurmurEngine(IBus.Engine):
         accepted = self._sessions.acquire(owner, utterance_id, self._focus_token)
         if accepted:
             logger.info("Voice preedit acquired at focus token %d", self._focus_token)
+            # Show at the caret that dictation is live before any speech arrives.
+            # A retried Acquire keeps the tail that is already shown.
+            if not getattr(self, "_hint_visible", False):
+                self._show_listening_hint("")
         return accepted
 
     def partial(
@@ -136,6 +183,9 @@ class MurmurEngine(IBus.Engine):
         ):
             self._sessions.finish()
             self._registry.invalidated(self)
+            # The voice side's Cancel no longer reaches this engine once the
+            # registry target is dropped, so clear the preedit and hint here.
+            self._clear_preedit()
             return False
         self._arm_observation_timeout(owner, utterance_id, self._focus_token)
         self._clear_preedit()
@@ -206,6 +256,7 @@ class MurmurEngine(IBus.Engine):
             bool(text),
             IBus.PreeditFocusMode.CLEAR,
         )
+        self._show_listening_hint(text)
 
     def _clear_preedit(self) -> None:
         self.update_preedit_text_with_mode(
@@ -214,6 +265,24 @@ class MurmurEngine(IBus.Engine):
             False,
             IBus.PreeditFocusMode.CLEAR,
         )
+        if getattr(self, "_hint_visible", False):
+            self.hide_auxiliary_text()
+            self._hint_visible = False
+
+    def _show_listening_hint(self, text: str) -> None:
+        """Show the listening state, and the tail of the hypothesis, at the caret.
+
+        IBus auxiliary text is drawn by the desktop's input-method popup next to
+        the cursor. It marks an active dictation before the first partial, and
+        its tail keeps the newest words visible where a client renders preedit
+        on one unwrapped line (common in terminals).
+        """
+
+        self.update_auxiliary_text(
+            IBus.Text.new_from_string(listening_hint(text)),
+            True,
+        )
+        self._hint_visible = True
 
     def _invalidate_voice(self, reason: str) -> None:
         self._cancel_observation_timeout()

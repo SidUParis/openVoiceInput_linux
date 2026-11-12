@@ -5,6 +5,15 @@ here. The project has not published a stable release yet.
 
 ## [Unreleased]
 
+### Added
+
+- A caret hint marks an active dictation: as soon as the engine takes the
+  input context, IBus auxiliary text next to the cursor shows "● Dictating"
+  (or "● 正在听写" when the desktop's message language is Chinese), followed by
+  the newest 32 characters of the hypothesis. It is visible before the first
+  partial and keeps the newest words readable in clients that draw preedit on
+  one unwrapped line, such as terminals. It hides whenever the preedit clears.
+
 ## [0.1.0-alpha.9] - 2026-09-04
 
 ### Fixed
