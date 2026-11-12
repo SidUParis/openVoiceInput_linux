@@ -15,7 +15,7 @@
   confirmation, and the same owner/type/symlink/permission validation. It does
   not replace provider-side credential revocation.
 - CI scans the index, worktree, and complete reachable history for supported
-  Volcengine, AWS, GitHub, OpenAI, and PEM credential shapes without printing
+  Volcengine, AWS, GitHub, OpenAI, Google API key, and PEM credential shapes without printing
   matched values. It is a release guard, not a substitute for key rotation.
 
 ## Audio and text

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from murmur_voice.config import VoiceConfig
+from murmur_voice.gemini import GeminiASRClient
 from murmur_voice.openai_transcription import OpenAITranscriptionClient
 from murmur_voice.providers import (
     PROVIDER_DESCRIPTORS,
@@ -17,10 +18,11 @@ def test_provider_registry_has_stable_unique_capabilities():
     assert [item.provider_id for item in PROVIDER_DESCRIPTORS] == [
         "volcengine",
         "qwen",
+        "gemini",
         "openai",
         "minimax",
     ]
-    assert len({item.provider_id for item in PROVIDER_DESCRIPTORS}) == 4
+    assert len({item.provider_id for item in PROVIDER_DESCRIPTORS}) == 5
     assert provider_descriptor("volcengine").availability == "ready"
     assert provider_descriptor("minimax").availability == "planned"
     with pytest.raises(ValueError, match="unsupported"):
@@ -32,6 +34,7 @@ def test_provider_registry_has_stable_unique_capabilities():
     (
         (VoiceConfig("key"), VolcengineASRClient),
         (VoiceConfig("key", provider="qwen"), QwenASRClient),
+        (VoiceConfig("key", provider="gemini"), GeminiASRClient),
         (VoiceConfig("key", provider="openai"), OpenAITranscriptionClient),
     ),
 )

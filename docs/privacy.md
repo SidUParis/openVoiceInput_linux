@@ -5,7 +5,10 @@ is different: during an explicitly started dictation, 16 kHz mono PCM audio is
 sent to the online ASR service selected and configured by the user. Volcengine
 is the default and the only path validated with a real key on the maintainer
 workstation; Qwen and OpenAI remain experimental and have not had real-key
-acceptance in this release. MiniMax is planned and not selectable.
+acceptance in this release. MiniMax is planned and not selectable. Google Gemini
+(Gemini Live, `gemini-3.5-transcribe-live`) sends the audio and the personal
+vocabulary to Google under the key's Google Cloud project; it was tested with a
+real key on a Fedora 44 desktop but is not yet validated by the maintainer.
 
 ## Remote data and billing
 

@@ -9,17 +9,19 @@
 |---|---|---|---|---|
 | 火山引擎 BigModel ASR 2.0 | 可用、默认 | 实时 | 热词与明确纠错 | 保留原有配置格式和行为 |
 | 阿里云千问 Qwen Audio 3.0 ASR | 代码已接入，未用真实 Key 验收 | 实时 | 请求级即时热词 | 默认提示中文、英文、法文 |
+| Google Gemini 3.5 Transcribe Live | 代码已接入，已用真实 Key 在 Fedora 44 上实测 | 实时 | 请求级 `customVocabulary`（最多 100 项） | 提示简体中文与英文，仍自动识别中英混说 |
 | OpenAI Transcribe | 代码已接入，未用真实 Key 验收 | 停录后批量 | prompt | 在内存中有界保存 PCM，停录后上传 WAV |
 | MiniMax | 计划项 | — | — | 暂未找到可独立验证的官方语音转文字接口，因此没有伪造适配器 |
 
 ## 配置
 
 旧的 `{"api_key":"..."}` 仍被解释为火山引擎，不需要迁移。原生设置页的
-“云端识别”页面可选择三个已接入后端；更换后端时必须同时输入该服务的新 Key，
+“云端识别”页面可选择四个已接入后端；更换后端时必须同时输入该服务的新 Key，
 已经保存的 Key 永远不会回填到窗口。也可以用交互式命令写入 version 2 私有配置：
 
 ```bash
 murmur-voice-daemon configure --provider qwen
+murmur-voice-daemon configure --provider gemini
 murmur-voice-daemon configure --provider openai
 ```
 
@@ -31,6 +33,14 @@ Key 通过终端无回显地输入两次，不应放在命令参数、日志、i
 - Qwen 使用官方 duplex WebSocket 顺序：`run-task`、等待 `task-started`、发送
   16 kHz 单声道 PCM、`finish-task`、等待 `task-finished`。结果按
   `sentence_id` 组合，`task_id` 不匹配、未知事件和畸形 JSON 会失败关闭。
+- Gemini 使用 Live API（`BidiGenerateContent`）与专用转写模型
+  `gemini-3.5-transcribe-live`：发送 `setup`、等待 `setupComplete`，每句听写是
+  一次手动 activity（`activityStart`、约 100 ms 的 16 kHz PCM、`activityEnd`），
+  因此停顿思考不会提前结束或拆分一句。服务端的累积 `interimInputTranscription`
+  作为 preedit，`inputTranscription` 作为权威终稿，在本端发出 `activityEnd` 之后
+  收到 `generationComplete` 才结束。Key 只放在 `x-goog-api-key` 请求头，不进入
+  URL；关闭原因只用于识别 Key 错误，不会保留远端错误文本。interim 偶尔在每个汉字
+  之间插入空格，客户端只删除两个 CJK 字符之间的空白。
 - OpenAI 仅调用官方 `/v1/audio/transcriptions`。它没有假装提供实时 partial；
   PCM 上限为十分钟，网络请求在后台线程运行，全进程最多一个上传任务，取消后
   迟到结果不会提交，也不会因快速重试无限堆积音频线程。
@@ -41,6 +51,8 @@ Key 通过终端无回显地输入两次，不应放在命令参数、日志、i
 - [阿里云实时语音识别 WebSocket API](https://help.aliyun.com/en/model-studio/fun-asr-realtime-websocket-api)
 - [阿里云客户端事件](https://help.aliyun.com/en/model-studio/fun-asr-client-events)
 - [阿里云服务端事件](https://help.aliyun.com/en/model-studio/fun-asr-server-events)
+- [Gemini Live API 实时转写](https://ai.google.dev/gemini-api/docs/live-api/live-transcribe)
+- [Gemini 3.5 Transcribe](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-transcribe)
 - [OpenAI Audio Transcriptions API](https://platform.openai.com/docs/api-reference/audio/createTranscription)
 
 当前自动测试全部使用假 WebSocket/HTTP 响应，不消耗真实配额。加入一个新后端前，
