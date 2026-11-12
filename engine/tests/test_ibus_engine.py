@@ -120,7 +120,12 @@ class MurmurEnginePresentationTests(unittest.TestCase):
         self.assertEqual(
             listening_hint_label({"LC_MESSAGES": "zh_CN.UTF-8", "LANG": "en_US"}), zh
         )
-        self.assertEqual(listening_hint_label({"LANGUAGE": "zh_CN:en"}), zh)
+        self.assertEqual(
+            listening_hint_label({"LANG": "en_US.UTF-8", "LANGUAGE": "zh_CN:en"}), zh
+        )
+        # gettext ignores LANGUAGE in the C locale or with no locale set.
+        self.assertEqual(listening_hint_label({"LANGUAGE": "zh_CN:en"}), en)
+        self.assertEqual(listening_hint_label({"LANG": "C", "LANGUAGE": "zh_CN"}), en)
         self.assertEqual(listening_hint_label({"LANG": "C.UTF-8"}), en)
         self.assertEqual(listening_hint_label({"LANG": "fr_FR.UTF-8"}), en)
         self.assertEqual(listening_hint_label({}), en)
@@ -334,3 +339,42 @@ class MurmurEnginePresentationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ListeningHintLifecycleTests(unittest.TestCase):
+    def _engine_with_hint(self) -> _EngineHarness:
+        engine = _EngineHarness()
+        engine._hint_visible = False
+        MurmurEngine._set_preedit(engine, "说到一半")
+        return engine
+
+    def test_focus_loss_and_disable_hide_the_hint(self) -> None:
+        for leave in (
+            lambda engine: MurmurEngine._focus_out(engine, "/org/murmur/TestContext"),
+            MurmurEngine.do_disable,
+        ):
+            engine = self._engine_with_hint()
+
+            leave(engine)
+
+            self.assertIsNone(engine.hints[-1])
+            self.assertFalse(engine._hint_visible)
+
+    def test_final_rejected_by_observation_still_clears_preedit_and_hint(self) -> None:
+        engine = self._engine_with_hint()
+        engine._sessions.begin_observation = lambda *args, **kwargs: False
+
+        self.assertFalse(MurmurEngine.final(engine, ":1.40", "utt-1", 1, "终稿"))
+
+        self.assertEqual(engine.preedits[-1][0], "")
+        self.assertIsNone(engine.hints[-1])
+        self.assertEqual(engine.commits, [])
+
+    def test_hide_is_sent_only_when_a_hint_is_shown(self) -> None:
+        engine = _EngineHarness()
+        engine._hint_visible = False
+
+        MurmurEngine._clear_preedit(engine)
+        MurmurEngine._clear_preedit(engine)
+
+        self.assertEqual(engine.hints, [])
