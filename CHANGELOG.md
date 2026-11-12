@@ -11,8 +11,11 @@ here. The project has not published a stable release yet.
   the microphone and the provider upload stayed open until the next partial
   was rejected, which never arrives while the speaker is silent, so recording
   could run to the time limit. The daemon now confirms once a second that its
-  field is still focused and ends the dictation at once otherwise, stopping
-  capture and disconnecting the provider. The interrupted utterance is still
+  field is still focused and, when the engine rejects that check, ends the
+  dictation within about a second, stopping capture and disconnecting the
+  provider. A failed or timed-out D-Bus check is not treated as lost focus
+  unless it repeats three times. The engine skips redrawing identical preedit,
+  so the check causes no visible flicker. The interrupted utterance is still
   discarded, as before.
 
 ## [0.1.0-alpha.9] - 2026-09-04

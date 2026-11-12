@@ -198,7 +198,9 @@ def _session(acquisition=AcquireResult.ACQUIRED, **session_options):
     order = []
     asr = FakeASR(order)
     audio = FakeAudio(order)
-    preedit = FakePreedit(order, acquisition)
+    preedit = session_options.pop("preedit_client", None) or FakePreedit(
+        order, acquisition
+    )
     timers = []
 
     def timer_factory(seconds, callback):
@@ -1411,6 +1413,10 @@ def test_observation_timer_failure_cancels_and_restores_immediately(failure):
         audio_capture=audio,
         preedit_client=preedit,
         timer_factory=timer_factory,
+        # Keep this test's positional timer count about the observation timer.
+        focus_check_timer_factory=lambda seconds, callback: FakeTimer(
+            seconds, callback
+        ),
         utterance_factory=lambda: "utterance-1",
     )
     session.start()
@@ -1824,3 +1830,115 @@ def test_focus_check_ends_dictation_promptly_when_the_field_is_gone():
     assert session.status().state == "idle"
     assert len(focus_checks) == 1
     assert not any(call[0] == "final" for call in preedit.calls)
+
+
+class FlakyPreedit(FakePreedit):
+    """A preedit client whose periodic check can also fail at the D-Bus level."""
+
+    def __init__(self, order, acquisition=AcquireResult.ACQUIRED):
+        super().__init__(order, acquisition)
+        self.status_results = []
+
+    def partial_status(self, utterance_id, revision, text):
+        self.calls.append(("partial-status", utterance_id, revision, text))
+        return self.status_results.pop(0) if self.status_results else True
+
+
+def _focus_session(**options):
+    focus_checks = []
+    session, asr, audio, preedit, timers, order = _session(
+        focus_checks=focus_checks, **options
+    )
+    return session, asr, audio, preedit, focus_checks
+
+
+def test_transient_dbus_failures_do_not_end_a_focused_dictation():
+    order = []
+    preedit = FlakyPreedit(order)
+    session, asr, audio, _preedit, focus_checks = _focus_session(preedit_client=preedit)
+    session.start()
+    asr.on_result("still here")
+    preedit.status_results = [None, None, True, None]
+
+    for _ in range(4):
+        focus_checks[-1].fire()
+
+    assert session.status().state == "recording"
+    assert len(focus_checks) == 5
+
+
+def test_repeated_dbus_failures_end_the_dictation():
+    order = []
+    preedit = FlakyPreedit(order)
+    session, asr, audio, _preedit, focus_checks = _focus_session(preedit_client=preedit)
+    session.start()
+    preedit.status_results = [None, None, None]
+
+    for _ in range(3):
+        focus_checks[-1].fire()
+
+    assert session.status().code == "preedit-lost"
+    assert session.status().state == "idle"
+
+
+def test_focus_check_is_cancelled_when_the_dictation_stops_or_cancels():
+    for end in ("stop", "cancel"):
+        session, asr, audio, preedit, focus_checks = _focus_session()
+        session.start()
+
+        getattr(session, end)()
+
+        assert focus_checks[-1].cancelled
+        calls = len(preedit.calls)
+        focus_checks[-1].fire()
+        assert len(preedit.calls) == calls
+
+
+def test_stale_focus_check_does_nothing_for_a_newer_session():
+    session, asr, audio, preedit, focus_checks = _focus_session()
+    session.start()
+    stale = focus_checks[-1]
+    session.cancel()
+    session.start()
+    calls = len(preedit.calls)
+
+    stale.fire()
+
+    assert len(preedit.calls) == calls
+    assert session.status().state in ("starting", "recording")
+
+
+def test_clipboard_target_schedules_no_focus_check():
+    order = []
+    session, asr, audio, preedit, focus_checks = _focus_session(
+        output_target_reader=lambda: OutputTargetConfig("clipboard"),
+        clipboard_writer=FakeClipboardWriter(order),
+    )
+    session.start()
+
+    assert focus_checks == []
+
+
+def test_focus_check_uses_an_injected_timer_factory_by_default():
+    created = []
+
+    def timer_factory(seconds, callback):
+        timer = FakeTimer(seconds, callback)
+        created.append(timer)
+        return timer
+
+    session = VoiceSession(
+        VoiceConfig("test-key"),
+        asr_client=FakeASR([]),
+        audio_capture=FakeAudio([]),
+        preedit_client=FakePreedit([]),
+        timer_factory=timer_factory,
+        utterance_factory=lambda: "utterance-1",
+        last_review_timer_factory=lambda seconds, callback: FakeTimer(
+            seconds, callback
+        ),
+        clipboard_writer=FakeClipboardWriter([]),
+    )
+    session.start()
+
+    assert any(timer.seconds == 1.0 for timer in created)
