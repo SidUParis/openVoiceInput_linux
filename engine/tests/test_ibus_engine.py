@@ -97,6 +97,19 @@ class MurmurEnginePresentationTests(unittest.TestCase):
         self.assertFalse(visible)
         self.assertEqual(recorder.commits, [])
 
+    def test_identical_preedit_is_not_redrawn(self) -> None:
+        recorder = _PresentationRecorder()
+
+        MurmurEngine._set_preedit(recorder, "同样的文字")
+        MurmurEngine._set_preedit(recorder, "同样的文字")
+        MurmurEngine._clear_preedit(recorder)
+        MurmurEngine._set_preedit(recorder, "同样的文字")
+
+        self.assertEqual(
+            [text for text, *_rest in recorder.preedits],
+            ["同样的文字", "", "同样的文字"],
+        )
+
     def test_final_retains_session_until_observation_is_consumed(self) -> None:
         engine = _EngineHarness()
 

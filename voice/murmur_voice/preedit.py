@@ -262,6 +262,26 @@ class PreeditClient:
                 self._last_revision = revision
             return accepted
 
+    def partial_status(
+        self, utterance_id: str, revision: int, text: str
+    ) -> bool | None:
+        """Like ``partial`` but ``None`` when the D-Bus call itself failed.
+
+        Lets a periodic focus check tell an explicit rejection (the field is
+        gone) from a transient stall or proxy rebuild.
+        """
+
+        with self._lock:
+            if not self._valid_event(utterance_id, revision, text):
+                return False
+            accepted = self._call_optional_bool(
+                "Partial",
+                GLib.Variant("(sts)", (utterance_id, revision, text)),
+            )
+            if accepted:
+                self._last_revision = revision
+            return accepted
+
     def final(self, utterance_id: str, revision: int, text: str) -> bool:
         with self._lock:
             if not self._valid_event(utterance_id, revision, text):

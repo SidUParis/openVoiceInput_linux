@@ -35,6 +35,11 @@ from .volcengine import AudioBackpressureError
 
 logger = logging.getLogger(__name__)
 
+# How often a caret dictation confirms that its input field is still focused.
+FOCUS_CHECK_SECONDS = 1.0
+# Consecutive failed (not rejected) checks before the engine counts as gone.
+FOCUS_CHECK_MAX_FAILURES = 3
+
 # Production PreeditClient uses at most one direct/Flatpak-host ibus command.
 # Its pessimistic acquisition path is bounded by roughly 28.25 seconds:
 # saved-engine recovery (10 s), current-engine lookup (3 s), temporary switch
@@ -86,6 +91,7 @@ class VoiceSession:
         observation_seconds: float = ADAPTIVE_OBSERVATION_SECONDS,
         last_review_ttl_seconds: float = LAST_REVIEW_TTL_SECONDS,
         last_review_timer_factory: Any | None = None,
+        focus_check_timer_factory: Any | None = None,
         data_collection_factory: Any | None = None,
         data_collection_status_reader: Any | None = None,
         data_collection_feedback_writer: Any | None = None,
@@ -120,6 +126,13 @@ class VoiceSession:
             min(LAST_REVIEW_TTL_SECONDS, float(last_review_ttl_seconds)),
         )
         self._last_review_timer_factory = last_review_timer_factory or threading.Timer
+        # An injected timer_factory (tests, embedders) also drives the focus
+        # check, so no real background timer appears behind its back.
+        self._focus_check_timer_factory = (
+            focus_check_timer_factory or timer_factory or threading.Timer
+        )
+        self._focus_check_timer: Any | None = None
+        self._focus_check_failures = 0
         self._data_collection_factory = data_collection_factory
         self._data_collection_status_reader = data_collection_status_reader
         self._data_collection_feedback_writer = data_collection_feedback_writer
@@ -404,6 +417,8 @@ class VoiceSession:
                         warning_timer.daemon = True
                     self._warning_timer = warning_timer
                     warning_timer.start()
+                if self._output_target == "caret":
+                    self._schedule_focus_check_locked(session_serial)
             except _VoiceStartTimeout:
                 logger.error("Voice session start exceeded its safe deadline")
                 self._abort_locked("start-timeout")
@@ -925,6 +940,59 @@ class VoiceSession:
                 outcome="faithful",
             )
 
+    def _schedule_focus_check_locked(self, session_serial: int) -> None:
+        timer = self._focus_check_timer_factory(
+            FOCUS_CHECK_SECONDS,
+            lambda: self._on_focus_check(session_serial),
+        )
+        if hasattr(timer, "daemon"):
+            timer.daemon = True
+        self._focus_check_timer = timer
+        timer.start()
+
+    def _on_focus_check(self, session_serial: int) -> None:
+        """End the dictation promptly once its field is gone, even in silence.
+
+        Partials are otherwise the only signal, and none arrive while the
+        speaker is quiet, so the microphone and the provider upload would stay
+        open. Re-sending the latest text is the existing Partial ABI: a
+        still-focused engine shows the same preedit; one whose field left
+        (focus loss already discarded that utterance) rejects it.
+        """
+
+        with self._lock:
+            utterance_id = self._utterance_id
+            if (
+                session_serial != self._session_serial
+                or utterance_id is None
+                or self._output_target != "caret"
+                or self._state not in (VoiceState.STARTING, VoiceState.RECORDING)
+            ):
+                return
+            revision = self._revision + 1
+            check = getattr(self._preedit, "partial_status", None)
+            accepted = (
+                check(utterance_id, revision, self._latest_text)
+                if callable(check)
+                else self._preedit.partial(utterance_id, revision, self._latest_text)
+            )
+            if accepted is False:
+                logger.info("Dictation field lost focus; ending dictation")
+                self._abort_locked("preedit-lost")
+                return
+            if accepted is None:
+                # A failed or timed-out D-Bus call is not a lost field; end
+                # only if the engine stays unreachable.
+                self._focus_check_failures += 1
+                if self._focus_check_failures >= FOCUS_CHECK_MAX_FAILURES:
+                    logger.warning("Preedit engine unreachable; ending dictation")
+                    self._abort_locked("preedit-lost")
+                    return
+            else:
+                self._focus_check_failures = 0
+                self._revision = revision
+            self._schedule_focus_check_locked(session_serial)
+
     def _abort_locked(self, code: str) -> None:
         self._cancel_warning_timer_locked()
         self._cancel_recording_timer_locked()
@@ -1118,6 +1186,12 @@ class VoiceSession:
         self._recording_timer = None
         if timer is not None:
             timer.cancel()
+        # The focus check lives exactly as long as the recording.
+        focus_check = self._focus_check_timer
+        self._focus_check_timer = None
+        self._focus_check_failures = 0
+        if focus_check is not None:
+            focus_check.cancel()
 
     def _cancel_warning_timer_locked(self) -> None:
         timer = self._warning_timer
