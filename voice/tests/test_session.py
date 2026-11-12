@@ -212,6 +212,13 @@ def _session(acquisition=AcquireResult.ACQUIRED, **session_options):
     )
 
     utterance_factory = session_options.pop("utterance_factory", lambda: "utterance-1")
+    focus_checks = session_options.pop("focus_checks", [])
+    session_options.setdefault(
+        "focus_check_timer_factory",
+        lambda seconds, callback: (
+            focus_checks.append(FakeTimer(seconds, callback)) or focus_checks[-1]
+        ),
+    )
     session = VoiceSession(
         VoiceConfig("test-key"),
         asr_client=asr,
@@ -1783,3 +1790,37 @@ def test_one_minute_warning_is_observable_through_status():
 
     assert session.status().code == "recording-limit-warning"
     assert session.state is VoiceState.STARTING
+
+
+def test_focus_check_keeps_a_focused_dictation_and_shows_the_same_text():
+    focus_checks = []
+    session, asr, audio, preedit, timers, order = _session(focus_checks=focus_checks)
+    session.start()
+    audio.callback(b"\x01\x02")
+    asr.on_result("说到一半")
+
+    assert len(focus_checks) == 1
+    assert focus_checks[0].seconds == 1.0 and focus_checks[0].started
+    focus_checks[0].fire()
+
+    last = preedit.calls[-1]
+    assert last[0] == "partial" and last[3] == "说到一半"
+    assert len(focus_checks) == 2
+    assert session.status().state == "recording"
+
+
+def test_focus_check_ends_dictation_promptly_when_the_field_is_gone():
+    focus_checks = []
+    session, asr, audio, preedit, timers, order = _session(focus_checks=focus_checks)
+    session.start()
+    audio.callback(b"\x01\x02")
+    asr.on_result("已经说的部分")
+    # The field lost focus, so the engine discarded the utterance.
+    preedit.partial_result = False
+
+    focus_checks[0].fire()
+
+    assert session.status().code == "preedit-lost"
+    assert session.status().state == "idle"
+    assert len(focus_checks) == 1
+    assert not any(call[0] == "final" for call in preedit.calls)
