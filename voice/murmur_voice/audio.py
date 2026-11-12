@@ -37,6 +37,8 @@ BLOCK_SIZE = 4096
 _MAX_PACTL_OUTPUT_BYTES = 512 * 1024
 _SOURCE_REENUMERATION_DELAYS = (0.0, 0.05, 0.1, 0.2, 0.4)
 _PACTL_COMMAND_TIMEOUT_SECONDS = 0.5
+_WPCTL_COMMAND_TIMEOUT_SECONDS = 0.5
+_MAX_WPCTL_OUTPUT_BYTES = 64 * 1024
 _PREFLIGHT_FORWARD_TIMEOUT_SECONDS = 3.0
 _PREFLIGHT_ROLLBACK_TIMEOUT_SECONDS = 7.0
 # Catch the existing router's open-time move, then keep a ten-minute capture
@@ -471,6 +473,7 @@ def resolve_input_device(
     monotonic: Callable[[], float] = time.monotonic,
     dji_link_probe: Callable[[], bool | None] = probe_dji_link_state,
     microphone_policy: MicrophonePolicyConfig = MicrophonePolicyConfig(),
+    wpctl_runner: Callable[[Sequence[str]], str] | None = None,
 ) -> _PulseInputSelection | int | str | None:
     """Resolve one microphone afresh for each explicitly started recording.
 
@@ -490,7 +493,17 @@ def resolve_input_device(
         sources = _list_pulse_sources(budget.forward)
     except FileNotFoundError:
         # Only failure of the first pactl probe establishes a non-Pulse host.
-        return _resolve_portaudio_input(sounddevice_module or _load_sounddevice())
+        sounddevice_module = sounddevice_module or _load_sounddevice()
+        # A PipeWire desktop without pactl (stock Fedora) still offers a
+        # resampling ALSA endpoint, used only once WirePlumber proves that the
+        # default source is a real input rather than a monitor.
+        pipewire = _resolve_pipewire_default_input(
+            sounddevice_module,
+            wpctl_runner or _run_wpctl,
+        )
+        if pipewire is not None:
+            return pipewire
+        return _resolve_portaudio_input(sounddevice_module)
     except AudioDeviceError:
         raise
     except Exception as error:
@@ -1487,6 +1500,107 @@ def _resolve_pulse_portaudio_device(
     if len(candidates) != 1:
         raise AudioDeviceError("no unique usable PulseAudio PortAudio input exists")
     return candidates[0]
+
+
+def _resolve_pipewire_default_input(
+    sounddevice_module: Any,
+    wpctl_runner: Callable[[Sequence[str]], str],
+) -> _PortAudioInputSelection | None:
+    """Use PipeWire's ALSA endpoint when its default source is a real input.
+
+    The generic ``pipewire`` PortAudio device is otherwise untrusted because it
+    could resolve to an output monitor. WirePlumber's description of the
+    current default source settles that: only a node of exactly class
+    ``Audio/Source`` whose name is not a monitor is accepted. Any doubt (no
+    wpctl, unexpected output, no unique endpoint) returns ``None`` so the
+    stricter hardware-only fallback still decides.
+    """
+
+    try:
+        properties = _parse_wpctl_properties(
+            wpctl_runner(("inspect", "@DEFAULT_AUDIO_SOURCE@"))
+        )
+    except Exception:
+        return None
+    media_class = properties.get("media.class")
+    node_name = properties.get("node.name", "")
+    if (
+        media_class != "Audio/Source"
+        or not node_name
+        or "monitor" in node_name.casefold()
+    ):
+        return None
+    try:
+        devices = sounddevice_module.query_devices()
+    except Exception:
+        return None
+    candidates: list[int] = []
+    for index, device in enumerate(devices):
+        if not isinstance(device, Mapping) or device.get("name") != "pipewire":
+            continue
+        channels = _nonnegative_int(device.get("max_input_channels"))
+        if channels is None or channels < 1:
+            continue
+        try:
+            sounddevice_module.check_input_settings(
+                device=index,
+                channels=CHANNELS,
+                dtype=SAMPLE_DTYPE,
+                samplerate=SAMPLE_RATE,
+            )
+        except Exception:
+            continue
+        candidates.append(index)
+    if len(candidates) != 1:
+        return None
+    description = properties.get("node.description") or "pipewire"
+    return _portaudio_input_selection(
+        candidates[0],
+        {"name": description},
+        "portaudio-default",
+    )
+
+
+def _parse_wpctl_properties(output: str) -> dict[str, str]:
+    """Parse ``wpctl inspect`` ``key = "value"`` lines (``*`` marks are kept)."""
+
+    properties: dict[str, str] = {}
+    for line in output.splitlines():
+        line = line.strip().removeprefix("*").strip()
+        key, separator, value = line.partition(" = ")
+        if not separator or not key or " " in key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            value = value[1:-1]
+        properties.setdefault(key, value)
+    return properties
+
+
+def _run_wpctl(arguments: Sequence[str]) -> str:
+    executable = shutil.which("wpctl")
+    if executable is None:
+        raise FileNotFoundError("wpctl is unavailable")
+    environment = os.environ.copy()
+    environment["LC_ALL"] = "C"
+    environment["LANG"] = "C"
+    result = subprocess.run(
+        [executable, *arguments],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=_WPCTL_COMMAND_TIMEOUT_SECONDS,
+        check=False,
+        env=environment,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("wpctl inspect failed")
+    if len(result.stdout.encode("utf-8")) > _MAX_WPCTL_OUTPUT_BYTES:
+        raise RuntimeError("wpctl output is too large")
+    return result.stdout
 
 
 def _resolve_portaudio_input(sounddevice_module: Any) -> int | str | None:
