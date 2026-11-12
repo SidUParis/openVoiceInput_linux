@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from collections.abc import Mapping
 
 import gi
 
@@ -29,19 +31,37 @@ from .session import (
 logger = logging.getLogger(__name__)
 
 
-LISTENING_HINT = "● 正在听写"
+LISTENING_HINTS = {"zh": "● 正在听写", "en": "● Dictating"}
 LISTENING_HINT_TAIL_CHARACTERS = 32
 
 
-def listening_hint(text: str) -> str:
+def listening_hint_label(environ: Mapping[str, str] = os.environ) -> str:
+    """The marker in the desktop's message language (POSIX precedence)."""
+
+    for variable in ("LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"):
+        value = environ.get(variable, "")
+        if variable == "LANGUAGE":
+            value = value.split(":", 1)[0]
+        if value and value not in ("C", "POSIX") and not value.startswith("C."):
+            return LISTENING_HINTS.get(value[:2].lower(), LISTENING_HINTS["en"])
+        if value:
+            break
+    return LISTENING_HINTS["en"]
+
+
+LISTENING_HINT = listening_hint_label()
+
+
+def listening_hint(text: str, label: str | None = None) -> str:
     """The caret hint: the listening marker plus the newest characters."""
 
+    label = label or LISTENING_HINT
     text = " ".join(text.split())
     if not text:
-        return LISTENING_HINT
+        return label
     if len(text) > LISTENING_HINT_TAIL_CHARACTERS:
         text = "…" + text[-LISTENING_HINT_TAIL_CHARACTERS:]
-    return f"{LISTENING_HINT} · {text}"
+    return f"{label} · {text}"
 
 
 class MurmurEngine(IBus.Engine):

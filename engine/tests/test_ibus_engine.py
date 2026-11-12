@@ -9,8 +9,10 @@ from gi.repository import IBus  # noqa: E402
 
 from murmur_ime_engine.ibus_engine import (  # noqa: E402
     LISTENING_HINT,
+    LISTENING_HINTS,
     MurmurEngine,
     listening_hint,
+    listening_hint_label,
 )
 from murmur_ime_engine.registry import EngineRegistry  # noqa: E402
 from murmur_ime_engine.session import SessionGuard  # noqa: E402
@@ -106,6 +108,23 @@ class MurmurEnginePresentationTests(unittest.TestCase):
         self.assertTrue(hint.startswith(f"{LISTENING_HINT} · …"))
         self.assertTrue(hint.endswith("最后几个字"))
         self.assertEqual(len(hint.split(" · …", 1)[1]), 32)
+
+    def test_listening_hint_follows_the_desktop_message_language(self) -> None:
+        zh, en = LISTENING_HINTS["zh"], LISTENING_HINTS["en"]
+        self.assertEqual(listening_hint_label({"LANG": "en_US.UTF-8"}), en)
+        self.assertEqual(listening_hint_label({"LANG": "zh_CN.UTF-8"}), zh)
+        self.assertEqual(listening_hint_label({"LANG": "zh_TW.UTF-8"}), zh)
+        self.assertEqual(
+            listening_hint_label({"LC_ALL": "en_GB.UTF-8", "LANG": "zh_CN.UTF-8"}), en
+        )
+        self.assertEqual(
+            listening_hint_label({"LC_MESSAGES": "zh_CN.UTF-8", "LANG": "en_US"}), zh
+        )
+        self.assertEqual(listening_hint_label({"LANGUAGE": "zh_CN:en"}), zh)
+        self.assertEqual(listening_hint_label({"LANG": "C.UTF-8"}), en)
+        self.assertEqual(listening_hint_label({"LANG": "fr_FR.UTF-8"}), en)
+        self.assertEqual(listening_hint_label({}), en)
+        self.assertEqual(listening_hint("你好", label=zh), f"{zh} · 你好")
 
     def test_acquire_shows_hint_partials_update_it_and_final_hides_it(self) -> None:
         engine = _EngineHarness()
