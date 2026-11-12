@@ -29,6 +29,21 @@ from .session import (
 logger = logging.getLogger(__name__)
 
 
+LISTENING_HINT = "● 正在听写"
+LISTENING_HINT_TAIL_CHARACTERS = 32
+
+
+def listening_hint(text: str) -> str:
+    """The caret hint: the listening marker plus the newest characters."""
+
+    text = " ".join(text.split())
+    if not text:
+        return LISTENING_HINT
+    if len(text) > LISTENING_HINT_TAIL_CHARACTERS:
+        text = "…" + text[-LISTENING_HINT_TAIL_CHARACTERS:]
+    return f"{LISTENING_HINT} · {text}"
+
+
 class MurmurEngine(IBus.Engine):
     """Voice-only development engine; ordinary keys pass to the application."""
 
@@ -82,6 +97,8 @@ class MurmurEngine(IBus.Engine):
         accepted = self._sessions.acquire(owner, utterance_id, self._focus_token)
         if accepted:
             logger.info("Voice preedit acquired at focus token %d", self._focus_token)
+            # Show at the caret that dictation is live before any speech arrives.
+            self._show_listening_hint("")
         return accepted
 
     def partial(
@@ -206,6 +223,7 @@ class MurmurEngine(IBus.Engine):
             bool(text),
             IBus.PreeditFocusMode.CLEAR,
         )
+        self._show_listening_hint(text)
 
     def _clear_preedit(self) -> None:
         self.update_preedit_text_with_mode(
@@ -213,6 +231,21 @@ class MurmurEngine(IBus.Engine):
             0,
             False,
             IBus.PreeditFocusMode.CLEAR,
+        )
+        self.hide_auxiliary_text()
+
+    def _show_listening_hint(self, text: str) -> None:
+        """Show the listening state, and the tail of the hypothesis, at the caret.
+
+        IBus auxiliary text is drawn by the desktop's input-method popup next to
+        the cursor. It marks an active dictation before the first partial, and
+        its tail keeps the newest words visible where a client renders preedit
+        on one unwrapped line (common in terminals).
+        """
+
+        self.update_auxiliary_text(
+            IBus.Text.new_from_string(listening_hint(text)),
+            True,
         )
 
     def _invalidate_voice(self, reason: str) -> None:

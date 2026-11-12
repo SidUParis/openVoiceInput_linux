@@ -7,7 +7,11 @@ import gi
 gi.require_version("IBus", "1.0")
 from gi.repository import IBus  # noqa: E402
 
-from murmur_ime_engine.ibus_engine import MurmurEngine  # noqa: E402
+from murmur_ime_engine.ibus_engine import (  # noqa: E402
+    LISTENING_HINT,
+    MurmurEngine,
+    listening_hint,
+)
 from murmur_ime_engine.registry import EngineRegistry  # noqa: E402
 from murmur_ime_engine.session import SessionGuard  # noqa: E402
 
@@ -16,12 +20,22 @@ class _PresentationRecorder:
     def __init__(self) -> None:
         self.preedits = []
         self.commits = []
+        self.hints = []
 
     def update_preedit_text_with_mode(self, text, cursor, visible, mode) -> None:
         self.preedits.append((text.get_text(), cursor, visible, mode))
 
     def commit_text(self, text) -> None:
         self.commits.append(text.get_text())
+
+    def update_auxiliary_text(self, text, visible) -> None:
+        self.hints.append(text.get_text() if visible else None)
+
+    def hide_auxiliary_text(self) -> None:
+        self.hints.append(None)
+
+    def _show_listening_hint(self, text: str) -> None:
+        MurmurEngine._show_listening_hint(self, text)
 
 
 class _Bus:
@@ -62,6 +76,9 @@ class _EngineHarness(_PresentationRecorder):
     def can_acquire() -> bool:
         return True
 
+    def _set_preedit(self, text: str) -> None:
+        MurmurEngine._set_preedit(self, text)
+
     def _clear_preedit(self) -> None:
         MurmurEngine._clear_preedit(self)
 
@@ -80,6 +97,37 @@ class _EngineHarness(_PresentationRecorder):
 
 
 class MurmurEnginePresentationTests(unittest.TestCase):
+    def test_listening_hint_marks_state_and_keeps_the_newest_words(self) -> None:
+        self.assertEqual(listening_hint(""), LISTENING_HINT)
+        self.assertEqual(listening_hint("  \n "), LISTENING_HINT)
+        self.assertEqual(listening_hint("你好 world"), f"{LISTENING_HINT} · 你好 world")
+        long_text = "前" * 40 + "最后几个字"
+        hint = listening_hint(long_text)
+        self.assertTrue(hint.startswith(f"{LISTENING_HINT} · …"))
+        self.assertTrue(hint.endswith("最后几个字"))
+        self.assertEqual(len(hint.split(" · …", 1)[1]), 32)
+
+    def test_acquire_shows_hint_partials_update_it_and_final_hides_it(self) -> None:
+        engine = _EngineHarness()
+        engine._sessions.finish()
+
+        self.assertTrue(MurmurEngine.acquire(engine, ":1.40", "utt-2"))
+        self.assertEqual(engine.hints, [LISTENING_HINT])
+        self.assertTrue(MurmurEngine.partial(engine, ":1.40", "utt-2", 1, "你好"))
+        self.assertEqual(engine.hints[-1], f"{LISTENING_HINT} · 你好")
+        self.assertTrue(MurmurEngine.final(engine, ":1.40", "utt-2", 2, "你好。"))
+        self.assertIsNone(engine.hints[-1])
+        self.assertEqual(engine.commits, ["你好。"])
+
+    def test_cancel_hides_hint(self) -> None:
+        engine = _EngineHarness()
+        MurmurEngine._set_preedit(engine, "partial")
+
+        self.assertTrue(MurmurEngine.cancel(engine, ":1.40", "utt-1"))
+
+        self.assertEqual(engine.hints, [f"{LISTENING_HINT} · partial", None])
+        self.assertEqual(engine.commits, [])
+
     def test_constructor_requests_active_surrounding_updates(self) -> None:
         engine = MurmurEngine(_Bus(), "/org/murmur/TestEngine", EngineRegistry())
 
