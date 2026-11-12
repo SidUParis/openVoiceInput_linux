@@ -195,7 +195,7 @@ def test_gemini_receiver_joins_several_finals_and_ignores_early_completion():
     ]
 
 
-def test_gemini_only_interim_result_is_cleared_before_finish():
+def test_gemini_completion_without_a_final_keeps_the_shown_interim():
     events = [
         {"setupComplete": {}},
         {"serverContent": {"interimInputTranscription": {"text": "intermediate"}}},
@@ -212,7 +212,7 @@ def test_gemini_only_interim_result_is_cleared_before_finish():
         client._receive(_ScriptedWebSocket(events), 9, asyncio.Event(), finish_sent)
     )
 
-    assert callbacks == ["intermediate", "", "finish"]
+    assert callbacks == ["intermediate", "finish"]
 
 
 @pytest.mark.parametrize(
@@ -223,7 +223,7 @@ def test_gemini_only_interim_result_is_cleared_before_finish():
         [{"setupComplete": {}}, "not json"],
         [{"setupComplete": {}}, json.dumps([1, 2])],
         [{"setupComplete": {}}, {"serverContent": "invalid"}],
-        [{"setupComplete": {}}, {"serverContent": {"inputTranscription": {}}}],
+        [{"setupComplete": {}}, {"serverContent": {"inputTranscription": []}}],
         [
             {"setupComplete": {}},
             {"serverContent": {"interimInputTranscription": {"text": 5}}},
@@ -325,3 +325,81 @@ def test_gemini_missing_key_reports_auth_without_starting_network_thread():
     assert called == ["auth"]
     assert client._loop is None
     assert client.is_connected is False
+
+
+def test_gemini_empty_or_finished_transcription_messages_are_not_errors():
+    events = [
+        {"setupComplete": {}},
+        {"serverContent": {"interimInputTranscription": {}}},
+        {"serverContent": {"interimInputTranscription": {"text": "你好"}}},
+        {"serverContent": {"inputTranscription": {"text": "你好。"}}},
+        {"serverContent": {"inputTranscription": {"finished": True}}},
+        {"serverContent": {"generationComplete": True}},
+    ]
+    client = _active_client(20)
+    callbacks = []
+    client.on_result = callbacks.append
+    client.on_finish = lambda: callbacks.append("finish")
+    finish_sent = asyncio.Event()
+    finish_sent.set()
+
+    asyncio.run(
+        client._receive(_ScriptedWebSocket(events), 20, asyncio.Event(), finish_sent)
+    )
+
+    assert callbacks == ["你好", "你好。", "finish"]
+
+
+def test_gemini_cumulative_interim_after_a_final_is_not_doubled():
+    events = [
+        {"setupComplete": {}},
+        {"serverContent": {"inputTranscription": {"text": "第一句。"}}},
+        {"serverContent": {"interimInputTranscription": {"text": "第一句。第 二"}}},
+        {"serverContent": {"inputTranscription": {"text": "第二句。"}}},
+        {"serverContent": {"generationComplete": True}},
+    ]
+    client = _active_client(21)
+    callbacks = []
+    client.on_result = callbacks.append
+    client.on_finish = lambda: callbacks.append("finish")
+    finish_sent = asyncio.Event()
+    finish_sent.set()
+
+    asyncio.run(
+        client._receive(_ScriptedWebSocket(events), 21, asyncio.Event(), finish_sent)
+    )
+
+    assert callbacks == ["第一句。", "第一句。第二", "第一句。第二句。", "finish"]
+
+
+def test_gemini_transcript_beyond_the_preedit_limit_fails_closed():
+    events = [
+        {"setupComplete": {}},
+        {"serverContent": {"interimInputTranscription": {"text": "字" * 4097}}},
+    ]
+    client = _active_client(22)
+    finish_sent = asyncio.Event()
+
+    with pytest.raises(GeminiProtocolError):
+        asyncio.run(
+            client._receive(
+                _ScriptedWebSocket(events), 22, asyncio.Event(), finish_sent
+            )
+        )
+
+
+def test_gemini_vocabulary_dedupes_case_insensitively_before_the_cap():
+    hotwords = ("GitHub", "github", *(f"term{index}" for index in range(120)))
+    corrections = (CorrectionPair("奔驰 mark", "benchmark"),)
+    settings = VoiceConfig(
+        "key", hotwords=hotwords, corrections=corrections, provider="gemini"
+    ).provider_settings()
+
+    assert settings["vocabulary"][:2] == ("GitHub", "term0")
+    assert len(settings["vocabulary"]) == GEMINI_MAX_VOCABULARY_TERMS
+    assert sum(term.casefold() == "github" for term in settings["vocabulary"]) == 1
+
+
+def test_gemini_rejects_empty_language_codes():
+    with pytest.raises(ValueError):
+        GeminiASRClient(_settings(language_codes=()))

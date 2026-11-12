@@ -96,19 +96,27 @@ class VoiceConfig:
                 "max_pending_audio_seconds": 10.0,
             }
         if provider == "gemini":
-            vocabulary = list(normalize_vocabulary_terms(self.hotwords))
-            vocabulary.extend(
-                pair.canonical for pair in normalize_correction_pairs(self.corrections)
-            )
+            # Hotwords first (the user's own list), then correction canonicals;
+            # case-insensitive de-duplication runs before the 100-term cap.
+            vocabulary = []
+            seen: set[str] = set()
+            for term in (
+                *normalize_vocabulary_terms(self.hotwords),
+                *(
+                    pair.canonical
+                    for pair in normalize_correction_pairs(self.corrections)
+                ),
+            ):
+                if term.casefold() not in seen:
+                    seen.add(term.casefold())
+                    vocabulary.append(term)
             return {
                 "api_key": self.api_key,
                 "endpoint": GEMINI_ENDPOINT,
                 "model": model,
                 "sample_rate": 16_000,
                 "language_codes": GEMINI_LANGUAGE_CODES,
-                "vocabulary": tuple(dict.fromkeys(vocabulary))[
-                    :GEMINI_MAX_VOCABULARY_TERMS
-                ],
+                "vocabulary": tuple(vocabulary[:GEMINI_MAX_VOCABULARY_TERMS]),
                 "mode": "VERBATIM",
                 "final_result_timeout": 20.0,
                 "max_pending_audio_seconds": 10.0,

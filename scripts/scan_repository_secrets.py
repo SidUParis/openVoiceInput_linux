@@ -75,6 +75,10 @@ SECRET_RULES = (
         ),
     ),
     SecretRule(
+        "google_api_key",
+        re.compile(rb"(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}(?![A-Za-z0-9_-])"),
+    ),
+    SecretRule(
         "private_key_pem",
         re.compile(
             rb"-----BEGIN (?P<pem_kind>(?:(?:RSA|DSA|EC|OPENSSH) )?PRIVATE KEY)-----"

@@ -71,6 +71,7 @@ class RepositorySecretScanTests(unittest.TestCase):
             + "Ab3/De5+Fg7Hi9Jk2Lm4No6Pq8Rs0Tu1Vw3Xy5Za7Bc9De2Fg4Hi6Jk8Lm0No2Pq4Rs6Tu8Vw0Xy9Za7Bc",
             "github_token": "ghp_" + "Ab3dE5gH7jK9mN2pQ4sT6vW8yZ0aB2cD4eF6",
             "openai_api_key": "sk-proj-" + "Ab3dE5gH7jK9mN2pQ4sT6vW8yZ0aB2cD4eF6",
+            "google_api_key": "AIza" + "Sy3dE5gH7jK9mN2pQ4sT6vW8yZ0aB2cD4eF",
         }
         pem_begin = "-----BEGIN " + "PRIVATE KEY-----"
         pem_end = "-----END " + "PRIVATE KEY-----"

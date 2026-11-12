@@ -184,7 +184,7 @@ alpha.5 还接入了 Qwen 实时 ASR 与 OpenAI 停录后 Transcribe；两者通
 | 操作系统 | Ubuntu 24.04 x86_64 是 `.deb` 与 CI 的明确目标 |
 | 桌面输入 | 面向支持标准 IBus preedit 的应用；X11/Wayland 真实应用矩阵仍在扩大 |
 | 中文键盘 | 听写时临时切换到 `murmur-voice`，结束后恢复原来的精确 IBus 引擎；librime／雾凇永久合并尚未完成 |
-| ASR | 火山引擎默认；Qwen 实时与 OpenAI 批量为未用真实 Key 验收的实验后端；均需用户自己的账户与 Key |
+| ASR | 火山引擎默认；Qwen 实时与 OpenAI 批量为未用真实 Key 验收的实验后端；Google Gemini 实时（Gemini Live）已在 Fedora 44 上用真实 Key 实测，尚未经维护者验收；均需用户自己的账户与 Key |
 | 本地 ASR | 尚未实现，Whisper/Qwen 等个人模型属于后续路线 |
 | 快捷键 | 设置可选点按切换或按住说话；按键由用户选择，Wayland 的全局 release 边界会如实显示 |
 | 密码与隐私输入框 | password、PIN、private、fake 或不支持 preedit 的上下文拒绝开始语音 |

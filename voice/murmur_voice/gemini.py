@@ -45,6 +45,9 @@ _AUDIO_MIME_TYPE = f"audio/pcm;rate={SAMPLE_RATE}"
 _CJK = "⺀-⿟　-〿぀-ヿ㄀-ㄯ㐀-䶿一-鿿豈-﫿︰-﹏＀-￯"
 _CJK_GAP = re.compile(rf"(?<=[{_CJK}])[ \t]+(?=[{_CJK}])")
 _AUTH_CLOSE_MARKERS = ("api key", "api_key", "permission", "unauthenticated")
+# The Preedit1 bridge accepts at most this much text (same bounds as Volcengine).
+_MAX_TRANSCRIPT_CODEPOINTS = 4096
+_MAX_TRANSCRIPT_UTF8_BYTES = 16 * 1024
 
 
 class GeminiProtocolError(RuntimeError):
@@ -55,6 +58,33 @@ def normalize_transcript_spacing(text: str) -> str:
     """Remove spurious spaces between adjacent CJK characters."""
 
     return _CJK_GAP.sub("", text)
+
+
+def _transcription_text(value: Any, kind: str) -> str:
+    """Text of a Transcription message; proto3 JSON omits an empty ``text``."""
+
+    if not isinstance(value, dict):
+        raise GeminiProtocolError(f"Gemini {kind} transcript is invalid")
+    text = value.get("text", "")
+    if not isinstance(text, str):
+        raise GeminiProtocolError(f"Gemini {kind} transcript is invalid")
+    return text
+
+
+def _combine(finals: str, partial: str) -> str:
+    """Join finalized and interim text without doubling a cumulative interim."""
+
+    if partial and finals and partial.startswith(finals):
+        combined = partial
+    else:
+        combined = finals + partial
+    combined = normalize_transcript_spacing(combined)
+    if (
+        len(combined) > _MAX_TRANSCRIPT_CODEPOINTS
+        or len(combined.encode("utf-8")) > _MAX_TRANSCRIPT_UTF8_BYTES
+    ):
+        raise GeminiProtocolError("Gemini transcript exceeds its safe limit")
+    return combined
 
 
 def build_setup_message(
@@ -133,7 +163,7 @@ class GeminiASRClient:
         if sample_rate != SAMPLE_RATE:
             raise ValueError("Gemini input must be 16 kHz PCM")
         codes = settings.get("language_codes", GEMINI_LANGUAGE_CODES)
-        if not isinstance(codes, (list, tuple)):
+        if not isinstance(codes, (list, tuple)) or not codes:
             raise ValueError("Gemini language codes are invalid")
         self._language_codes = tuple(str(item) for item in codes[:4])
         if any(item not in GEMINI_LANGUAGE_CODES for item in self._language_codes):
@@ -414,7 +444,8 @@ class GeminiASRClient:
         started: asyncio.Event,
         finish_sent: asyncio.Event,
     ) -> None:
-        finals: list[str] = []
+        finals = ""
+        partial = ""
         setup_complete = False
         last_emitted = ""
         while self._is_current(generation):
@@ -449,25 +480,20 @@ class GeminiASRClient:
                 continue
             if not isinstance(content, dict):
                 raise GeminiProtocolError("Gemini server content is invalid")
-            partial = ""
             changed = False
             interim = content.get("interimInputTranscription")
             if interim is not None:
-                text = interim.get("text") if isinstance(interim, dict) else None
-                if not isinstance(text, str):
-                    raise GeminiProtocolError("Gemini interim transcript is invalid")
-                partial = normalize_transcript_spacing(text)
+                partial = _transcription_text(interim, "interim")
                 changed = True
             final = content.get("inputTranscription")
             if final is not None:
-                text = final.get("text") if isinstance(final, dict) else None
-                if not isinstance(text, str):
-                    raise GeminiProtocolError("Gemini final transcript is invalid")
-                finals.append(normalize_transcript_spacing(text))
+                text = _transcription_text(final, "final")
+                if text:
+                    finals += text
                 partial = ""
                 changed = True
             if changed:
-                combined = "".join(finals) + partial
+                combined = _combine(finals, partial)
                 if combined and combined != last_emitted:
                     last_emitted = combined
                     self._invoke(self.on_result, generation, combined)
@@ -477,7 +503,9 @@ class GeminiASRClient:
                 if not finish_sent.is_set():
                     # Manual activity: only our activityEnd ends the utterance.
                     continue
-                final_text = "".join(finals)
+                # Prefer the authoritative final; if the server completed
+                # without one, keep the words already shown rather than none.
+                final_text = _combine(finals, "") if finals else _combine("", partial)
                 if final_text != last_emitted:
                     self._invoke(self.on_result, generation, final_text)
                 self._invoke(self.on_finish, generation)

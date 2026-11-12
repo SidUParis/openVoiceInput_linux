@@ -163,7 +163,7 @@ upload. Read the [privacy notice](docs/privacy.md) and
 | Desktop input | IBus applications with preedit support; X11 and Wayland application coverage is still being documented |
 | Keyboard IME | The alpha temporarily switches to `murmur-voice` for dictation and correction observation, then restores the exact previous IBus engine |
 | Chinese typing | Permanent librime / Rime Ice keyboard-and-voice integration is planned, not yet complete |
-| Speech provider | Volcengine is the default and real-key-validated path; Qwen streaming and OpenAI batch transcription are experimental and fake-transport-tested only; MiniMax is planned and not selectable |
+| Speech provider | Volcengine is the default and real-key-validated path; Qwen streaming and OpenAI batch transcription are experimental and fake-transport-tested only; Google Gemini streaming (Gemini Live) was tested with a real key on Fedora 44 but is not yet maintainer-validated; MiniMax is planned and not selectable |
 | Local / offline ASR | Not implemented yet |
 | Shortcut / indicator | A shortcut must currently be configured by the user; a separate compatibility controller is not part of this repository's daemon package |
 | Password and private fields | Voice acquisition is refused for protected, fake or unsupported input contexts |
